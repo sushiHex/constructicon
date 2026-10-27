@@ -153,6 +153,37 @@ def test_real_files_and_schema_accept_without_publishing_private_values(files):
     )
 
 
+def test_standalone_projector_catalog_matches_closed_driver_codes():
+    from constructicon.substrate.executors.claude_read import ClaudeReadRefusalCode, refusal_detail
+
+    emitted = {refusal_detail(code): "claude_read_" + code.value.replace("-", "_")
+               for code in ClaudeReadRefusalCode}
+    projected = {message: reason for message, reason in reader.REASONS.items()
+                 if reason.startswith("claude_read_")}
+    assert projected == emitted
+    assert all(len(message.encode()) <= 96 and len(reason) <= 64
+               for message, reason in emitted.items())
+
+
+@pytest.mark.parametrize("error_type,message", [
+    ("ContractViolation", "Claude READ refused [known_refusal=private-account]"),
+    ("ValueError", "Claude READ refused [known_refusal=system-init-model]"),
+    ("ContractViolation", PRIVATE),
+])
+def test_closed_refusal_projection_never_accepts_unknown_detail_or_wrong_class(
+    files, error_type, message,
+):
+    with sqlite3.connect(files / "read.sqlite") as db:
+        db.execute("UPDATE events SET payload=?", (
+            json.dumps({"error_type": error_type, "error": message}),
+        ))
+    result = collect(files)
+    assert result["journal"]["state"] == "valid"
+    event, = result["journal"]["events"]
+    assert event["reason"] == "other"
+    assert message not in json.dumps(result) and PRIVATE not in json.dumps(result)
+
+
 @pytest.mark.parametrize("phase", ["acquired", "intent"])
 def test_partial_attempt_never_infers_zero_or_dispatch(files, phase):
     value = attempt()

@@ -661,10 +661,13 @@ class ClaudeOperatorHandle:
         assert outcome is not None
         if (not self.relay_closed or self.relay_denied
                 or self._callback_started != 1 or self._callback_completed != 1):
+            detail = (claude_read.known_refusal_detail(outcome.error.detail)
+                      if isinstance(outcome, ExecutorFailure) and outcome.error.kind == "exit"
+                      else None)
             return ExecutorFailure(
                 requested_model=outcome.requested_model, served_model=outcome.served_model,
                 usage=outcome.usage, rate_limit=outcome.rate_limit, elapsed_s=outcome.elapsed_s,
-                error=ExecutorError(kind="exit", detail="Claude READ refused"),
+                error=ExecutorError(kind="exit", detail=detail or "Claude READ refused"),
             )
         return outcome
 

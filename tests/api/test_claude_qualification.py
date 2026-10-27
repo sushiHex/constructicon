@@ -2,17 +2,22 @@
 
 import hashlib
 import json
+import os
 import shutil
+import sqlite3
+import stat
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from scripts.ops import read_attempt_evidence as reader
 
 from constructicon.api import _claude_read_fixture as fixture
 from constructicon.api import claude_qualification as entry
 from constructicon.core.errors import ContractViolation
+from constructicon.core.executor import ExecutorError, ExecutorFailure
 from constructicon.core.manifest import source_graph_hash_for
 from constructicon.core.native_operator import NativeOperatorLaunchIdentityV3
 from constructicon.core.qualification import QualificationAuthorization
@@ -166,6 +171,85 @@ async def test_zero_callback_is_not_a_read_proof(qualified):
     assert a.state.workers == []
     record = json.loads(Path(a.executor.qualification.attempt_record).read_text())
     assert record["dispatch"] != "completed"
+
+
+@pytest.mark.parametrize("gate", ["system-init-model", "mcp-arguments"])
+async def test_closed_refusal_survives_real_graph_journal_and_metadata(
+    qualified, tmp_path, monkeypatch, gate,
+):
+    a = qualified
+    authorization = a.executor.qualification.model_copy(
+        update={"journal": str(tmp_path / "read.sqlite")},
+    )
+    a.kwargs = {**a.kwargs, "qualification": authorization}
+    a.executor = native.ClaudeOperatorProvider(**a.kwargs)
+    original = Peer.emit
+
+    def emit(self, value):
+        if (gate == "system-init-model" and value.get("type") == "system"
+                and value.get("subtype") == "init"):
+            value["model"] = "PRIVATE-MODEL-CANARY"
+        # FixedPeer has chosen ready.txt before delegating to this base emitter.
+        if gate == "mcp-arguments" and value.get("type") == "control_request":
+            message = value["request"].get("message", {})
+            if message.get("method") == "tools/call":
+                message["params"]["arguments"]["path"] = "../PRIVATE-PATH-CANARY"
+        original(self, value)
+
+    monkeypatch.setattr(Peer, "emit", emit)
+    assert await entry.qualify(a.executor) is RunStatus.FAILED
+    assert a.state.workers == [] and len(a.state.peer.users) == 1
+    assert a.state.guards == a.state.locks == 0 and a.state.native_joined
+    # Read the actual graph's attempt and SQLite, replacing only UID/mode primitives.
+    uid = 123
+    ancestors = {(p.stat().st_dev, p.stat().st_ino) for p in tmp_path.parents}
+    root_id = tmp_path.stat().st_dev, tmp_path.stat().st_ino
+
+    def permissions(info):
+        identity = info.st_dev, info.st_ino
+        if identity in ancestors:
+            return 0, stat.S_IMODE(info.st_mode) & ~0o22
+        if identity == root_id:
+            return uid, 0o700
+        return uid, 0o600 if os.name == "nt" else stat.S_IMODE(info.st_mode)
+
+    monkeypatch.setattr(reader, "_permissions", permissions)
+    monkeypatch.setattr(reader, "_service_uid", lambda: uid)
+    monkeypatch.setattr(reader, "_effective_uid", lambda: uid)
+    projected = reader.collect(
+        tmp_path, authorization.authorization_id, str(authorization.run_id), 1,
+    )
+    assert projected["attempt"]["state"] == projected["journal"]["state"] == "valid"
+    assert (projected["attempt"]["callback_started"]
+            == projected["attempt"]["callback_completed"] == 0)
+    failures = [event for event in projected["journal"]["events"] if event["kind"] == "NodeFailed"]
+    assert failures == [{"kind": "NodeFailed", "error_type": "ContractViolation",
+                         "reason": "claude_read_" + gate.replace("-", "_")}]
+    published = json.dumps(projected)
+    assert "PRIVATE" not in published and str(tmp_path) not in published
+    assert (authorization.authorization_id not in published
+            and str(authorization.run_id) not in published)
+
+
+@pytest.mark.parametrize("kind,detail", [
+    ("exit", "PRIVATE-ACCOUNT-CANARY"),
+    ("exit", "Claude READ refused [known_refusal=PRIVATE-CANARY]"),
+    ("timeout", "Claude READ refused [known_refusal=system-init-model]"),
+])
+async def test_graph_never_journals_unrecognized_or_nonexit_detail(
+    qualified, monkeypatch, kind, detail,
+):
+    async def failed(self, task, worker):
+        return ExecutorFailure(error=ExecutorError(kind=kind, detail=detail))
+
+    monkeypatch.setattr(native.ClaudeOperatorHandle, "_run", failed)
+    assert await entry.qualify(qualified.executor) is RunStatus.FAILED
+    authorization = qualified.executor.qualification
+    with sqlite3.connect(authorization.journal) as db:
+        (raw,) = db.execute("SELECT payload FROM events WHERE kind='NodeFailed'").fetchone()
+    assert json.loads(raw)["error"] == "Claude qualification did not complete its fixed READ"
+    assert "PRIVATE" not in raw and detail not in raw
+    assert qualified.state.guards == qualified.state.locks == 0
 
 
 async def test_a_completed_callback_still_requires_the_fixed_answer(qualified):

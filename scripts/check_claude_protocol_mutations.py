@@ -2067,6 +2067,26 @@ SDK_SERVER_MUTANTS = (
 )
 MUTANTS += SDK_SERVER_MUTANTS
 
+READ_REFUSAL_DIAGNOSTIC_MUTANTS = (
+    ("READ unidentified primary faults cannot invent a known gate", READ + "_known_primary_refusal",
+     "return None", "return ClaudeReadRefusalCode.INIT_MODEL",
+     READ_TEST + "test_known_refusal_requires_exact_primary_cause_after_join[cleanup]"),
+    ("READ provider preserves the identified refusal across callback postconditions",
+     "constructicon.substrate.executors.claude_provider:ClaudeOperatorHandle._run",
+     'detail=detail or "Claude READ refused"', 'detail="Claude READ refused"',
+     "tests/api/test_claude_qualification.py::"
+     "test_closed_refusal_survives_real_graph_journal_and_metadata[system-init-model]"),
+    ("READ graph cannot journal arbitrary executor error details",
+     "constructicon.api.claude_qualification:read_node",
+     "known_refusal_detail(result.error.detail)", "result.error.detail",
+     "tests/api/test_claude_qualification.py::"
+     "test_graph_never_journals_unrecognized_or_nonexit_detail[exit-PRIVATE-ACCOUNT-CANARY]"),
+    ("READ metadata reason requires its exact source error class", EVIDENCE + "_journal",
+     'if failure["error_type"] == "ContractViolation"', "if True",
+     EVIDENCE_TEST + "test_closed_refusal_projection_never_accepts_unknown_detail_or_wrong_class"),
+)
+MUTANTS += READ_REFUSAL_DIAGNOSTIC_MUTANTS
+
 
 if __name__ == "__main__":
     raise SystemExit(run(MUTANTS))

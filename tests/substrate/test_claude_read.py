@@ -293,7 +293,8 @@ async def test_normal_init_unknown_server_shape_refuses_before_worker(servers):
     launcher = Launcher(ServerPeer())
     outcome, calls = await run(launcher)
     assert isinstance(outcome, ExecutorFailure)
-    assert outcome.error.kind == "exit" and outcome.error.detail == "Claude READ refused"
+    assert outcome.error.kind == "exit"
+    assert outcome.error.detail == "Claude READ refused [known_refusal=system-init-server]"
     assert launcher.joined and len(launcher.peer.users) == 1
     assert calls == [] and launcher.peer.callback_replies == 0
 
@@ -311,7 +312,9 @@ async def test_sdk_source_cannot_weaken_normal_init_identity_or_catalog(field, v
 
     launcher = Launcher(ChangedPeer())
     outcome, calls = await run(launcher)
-    assert isinstance(outcome, ExecutorFailure) and outcome.error.detail == "Claude READ refused"
+    assert isinstance(outcome, ExecutorFailure)
+    gate = "session" if field == "session_id" else field
+    assert outcome.error.detail == f"Claude READ refused [known_refusal=system-init-{gate}]"
     assert launcher.joined and len(launcher.peer.users) == 1 and calls == []
 
 
@@ -378,6 +381,130 @@ async def test_non_initialization_refusal_keeps_generic_detail():
     assert isinstance(outcome, ExecutorFailure)
     assert outcome.error.detail == "Claude READ refused"
     assert launcher.conversation.initialize_observation.verdict.value == "mode-match"
+
+
+@pytest.mark.parametrize("gate", ["system-init-model", "mcp-arguments"])
+async def test_known_postintent_refusals_keep_distinct_closed_gates(gate):
+    peer = Peer()
+    original = peer.emit
+
+    def emit(value):
+        if (gate == "system-init-model" and value.get("type") == "system"
+                and value.get("subtype") == "init"):
+            value["model"] = "private-model-sentinel"
+        if gate == "mcp-arguments" and value.get("type") == "control_request":
+            message = value["request"].get("message", {})
+            if message.get("method") == "tools/call":
+                message["params"]["arguments"]["path"] = "../private-path-sentinel"
+        original(value)
+
+    peer.emit = emit
+    launcher = Launcher(peer)
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure)
+    assert outcome.error.kind == "exit"
+    assert outcome.error.detail == f"Claude READ refused [known_refusal={gate}]"
+    assert launcher.joined and len(peer.users) == 1 and len(peer.handshake) == 3
+    assert calls == [] and peer.callback_replies == 0
+    assert "private" not in outcome.model_dump_json()
+
+
+@pytest.mark.parametrize("gate", ["order", "session", "uuid", "model", "tools", "server"])
+async def test_system_init_codes_follow_original_guard_order_without_values(gate):
+    class InitPeer(Peer):
+        def emit(self, value):
+            if value.get("type") == "system" and value.get("subtype") == "init":
+                if gate == "order":
+                    super().emit(dict(value))
+                if gate in ("order", "session"):
+                    value["session_id"] = "private-session"
+                if gate in ("order", "session", "uuid"):
+                    value["uuid"] = "private-uuid"
+                if gate in ("order", "session", "uuid", "model"):
+                    value["model"] = "private-model"
+                if gate != "server":
+                    value["tools"] = ["private-tool"]
+                value["mcp_servers"] = [{"private-key": "private-account"}]
+            super().emit(value)
+
+    launcher = Launcher(InitPeer())
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure)
+    assert outcome.error.detail == f"Claude READ refused [known_refusal=system-init-{gate}]"
+    assert calls == [] and len(launcher.peer.users) == 1 and launcher.joined
+    assert "private" not in outcome.model_dump_json()
+
+
+@pytest.mark.parametrize("later", ["direct", "wrapped", "timeout", "cleanup", "group", "cancel"])
+async def test_known_refusal_requires_exact_primary_cause_after_join(later):
+    class InitPeer(Peer):
+        def emit(self, value):
+            if value.get("type") == "system" and value.get("subtype") == "init":
+                value["model"] = "private-model"
+            super().emit(value)
+
+    class JoinedLauncher(Launcher):
+        async def exchange(self, command, **kwargs):
+            try:
+                return await super().exchange(command, **kwargs)
+            except claude_read._Refused as error:
+                if later == "wrapped":
+                    raise ProcessExchangeError(self.result) from error
+                if later == "timeout":
+                    raise TimeoutError("private timeout") from error
+                if later == "cleanup":
+                    message = "Claude READ refused [known_refusal=system-init-model]"
+                    raise OSError(message) from error
+                if later == "group":
+                    raise ExceptionGroup("private", [error, OSError("private")]) from None
+                if later == "cancel":
+                    raise asyncio.CancelledError("private") from error
+                raise
+
+    launcher = JoinedLauncher(InitPeer())
+    if later == "cancel":
+        with pytest.raises(asyncio.CancelledError):
+            await run(launcher)
+    else:
+        outcome, calls = await run(launcher)
+        assert isinstance(outcome, ExecutorFailure) and calls == []
+        detail = ("Claude READ refused [known_refusal=system-init-model]"
+                  if later in ("direct", "wrapped") else "Claude READ refused")
+        assert outcome.error.detail == detail
+        assert outcome.error.kind == ("timeout" if later == "timeout" else "exit")
+    assert launcher.joined and len(launcher.peer.users) == 1
+
+
+@pytest.mark.parametrize("value", [None, True, [], {}, "private-account",
+                                 "Claude READ refused [known_refusal=private-account]"])
+def test_unknown_refusal_detail_cannot_be_forwarded(value):
+    assert claude_read.known_refusal_detail(value) is None
+
+
+@pytest.mark.parametrize("malformed", [False, True], ids=["rejected", "malformed"])
+async def test_rate_limit_rejection_is_distinct_from_malformed_metadata(malformed):
+    class RatePeer(Peer):
+        def emit(self, value):
+            if value.get("type") == "assistant":
+                super().emit({
+                    "type": "rate_limit_event", "session_id": SESSION, "uuid": NATIVE_UUID,
+                    "rate_limit_info": {"status": "rejected",
+                                        "isUsingOverage": "PRIVATE-CANARY" if malformed else False},
+                })
+            super().emit(value)
+
+    launcher = Launcher(RatePeer())
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure) and outcome.error.kind == "exit"
+    gate = "rate-limit" if malformed else "rate-limit-rejected"
+    assert outcome.error.detail == f"Claude READ refused [known_refusal={gate}]"
+    assert calls == [] and launcher.joined and len(launcher.peer.users) == 1
+    assert "PRIVATE" not in outcome.model_dump_json()
+    if malformed:
+        assert outcome.rate_limit is None
+    else:
+        assert outcome.rate_limit is not None
+        assert outcome.rate_limit.detail == {"status": "rejected"}
 
 
 @pytest.mark.parametrize("refuse", [False, True])
