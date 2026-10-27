@@ -248,6 +248,73 @@ async def run(launcher, *, worker=None, plan=ClaudePlan.PRO, timeout=5):
     return outcome, calls
 
 
+async def test_normal_init_sdk_server_source_metadata_preserves_one_read():
+    class SdkSourcePeer(Peer):
+        def emit(self, value):
+            if value.get("type") == "system" and value.get("subtype") == "init":
+                value["mcp_servers"][0]["source"] = "sdk"
+            super().emit(value)
+
+    launcher = Launcher(SdkSourcePeer())
+    outcome, calls = await run(launcher)
+    assert [json.loads(raw)["request"]["sdkMcpServers"] for raw in launcher.peer.writes
+            if "sdkMcpServers" in json.loads(raw).get("request", {})] == [[claude_read.SERVER]]
+    assert launcher.peer.handshake == ["initialize", "initialized", "list"]
+    assert len(launcher.peer.users) == 1 and launcher.joined
+    assert isinstance(outcome, ExecutorSuccess), {
+        "outcome": outcome.status, "worker_calls": len(calls),
+        "callback_replies": launcher.peer.callback_replies,
+    }
+    assert len(calls) == launcher.peer.callback_replies == 1
+
+
+@pytest.mark.parametrize("servers", [
+    [{"name": "constructicon_read", "status": "connected", "source": None}],
+    [{"name": "constructicon_read", "status": "connected", "source": "project"}],
+    [{"name": "constructicon_read", "status": "connected", "source": "private-unknown"}],
+    [{"name": "constructicon_read", "status": "connected", "source": True}],
+    [{"name": "constructicon_read", "status": "connected", "source": 1}],
+    [{"name": "constructicon_read", "status": "connected", "source": []}],
+    [{"name": "constructicon_read", "status": "connected", "source": {}}],
+    [{"name": "constructicon_read", "status": "connected", "source": "sdk", "extra": "private"}],
+    [{"name": "other", "status": "connected", "source": "sdk"}],
+    [{"name": "constructicon_read", "status": "disconnected", "source": "sdk"}],
+    [{"name": "constructicon_read", "source": "sdk"}],
+    [{"name": "constructicon_read", "status": "connected", "source": "sdk"}] * 2,
+    [], {}, ["private-nonobject"],
+])
+async def test_normal_init_unknown_server_shape_refuses_before_worker(servers):
+    class ServerPeer(Peer):
+        def emit(self, value):
+            if value.get("type") == "system" and value.get("subtype") == "init":
+                value["mcp_servers"] = servers
+            super().emit(value)
+
+    launcher = Launcher(ServerPeer())
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure)
+    assert outcome.error.kind == "exit" and outcome.error.detail == "Claude READ refused"
+    assert launcher.joined and len(launcher.peer.users) == 1
+    assert calls == [] and launcher.peer.callback_replies == 0
+
+
+@pytest.mark.parametrize("field,value", [
+    ("tools", ["mcp__other__read_file"]), ("model", "other"), ("session_id", NATIVE_UUID),
+])
+async def test_sdk_source_cannot_weaken_normal_init_identity_or_catalog(field, value):
+    class ChangedPeer(Peer):
+        def emit(self, record):
+            if record.get("type") == "system" and record.get("subtype") == "init":
+                record["mcp_servers"][0]["source"] = "sdk"
+                record[field] = value
+            super().emit(record)
+
+    launcher = Launcher(ChangedPeer())
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure) and outcome.error.detail == "Claude READ refused"
+    assert launcher.joined and len(launcher.peer.users) == 1 and calls == []
+
+
 @pytest.mark.parametrize("wrapped", [False, True])
 async def test_initialization_refusal_retains_only_finite_source_tags_before_user(wrapped):
     class SourcePeer(Peer):

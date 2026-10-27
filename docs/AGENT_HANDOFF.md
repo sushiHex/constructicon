@@ -16,6 +16,27 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Normal SDK init metadata is compatible with the fixed READ boundary
+
+Pinned SDK/native source permits a registered server's optional `source: "sdk"`
+metadata. The prior exact name/status dictionary refused it. The READ parser now
+accepts that one source value or omission while keeping the exact connected
+server, tool, session, model, handshake and callback checks. Metadata never
+supplies authority. The compiled harmless peer emits the normal source-bearing
+form; portable legacy omission remains tested.
+
+The actual metadata-only session located the earlier C143 failure after durable
+user-dispatch intent and before provider worker entry. Both binding checks and
+relay closure were recorded, and the journal retained only the outer failure.
+The exact native frame, user-message delivery and backend usage remain unknown.
+This normal-frame compatibility defect is reproduced independently; it is not
+claimed as the proven historical cause or a successful live READ.
+
+The metadata window ended with affirmative park/off-idle observations and custody
+release, with no model or account operation. New driver bytes change the READ
+protocol identity and require new reviewed live inputs; startup qualification
+source is unchanged. The closed metadata window authorizes no retry.
+
 ## Metadata inspection has its own source-bound operating entry
 
 `scripts/ops/read_metadata_session.py` compiles, transports and checks one fixed

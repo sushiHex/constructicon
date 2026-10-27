@@ -192,7 +192,7 @@ static int claude_wire(int argc, char **argv) {
     wire_token("\"uuid\":", user_uuid, sizeof(user_uuid));
     printf("{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"" WIRE_SESSION "\","
            "\"model\":\"%s\",\"tools\":[\"mcp__constructicon_read__read_file\"],"
-           "\"mcp_servers\":[{\"name\":\"constructicon_read\",\"status\":\"connected\"}],"
+           "\"mcp_servers\":[{\"name\":\"constructicon_read\",\"status\":\"connected\",\"source\":\"sdk\"}],"
            "\"uuid\":\"" WIRE_UUID "\"}\n", model);
     printf("{\"type\":\"assistant\",\"session_id\":\"" WIRE_SESSION "\",\"uuid\":\"" WIRE_UUID "\","
            "\"parent_tool_use_id\":null,\"message\":{\"role\":\"assistant\",\"content\":%s}}\n",

@@ -2053,6 +2053,20 @@ METADATA_MUTANTS = (
 )
 MUTANTS += METADATA_MUTANTS
 
+SDK_SERVER_TEST = READ_TEST + "test_normal_init_unknown_server_shape_refuses_before_worker"
+SDK_SERVER_MUTANTS = (
+    ("SDK init accepts only the pinned source", READ + "_registered_sdk_server",
+     'server["source"] == "sdk"', "True", SDK_SERVER_TEST),
+    ("SDK init server object has only approved fields", READ + "_registered_sdk_server",
+     'set(server) in ({"name", "status"}, {"name", "status", "source"})',
+     'set(server) >= {"name", "status"}', SDK_SERVER_TEST),
+    ("SDK init retains the exact server name", READ + "_registered_sdk_server",
+     'server["name"] == SERVER', "True", SDK_SERVER_TEST),
+    ("SDK init requires the connected server", READ + "_registered_sdk_server",
+     'server["status"] == "connected"', "True", SDK_SERVER_TEST),
+)
+MUTANTS += SDK_SERVER_MUTANTS
+
 
 if __name__ == "__main__":
     raise SystemExit(run(MUTANTS))

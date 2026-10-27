@@ -116,6 +116,19 @@ def _uuid(value: object) -> bool:
         return False
 
 
+def _registered_sdk_server(value: object) -> bool:
+    """One exact registered server; SDK origin metadata supplies no authority."""
+    if type(value) is not list or len(value) != 1:
+        return False
+    server = value[0]
+    return (type(server) is dict
+            and set(server) in ({"name", "status"}, {"name", "status", "source"})
+            and type(server["name"]) is str and server["name"] == SERVER
+            and type(server["status"]) is str and server["status"] == "connected"
+            and ("source" not in server
+                 or (type(server["source"]) is str and server["source"] == "sdk")))
+
+
 def _nonnegative(value: object) -> bool:
     if type(value) is int:
         return value >= 0
@@ -480,7 +493,7 @@ class ClaudeReadTransaction:
                         or value.get("session_id") != self._startup_session
                         or not _uuid(value.get("uuid")) or value.get("model") != self._model
                         or value.get("tools") != ["mcp__constructicon_read__read_file"]
-                        or value.get("mcp_servers") != [{"name": SERVER, "status": "connected"}]):
+                        or not _registered_sdk_server(value.get("mcp_servers"))):
                     raise _Refused()
                 self._session = str(value["session_id"])
             elif value.get("type") in ("assistant", "user"):
