@@ -2087,6 +2087,23 @@ READ_REFUSAL_DIAGNOSTIC_MUTANTS = (
 )
 MUTANTS += READ_REFUSAL_DIAGNOSTIC_MUTANTS
 
+MCP_CALL_METADATA_MUTANTS = (
+    ("native MCP tool call permits its optional metadata object",
+     READ + "ClaudeReadTransaction._mcp",
+     'set(params) not in ({"name", "arguments"}, {"name", "arguments", "_meta"})',
+     'set(params) != {"name", "arguments"}',
+     READ_TEST + "test_native_mcp_call_metadata_preserves_one_exact_read"),
+    ("native MCP metadata remains an object", READ + "ClaudeReadTransaction._mcp",
+     '("_meta" in params and type(params["_meta"]) is not dict)', "False",
+     READ_TEST + "test_mcp_call_metadata_must_be_an_object_before_worker"),
+    ("native MCP metadata cannot open other call parameters",
+     READ + "ClaudeReadTransaction._mcp",
+     'set(params) not in ({"name", "arguments"}, {"name", "arguments", "_meta"})',
+     'not {"name", "arguments"} <= set(params)',
+     READ_TEST + "test_mcp_call_open_metadata_does_not_open_other_parameters[extra-param]"),
+)
+MUTANTS += MCP_CALL_METADATA_MUTANTS
+
 
 if __name__ == "__main__":
     raise SystemExit(run(MUTANTS))

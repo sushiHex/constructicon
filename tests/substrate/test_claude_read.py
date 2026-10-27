@@ -268,6 +268,80 @@ async def test_normal_init_sdk_server_source_metadata_preserves_one_read():
     assert len(calls) == launcher.peer.callback_replies == 1
 
 
+@pytest.mark.parametrize("metadata", [
+    {},
+    {"claudecode/toolUseId": "tool-use-id"},
+    {"progressToken": 19, "claudecode/toolUseId": "tool-use-id"},
+    {"path": "/PRIVATE-PATH", "actor": "PRIVATE-ACTOR", "server": "PRIVATE-SERVER",
+     "name": "execute", "arguments": {"path": "../PRIVATE"},
+     "PRIVATE-KEY": {"instruction": "PRIVATE ignored instructions", "unknown": [None, True, 7]}},
+], ids=["empty", "tool-use-id", "progress-and-tool-use-id", "open-private-object"])
+async def test_native_mcp_call_metadata_preserves_one_exact_read(metadata):
+    class MetadataPeer(Peer):
+        def emit(self, value):
+            if value.get("type") == "control_request":
+                message = value["request"].get("message", {})
+                if message.get("method") == "tools/call":
+                    message["params"]["_meta"] = metadata
+            super().emit(value)
+
+    launcher = Launcher(MetadataPeer())
+    outcome, calls = await run(launcher)
+    assert launcher.joined and len(launcher.peer.users) == 1
+    assert launcher.peer.handshake == ["initialize", "initialized", "list"]
+    assert isinstance(outcome, ExecutorSuccess), {
+        "outcome": outcome.status,
+        "refusal": outcome.error.detail if isinstance(outcome, ExecutorFailure) else None,
+        "worker_calls": len(calls), "callback_replies": launcher.peer.callback_replies,
+    }
+    assert [path for path, _remaining in calls] == ["README.md"]
+    assert launcher.peer.callback_replies == 1
+    assert "PRIVATE" not in outcome.model_dump_json()
+    assert b"PRIVATE" not in b"".join(launcher.peer.writes)
+    assert b'"_meta"' not in b"".join(launcher.peer.writes)
+
+
+@pytest.mark.parametrize("metadata", [None, True, 0, "PRIVATE", []])
+async def test_mcp_call_metadata_must_be_an_object_before_worker(metadata):
+    class MetadataPeer(Peer):
+        def emit(self, value):
+            if value.get("type") == "control_request":
+                message = value["request"].get("message", {})
+                if message.get("method") == "tools/call":
+                    message["params"]["_meta"] = metadata
+            super().emit(value)
+
+    launcher = Launcher(MetadataPeer())
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure)
+    assert outcome.error.detail == "Claude READ refused [known_refusal=mcp-call]"
+    assert calls == [] and launcher.peer.callback_replies == 0
+    assert launcher.joined and len(launcher.peer.users) == 1
+    assert "PRIVATE" not in outcome.model_dump_json()
+
+
+@pytest.mark.parametrize("damage", ["missing-name", "missing-arguments", "extra-param"])
+async def test_mcp_call_open_metadata_does_not_open_other_parameters(damage):
+    class MetadataPeer(Peer):
+        def emit(self, value):
+            if value.get("type") == "control_request":
+                message = value["request"].get("message", {})
+                if message.get("method") == "tools/call":
+                    params = message["params"]
+                    params["_meta"] = {"path": "../PRIVATE", "name": "execute"}
+                    if damage == "extra-param":
+                        params["PRIVATE"] = "ignored only inside metadata"
+                    else:
+                        del params[damage.removeprefix("missing-")]
+            super().emit(value)
+
+    launcher = Launcher(MetadataPeer())
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure)
+    assert outcome.error.detail == "Claude READ refused [known_refusal=mcp-call]"
+    assert calls == [] and launcher.peer.callback_replies == 0 and launcher.joined
+
+
 @pytest.mark.parametrize("servers", [
     [{"name": "constructicon_read", "status": "connected", "source": None}],
     [{"name": "constructicon_read", "status": "connected", "source": "project"}],

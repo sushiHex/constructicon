@@ -16,6 +16,22 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Pinned Claude tool-call metadata is inert
+
+Pinned native MCP calls include `_meta`; the READ parser previously rejected
+that normal shape before worker entry. The parser now accepts an optional
+object and discards it completely. Tool, server, path, phase, callback count
+and existing record/stream limits still decide admission. Open metadata keys
+are not a second routing or authority surface. The fake driver and shared
+compiled peer now exercise metadata-bearing calls; malformed metadata and
+unexpected surrounding parameters still refuse. Focused driver tests and
+three assertion-killed mutants passed, with a clean Astra boundary review.
+This establishes a source-proven compatibility repair, not the cause of a
+historical live failure or live READ success. Fresh installation and
+qualification remain required before live use.
+
+---
+
 ## Claude READ refusal diagnostics preserve observed gates
 
 The driver maps only exact primary refusal guards to a
