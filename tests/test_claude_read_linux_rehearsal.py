@@ -86,7 +86,7 @@ print(json.dumps(report, sort_keys=True))
 def _collector_diagnostic(collector: str, arguments: list[str], run_process) -> dict:
     """Locate caught failures in the fake fixture without publishing exception text."""
     code = r'''
-import json, sys
+import json, os, stat, sys
 source, arguments = sys.argv[1], sys.argv[2:]
 namespace = {"__name__": "fixture_collector"}
 exec(compile(source, "<fixture-collector>", "exec"), namespace)
@@ -106,7 +106,27 @@ except BaseException:
     status = -1
 finally:
     sys.settrace(None)
-print(json.dumps({"status": status, "exceptions": events}, sort_keys=True), file=sys.stderr)
+files = {}
+if len(arguments) >= 2 and arguments[0] == "--run-root":
+    for name, bound in (("read.sqlite", 16 * 1024 * 1024),
+                        ("read.sqlite-wal", 16 * 1024 * 1024),
+                        ("read.sqlite-shm", 1024 * 1024)):
+        facts = {"exists": None, "regular": None, "singlelink": None,
+                 "service_owned": None, "mode_0600": None, "size_within_bound": None}
+        try:
+            info = os.lstat(os.path.join(arguments[1], name))
+            facts.update(exists=True, regular=stat.S_ISREG(info.st_mode),
+                         singlelink=info.st_nlink == 1,
+                         service_owned=info.st_uid == getattr(os, "geteuid", lambda: -1)(),
+                         mode_0600=stat.S_IMODE(info.st_mode) == 0o600,
+                         size_within_bound=0 <= info.st_size <= bound)
+        except FileNotFoundError:
+            facts["exists"] = False
+        except OSError:
+            pass
+        files[name] = facts
+print(json.dumps({"status": status, "exceptions": events, "files": files}, sort_keys=True),
+      file=sys.stderr)
 '''
     result = run_process(
         ["sudo", "-n", "-u", "m8-service", "/usr/bin/python3", "-I", "-S", "-B",
@@ -155,8 +175,24 @@ def test_collector_diagnostic_reports_caught_location_without_exception_text():
     source = ('def main(argv):\n    try:\n        raise ValueError("PRIVATE")\n'
               '    except ValueError:\n        return 1\n')
     observed = _collector_diagnostic(source, [], local_python)
-    assert observed == {"status": 1, "exceptions": [["main", 3, "ValueError"]]}
+    assert observed == {"status": 1, "exceptions": [["main", 3, "ValueError"]], "files": {}}
     assert "PRIVATE" not in json.dumps(observed)
+
+
+def test_collector_diagnostic_reports_only_fixed_file_custody_booleans(tmp_path):
+    def local_python(argv, **kwargs):
+        return subprocess.run([sys.executable, "-I", "-S", "-B", "-c", *argv[9:]], **kwargs)
+
+    (tmp_path / "read.sqlite").write_bytes(b"fixture")
+    observed = _collector_diagnostic("def main(argv): return 1\n",
+                                     ["--run-root", str(tmp_path)], local_python)
+    assert observed["files"]["read.sqlite"]["exists"] is True
+    assert observed["files"]["read.sqlite"]["regular"] is True
+    assert observed["files"]["read.sqlite"]["singlelink"] is True
+    assert observed["files"]["read.sqlite"]["size_within_bound"] is True
+    assert observed["files"]["read.sqlite-wal"]["exists"] is False
+    assert observed["files"]["read.sqlite-wal"]["regular"] is None
+    assert str(tmp_path) not in json.dumps(observed)
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="requires the disposable Linux foundation")
