@@ -107,7 +107,10 @@ custody/boot checks. It grants no installation, acquisition, retry or model-call
 authority. It does not extend an expired READ authorization.
 
 The reader checks private ownership, modes, stable file identities and bounded
-sizes. SQLite opens in read-only/query-only mode without a journal constructor,
+sizes. The root must be service-owned `0700`. Attempt records require `0600`;
+SQLite files may add read bits inside that private directory, while non-owner
+write, execute and special bits still refuse. The reader does not chmod evidence.
+SQLite opens in read-only/query-only mode without a journal constructor,
 migration, recovery or checkpoint. SQLite read locks may touch its guarded shared
 memory; this is not a zero-filesystem-write claim. The attempt and journal are
 separate observations, not an atomic snapshot or journal-integrity attestation.

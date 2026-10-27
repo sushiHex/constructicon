@@ -9541,3 +9541,20 @@ closed refusal used by artifact readers and the CLI. Tests cover both artifact
 and root refusal without private traceback output. Narrow review also required
 FD cleanup when a WAL snapshot itself fails. These findings were adopted as
 introduced defects; neither establishes the cause of the earlier live READ.
+
+The actual hosted accepting chain then located a separate introduced assumption:
+the reader required SQLite artifacts to have descriptor-style mode0600, while
+the real service-owned regular journal did not. The positive attempt observation
+and failing journal guard were retained separately; neither was recast as a
+successful collection. A source-backed real migrated-journal producer test and
+bounded fake-only guard diagnostics distinguish this integration failure from
+the private live READ.
+
+SQLite files may carry additional read bits only inside the already verified
+canonical service-owned0700 root. Their owner must retain read/write; non-owner
+write, execute, special bits, wrong ownership, links and unstable identities
+still refuse. Attempt records remain strict0600, and the retained journal is
+never chmodded as a workaround. Both existing and newly created SQLite sidecar
+paths use the same rule. The actual producer is tested under umask077 and022;
+the accepting/refusing mode cases and a writable-mode mutant pin the distinction.
+The hosted accepting test remains required before delivery.

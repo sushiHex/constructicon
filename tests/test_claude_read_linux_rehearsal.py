@@ -396,10 +396,11 @@ def test_generated_phases_carry_actual_receipts_through_withdrawal(
              "-c", collector, *collector_arguments],
             stdin=subprocess.DEVNULL, capture_output=True, check=False, timeout=30,
         )
-        assert result.returncode == 0, (
-            result.returncode, result.stdout[:32768], result.stderr[:4096],
-            _collector_diagnostic(collector, collector_arguments, original_run)
-        )
+        if result.returncode != 0:
+            diagnostic = _collector_diagnostic(collector, collector_arguments, original_run)
+            print("COLLECTOR_DIAGNOSTIC " + json.dumps(diagnostic, sort_keys=True))
+            pytest.fail(f"collector returned {result.returncode}: "
+                        f"{result.stdout[:32768]!r} {result.stderr[:4096]!r}")
         assert result.stderr == b""
         assert len(result.stdout) <= 32768
         report = json.loads(result.stdout)

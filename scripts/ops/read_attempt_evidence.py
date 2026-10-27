@@ -114,12 +114,17 @@ def _root(root, uid):
     require(_permissions(root.lstat()) == (uid, 0o700))
 
 
-def _open(path, uid, bound):
+def _open(path, uid, bound, *, sqlite_file=False):
     require(_canonical(path))
     before = path.lstat()
+    owner, mode = _permissions(before)
+    # SQLite inherits umask/sudo policy. Read bits do not cross the already
+    # checked service-owned0700 run root; writes, exec and special bits refuse.
+    private_mode = (mode & 0o600 == 0o600 and mode & ~0o644 == 0) if sqlite_file else mode == 0o600
     require(
         stat.S_ISREG(before.st_mode)
-        and _permissions(before) == (uid, 0o600)
+        and owner == uid
+        and private_mode
         and before.st_nlink == 1
         and 0 <= before.st_size <= bound
     )
@@ -296,13 +301,13 @@ def _journal(root, uid, authorization, run, maximum):
     opened, connection, wal_digests = [], None, {}
     try:
         path = root / "read.sqlite"
-        fd, before = _open(path, uid, DB_BYTES)
+        fd, before = _open(path, uid, DB_BYTES, sqlite_file=True)
         opened.append((path, fd, before, False))
         absent = []
         for suffix, bound in (("-wal", DB_BYTES), ("-shm", 1024 * 1024)):
             auxiliary = root / ("read.sqlite" + suffix)
             if auxiliary.exists() or auxiliary.is_symlink():
-                aux_fd, info = _open(auxiliary, uid, bound)
+                aux_fd, info = _open(auxiliary, uid, bound, sqlite_file=True)
                 opened.append((auxiliary, aux_fd, info, suffix == "-shm"))
                 if suffix == "-wal":
                     wal_digests[aux_fd] = _wal_digest(aux_fd, info.st_size)
@@ -363,7 +368,7 @@ def _journal(root, uid, authorization, run, maximum):
         # Guard newly present auxiliaries too; appearance alone is not invalidity.
         for item, bound, shm in absent:
             if item.exists() or item.is_symlink():
-                descriptor, info = _open(item, uid, bound)
+                descriptor, info = _open(item, uid, bound, sqlite_file=True)
                 opened.append((item, descriptor, info, shm))
                 if not shm:
                     wal_digests[descriptor] = _wal_digest(descriptor, info.st_size)

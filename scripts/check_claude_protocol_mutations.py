@@ -2011,6 +2011,9 @@ MUTANTS += PROFILE_MUTANTS
 EVIDENCE = "scripts.ops.read_attempt_evidence:"
 EVIDENCE_TEST = "tests/test_read_attempt_evidence.py::"
 EVIDENCE_MUTANTS = (
+    ("SQLite evidence refuses group and other write bits", EVIDENCE + "_open",
+     "mode & ~0o644 == 0", "mode & ~0o666 == 0",
+     EVIDENCE_TEST + "test_sqlite_only_read_bit_allowance_does_not_allow_writes_or_exec"),
     ("WAL timestamp changes do not invalidate byte-stable evidence", EVIDENCE + "_finish",
      "metadata_only = shm or wal_digest is not None", "metadata_only = shm",
      EVIDENCE_TEST + "test_wal_timestamp_only_change_accepts_but_changed_content_refuses[timestamps]"),

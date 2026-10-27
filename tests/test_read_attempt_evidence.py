@@ -266,7 +266,8 @@ def test_real_file_guard_refuses_metadata_and_stability_damage(files, monkeypatc
     assert collect(files)["attempt"]["state"] == "invalid"
 
 
-def test_actual_uncheckpointed_wal_is_read_and_not_checkpointed(files):
+@pytest.mark.parametrize("mode", [0o600, 0o644])
+def test_actual_uncheckpointed_wal_is_read_and_not_checkpointed(files, monkeypatch, mode):
     writer = sqlite3.connect(files / "read.sqlite")
     try:
         assert writer.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
@@ -274,8 +275,20 @@ def test_actual_uncheckpointed_wal_is_read_and_not_checkpointed(files):
             "INSERT INTO events VALUES(?,?,?,?,?,?)", (RUN, 1, "RunFailed", None, "{}", "fixture")
         )
         writer.commit()
-        for suffix in ("-wal", "-shm"):
-            (files / ("read.sqlite" + suffix)).chmod(0o600)
+        identities = set()
+        for suffix in ("", "-wal", "-shm"):
+            path = files / ("read.sqlite" + suffix)
+            path.chmod(mode)
+            info = path.stat()
+            identities.add((info.st_dev, info.st_ino))
+        permissions = reader._permissions
+
+        def sqlite_mode(info):
+            if (info.st_dev, info.st_ino) in identities:
+                return 123, mode
+            return permissions(info)
+
+        monkeypatch.setattr(reader, "_permissions", sqlite_mode)
         before = (files / "read.sqlite-wal").read_bytes()
         result = collect(files)["journal"]
         assert result["state"] == "valid" and result["event_count"] == 2
@@ -399,8 +412,8 @@ def test_wal_digest_failure_closes_registered_descriptors(files, monkeypatch, pr
         monkeypatch.setattr(reader.sqlite3, "connect", appeared)
     opened, actual_open = [], reader._open
 
-    def tracked(*args):
-        descriptor, info = actual_open(*args)
+    def tracked(*args, **kwargs):
+        descriptor, info = actual_open(*args, **kwargs)
         opened.append((args[0].name, descriptor))
         return descriptor, info
 
@@ -449,7 +462,7 @@ def test_sqlite_file_and_auxiliary_guard_refuse(files, monkeypatch, damage):
 
         def permissions(info):
             if (info.st_dev, info.st_ino) == (identity.st_dev, identity.st_ino):
-                return 123, 0o644
+                return 123, 0o660
             return real_permissions(info)
 
         monkeypatch.setattr(reader, "_permissions", permissions)
@@ -471,7 +484,7 @@ def test_sqlite_file_and_auxiliary_guard_refuse(files, monkeypatch, damage):
 
         def permissions(info):
             if (info.st_dev, info.st_ino) in identities:
-                return 123, 0o644
+                return 123, 0o660
             return real_permissions(info)
 
         monkeypatch.setattr(reader.sqlite3, "connect", appeared)
@@ -734,7 +747,70 @@ def test_real_isolated_cli_argument_errors_never_echo_input():
     assert result.stderr.decode() == "read evidence arguments refused" + os.linesep
 
 
-def test_actual_current_journal_schema_and_producer_are_readable(files):
+@pytest.mark.parametrize(
+    "mode,valid",
+    [
+        (0o600, True),
+        (0o604, True),
+        (0o640, True),
+        (0o644, True),
+        (0o660, False),
+        (0o666, False),
+        (0o700, False),
+        (0o1600, False),
+        (0o400, False),
+    ],
+)
+def test_sqlite_only_read_bit_allowance_does_not_allow_writes_or_exec(
+    files, monkeypatch, mode, valid
+):
+    path = files / "read.sqlite"
+    path.chmod(mode)
+    identity = path.stat().st_dev, path.stat().st_ino
+    permissions = reader._permissions
+
+    def file_mode(info):
+        if (info.st_dev, info.st_ino) == identity:
+            return 123, mode
+        return permissions(info)
+
+    monkeypatch.setattr(reader, "_permissions", file_mode)
+    result = collect(files)["journal"]
+    assert result["state"] == ("valid" if valid else "invalid")
+    if not valid:
+        assert result["run_status"] is result["event_count"] is None
+
+
+@pytest.mark.parametrize("damage", ["owner", "root-mode", "attempt-mode"])
+def test_sqlite_allowance_does_not_relax_owner_root_or_attempt(files, monkeypatch, damage):
+    target = (
+        files
+        if damage == "root-mode"
+        else files / ("read-attempt.json" if damage == "attempt-mode" else "read.sqlite")
+    )
+    identity = target.stat().st_dev, target.stat().st_ino
+    permissions = reader._permissions
+
+    def damaged(info):
+        if (info.st_dev, info.st_ino) == identity:
+            return (
+                (999, 0o644)
+                if damage == "owner"
+                else (123, 0o750 if damage == "root-mode" else 0o644)
+            )
+        return permissions(info)
+
+    monkeypatch.setattr(reader, "_permissions", damaged)
+    if damage == "root-mode":
+        with pytest.raises(ValueError, match="invalid retained evidence"):
+            collect(files)
+    else:
+        result = collect(files)["attempt" if damage == "attempt-mode" else "journal"]
+        assert result["state"] == "invalid" and result["partial"] is True
+
+
+@pytest.mark.parametrize("mask,expected_mode", [(0o077, 0o600), (0o022, 0o644)])
+def test_actual_current_journal_schema_and_producer_are_readable(files, mask, expected_mode):
     from constructicon.api.system import Constructicon
     from constructicon.core.address import RunId
     from constructicon.core.graph import Graph
@@ -743,7 +819,7 @@ def test_actual_current_journal_schema_and_producer_are_readable(files):
 
     database = files / "read.sqlite"
     database.unlink()
-    previous = os.umask(0o077)
+    previous = os.umask(mask)
     try:
         journal = SqliteJournal(database)
         system = Constructicon(journal=journal)
@@ -764,6 +840,8 @@ def test_actual_current_journal_schema_and_producer_are_readable(files):
         )
     finally:
         os.umask(previous)
+    if os.name != "nt":
+        assert stat.S_IMODE(database.stat().st_mode) == expected_mode
     # This deliberately uses no journal constructor/UDFs on the read side.
     with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=0) as connection:
         connection.execute("PRAGMA query_only=ON")
