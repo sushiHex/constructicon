@@ -14,6 +14,7 @@ import secrets
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
+from enum import StrEnum
 from typing import Literal
 
 from constructicon.core.executor import (
@@ -62,8 +63,60 @@ READ_TOOL: dict[str, object] = {
 ReadWorker = Callable[[str, float], Awaitable[str]]
 
 
+class ClaudeReadRefusalCode(StrEnum):
+    """Observed guard failures only; codes never describe private wire values."""
+
+    RECORD = "record"
+    STREAM_BOUND = "stream-bound"
+    STREAM_END = "stream-end"
+    SPACING = "record-spacing"
+    UI = "ui-notification"
+    MCP_ENVELOPE = "mcp-envelope"
+    MCP_HANDSHAKE = "mcp-handshake"
+    MCP_CALL = "mcp-call"
+    MCP_ARGUMENTS = "mcp-arguments"
+    INIT_ORDER = "system-init-order"
+    INIT_SESSION = "system-init-session"
+    INIT_UUID = "system-init-uuid"
+    INIT_MODEL = "system-init-model"
+    INIT_TOOLS = "system-init-tools"
+    INIT_SERVER = "system-init-server"
+    MESSAGE = "message"
+    RATE_LIMIT = "rate-limit"
+    RATE_LIMIT_REJECTED = "rate-limit-rejected"
+    RESULT = "result"
+    TAIL = "tail"
+
+
+def refusal_detail(code: ClaudeReadRefusalCode) -> str:
+    if type(code) is not ClaudeReadRefusalCode:
+        raise ValueError("invalid Claude READ refusal code")
+    return f"Claude READ refused [known_refusal={code.value}]"
+
+
+def known_refusal_detail(value: object) -> str | None:
+    """The provider/API may forward only an exact member of this closed catalog."""
+    if type(value) is str and value in {refusal_detail(code) for code in ClaudeReadRefusalCode}:
+        return value
+    return None
+
+
 class _Refused(Exception):
     """Private static refusal; no wire value is included."""
+
+    def __init__(self, code: ClaudeReadRefusalCode | None = None) -> None:
+        super().__init__()
+        self.code = code
+
+
+def _known_primary_refusal(error: BaseException) -> ClaudeReadRefusalCode | None:
+    # A cleanup group, arbitrary cause chain or cancellation cannot prove a gate.
+    if (type(error) is ProcessExchangeError and error.result.timed_out is False
+            and type(error.__cause__) is _Refused):
+        error = error.__cause__
+    if type(error) is _Refused and type(error.code) is ClaudeReadRefusalCode:
+        return error.code
+    return None
 
 
 class _InitializeRefused(_Refused):
@@ -92,9 +145,9 @@ def _parse(raw: bytes) -> dict[str, object]:
     try:
         value = parse_json_value(raw[:-1].decode("utf-8"))
     except (ValueError, UnicodeError, RecursionError):
-        raise _Refused() from None
+        raise _Refused(ClaudeReadRefusalCode.RECORD) from None
     if type(value) is not dict or b"\r" in raw:
-        raise _Refused()
+        raise _Refused(ClaudeReadRefusalCode.RECORD)
     return value
 
 
@@ -232,21 +285,21 @@ class ClaudeReadTransaction:
 
     def _receive(self, chunk: bytes) -> None:
         if type(chunk) is not bytes or len(chunk) > 8192:
-            raise _Refused()
+            raise _Refused(ClaudeReadRefusalCode.STREAM_BOUND)
         self._output_bytes += len(chunk)
         if self._output_bytes > self._output_limit:
-            raise _Refused()
+            raise _Refused(ClaudeReadRefusalCode.STREAM_BOUND)
         if not chunk:
             self._eof = True
             return
         self._buffer.extend(chunk)
         while (newline := self._buffer.find(b"\n")) >= 0:
             if newline + 1 > RECORD_BYTES:
-                raise _Refused()
+                raise _Refused(ClaudeReadRefusalCode.STREAM_BOUND)
             self._records.append(bytes(self._buffer[:newline + 1]))
             del self._buffer[:newline + 1]
         if len(self._buffer) >= RECORD_BYTES:
-            raise _Refused()
+            raise _Refused(ClaudeReadRefusalCode.STREAM_BOUND)
         self._start_read()
 
     def _audit(self) -> None:
@@ -259,7 +312,7 @@ class ClaudeReadTransaction:
         self._audit()
         while not self._records:
             if self._eof or self._pending is None:
-                raise _Refused()
+                raise _Refused(ClaudeReadRefusalCode.STREAM_END)
             pending, self._pending = self._pending, None
             chunk = await pending
             self._check()
@@ -279,7 +332,7 @@ class ClaudeReadTransaction:
                 or value.get("subtype") not in ("ui_invalidate", "commands_changed")):
             return False
         if not exact_inert_notification(value) or self._ui_records >= UI_RECORDS:
-            raise _Refused()
+            raise _Refused(ClaudeReadRefusalCode.UI)
         self._ui_records += 1
         return True
 
@@ -291,13 +344,13 @@ class ClaudeReadTransaction:
                 break
             self._records.pop(0)
         if self._records or self._buffer or self._eof:
-            raise _Refused()
+            raise _Refused(ClaudeReadRefusalCode.SPACING)
 
     async def _write(self, raw: bytes, *, user: bool = False) -> None:
         self._check()
         self._input_bytes += len(raw)  # Spent before delivery, including uncertain writes.
         if self._input_bytes > self._input_limit or len(raw) > RECORD_BYTES:
-            raise _Refused()
+            raise _Refused(ClaudeReadRefusalCode.STREAM_BOUND)
         assert self._io is not None
         if user and self._before_user is not None:
             self._before_user()
@@ -363,82 +416,82 @@ class ClaudeReadTransaction:
 
     async def _mcp(self, value: dict[str, object], *, handshake: bool = False) -> None:
         if set(value) != {"type", "request_id", "request"}:
-            raise _Refused()
+            raise _Refused(ClaudeReadRefusalCode.MCP_ENVELOPE)
         outer, request = value["request_id"], value["request"]
         if (not _text(outer, 128) or not outer or outer in self._outer_ids
                 or type(request) is not dict
                 or set(request) != {"subtype", "server_name", "message"}
                 or request.get("subtype") != "mcp_message" or request.get("server_name") != SERVER):
-            raise _Refused()
+            raise _Refused(ClaudeReadRefusalCode.MCP_ENVELOPE)
         assert isinstance(outer, str)
         self._outer_ids.add(outer)
         message = request["message"]
         if type(message) is not dict or message.get("jsonrpc") != "2.0":
-            raise _Refused()
+            raise _Refused(ClaudeReadRefusalCode.MCP_ENVELOPE)
         method, identifier = message.get("method"), message.get("id")
         notification = method == "notifications/initialized"
         if not set(message) <= {"jsonrpc", "id", "method", "params"}:
-            raise _Refused()
+            raise _Refused(ClaudeReadRefusalCode.MCP_ENVELOPE)
         if notification:
             if "id" in message or message.get("params", {}) != {}:
-                raise _Refused()
+                raise _Refused(ClaudeReadRefusalCode.MCP_ENVELOPE)
             identifier = 0  # Pinned SDK synthetic acknowledgement for native notification.
         else:
             if type(identifier) not in (int, str) or not _text(str(identifier), 128):
-                raise _Refused()
+                raise _Refused(ClaudeReadRefusalCode.MCP_ENVELOPE)
             assert isinstance(identifier, (int, str))
             key = (type(identifier), identifier)
             if key in self._rpc_ids:
-                raise _Refused()
+                raise _Refused(ClaudeReadRefusalCode.MCP_ENVELOPE)
             self._rpc_ids.add(key)
         result: dict[str, object]
         if handshake:
             expected = ("initialize", "notifications/initialized", "tools/list")
             if self._handshake >= 3 or method != expected[self._handshake]:
-                raise _Refused()
+                raise _Refused(ClaudeReadRefusalCode.MCP_HANDSHAKE)
             if method == "initialize":
                 params = message.get("params")
                 if (type(params) is not dict
                         or set(params) != {"protocolVersion", "capabilities", "clientInfo"}
                         or params.get("protocolVersion") != "2025-11-25"
                         or params.get("capabilities") != {}):
-                    raise _Refused()
+                    raise _Refused(ClaudeReadRefusalCode.MCP_HANDSHAKE)
                 client = params["clientInfo"]
                 if (type(client) is not dict or client.get("name") != "claude-code"
                         or client.get("version") != "2.1.296"
                         or not set(client) <= {"name", "version", "title", "description",
                                               "websiteUrl"}
                         or any(not _text(item, 1024) for item in client.values())):
-                    raise _Refused()
+                    raise _Refused(ClaudeReadRefusalCode.MCP_HANDSHAKE)
                 result = {"protocolVersion": "2025-11-25", "capabilities": {"tools": {}},
                           "serverInfo": {"name": SERVER, "version": "1"}}
             elif notification:
                 result = {}
             else:
                 if message.get("params", {}) != {}:
-                    raise _Refused()
+                    raise _Refused(ClaudeReadRefusalCode.MCP_HANDSHAKE)
                 result = {"tools": [READ_TOOL]}
             self._handshake += 1
         else:
             if (self._state != "dispatched" or self._session is None
                     or method != "tools/call" or self._calls >= CALL_LIMIT):
-                raise _Refused()
+                raise _Refused(ClaudeReadRefusalCode.MCP_CALL)
             params = message.get("params")
             if (type(params) is not dict or set(params) != {"name", "arguments"}
                     or params.get("name") != "read_file"):
-                raise _Refused()
+                raise _Refused(ClaudeReadRefusalCode.MCP_CALL)
             arguments = params["arguments"]
             if type(arguments) is not dict or set(arguments) != {"path"}:
-                raise _Refused()
+                raise _Refused(ClaudeReadRefusalCode.MCP_ARGUMENTS)
             path = arguments["path"]
             if not validate_read_path(path):
-                raise _Refused()
+                raise _Refused(ClaudeReadRefusalCode.MCP_ARGUMENTS)
             assert isinstance(path, str)
             self._quiet()  # A terminal or partial frame in this chunk defeats worker authority.
             self._calls += 1  # ID and admitted start are spent before the worker's first await.
             text = await self._read_worker(path)
             if not _text(text, TEXT_BYTES):
-                raise _Refused()
+                raise _Refused(ClaudeReadRefusalCode.MCP_CALL)
             result = {"content": [{"type": "text", "text": text}], "isError": False}
         await self._write(_wire({"type": "control_response", "response": {
             "subtype": "success", "request_id": outer,
@@ -489,48 +542,56 @@ class ClaudeReadTransaction:
             if value.get("type") == "control_request":
                 await self._mcp(value)
             elif value.get("type") == "system" and value.get("subtype") == "init":
-                if (self._session is not None or not _uuid(value.get("session_id"))
-                        or value.get("session_id") != self._startup_session
-                        or not _uuid(value.get("uuid")) or value.get("model") != self._model
-                        or value.get("tools") != ["mcp__constructicon_read__read_file"]
-                        or not _registered_sdk_server(value.get("mcp_servers"))):
-                    raise _Refused()
+                # Same ordered, short-circuit guards; no rejected value is retained.
+                if self._session is not None:
+                    raise _Refused(ClaudeReadRefusalCode.INIT_ORDER)
+                if (not _uuid(value.get("session_id"))
+                        or value.get("session_id") != self._startup_session):
+                    raise _Refused(ClaudeReadRefusalCode.INIT_SESSION)
+                if not _uuid(value.get("uuid")):
+                    raise _Refused(ClaudeReadRefusalCode.INIT_UUID)
+                if value.get("model") != self._model:
+                    raise _Refused(ClaudeReadRefusalCode.INIT_MODEL)
+                if value.get("tools") != ["mcp__constructicon_read__read_file"]:
+                    raise _Refused(ClaudeReadRefusalCode.INIT_TOOLS)
+                if not _registered_sdk_server(value.get("mcp_servers")):
+                    raise _Refused(ClaudeReadRefusalCode.INIT_SERVER)
                 self._session = str(value["session_id"])
             elif value.get("type") in ("assistant", "user"):
                 if (self._session is None or value.get("session_id") != self._session
                         or not _uuid(value.get("uuid"))
                         or value.get("parent_tool_use_id") is not None
                         or type(value.get("message")) is not dict):
-                    raise _Refused()
+                    raise _Refused(ClaudeReadRefusalCode.MESSAGE)
                 message = value["message"]
                 assert isinstance(message, dict)
                 if (message.get("role") != value["type"] or "error" in value
                         or "aborted" in value or "agent_id" in value
                         or value.get("user_message_uuid", self._user_uuid) != self._user_uuid
                         or value.get("user_message_uuids", [self._user_uuid]) != [self._user_uuid]):
-                    raise _Refused()
+                    raise _Refused(ClaudeReadRefusalCode.MESSAGE)
                 if value["type"] == "user":
                     content = message.get("content")
                     if (self._calls_completed != 1 or type(content) is not list or not content
                             or any(type(block) is not dict or block.get("type") != "tool_result"
                                    for block in content)):
-                        raise _Refused()
+                        raise _Refused(ClaudeReadRefusalCode.MESSAGE)
             elif value.get("type") == "rate_limit_event":
                 info = value.get("rate_limit_info")
                 if (set(value) != {"type", "rate_limit_info", "uuid", "session_id"}
                         or self._session is None or value.get("session_id") != self._session
                         or not _uuid(value.get("uuid")) or type(info) is not dict
                         or info.get("status") not in ("allowed", "allowed_warning", "rejected")):
-                    raise _Refused()
+                    raise _Refused(ClaudeReadRefusalCode.RATE_LIMIT)
                 overage = info.get("isUsingOverage")
                 if "isUsingOverage" in info and type(overage) is not bool:
-                    raise _Refused()
+                    raise _Refused(ClaudeReadRefusalCode.RATE_LIMIT)
                 self._rate_limit = RateLimitInfo(
                     is_using_overage=overage if type(overage) is bool else None,
                     detail={"status": info["status"]},
                 )
                 if info["status"] == "rejected":
-                    raise _Refused()
+                    raise _Refused(ClaudeReadRefusalCode.RATE_LIMIT_REJECTED)
             elif value.get("type") == "result":
                 allowed = {"type", "subtype", "is_error", "session_id", "user_message_uuid",
                            "result", "uuid", "duration_ms", "duration_api_ms", "num_turns",
@@ -563,7 +624,7 @@ class ClaudeReadTransaction:
                         or not _uuid(value.get("uuid"))
                         or value.get("user_message_uuid") != self._user_uuid
                         or value.get("user_message_uuids", [self._user_uuid]) != [self._user_uuid]):
-                    raise _Refused()
+                    raise _Refused(ClaudeReadRefusalCode.RESULT)
                 terminal_usage = value["usage"]
                 assert isinstance(terminal_usage, dict)
                 # These emitted counts cover this turn's main loop, not all
@@ -572,11 +633,11 @@ class ClaudeReadTransaction:
                                     output_tokens=terminal_usage["output_tokens"])
                 if (not _text(value.get("result"), TEXT_BYTES)
                         or value.get("is_error") is not False):
-                    raise _Refused()
+                    raise _Refused(ClaudeReadRefusalCode.RESULT)
                 self._reply = str(value["result"])
                 break
             else:
-                raise _Refused()
+                raise _Refused(ClaudeReadRefusalCode.RECORD)
         self._state = "terminal"
         await self._observations()
         self._quiet()
@@ -588,16 +649,16 @@ class ClaudeReadTransaction:
             if self._records:
                 value = _parse(self._records.pop(0))
                 if not (self._ui(value) or self._background(value)):
-                    raise _Refused()
+                    raise _Refused(ClaudeReadRefusalCode.TAIL)
             elif self._pending is not None:
                 pending, self._pending = self._pending, None
                 chunk = await pending
                 self._check()
                 self._receive(chunk)
             else:
-                raise _Refused()
+                raise _Refused(ClaudeReadRefusalCode.TAIL)
         if self._buffer:
-            raise _Refused()
+            raise _Refused(ClaudeReadRefusalCode.TAIL)
         self._check()
         self._state = "drained"
 
@@ -643,6 +704,7 @@ async def run_read_transaction(
     success = False
     timed_out = False
     initialization_refused = False
+    known_refusal: ClaudeReadRefusalCode | None = None
     diagnostic_custody_current = True
     loop = asyncio.get_running_loop()
     started_at = loop.time()
@@ -697,6 +759,7 @@ async def run_read_transaction(
         current = asyncio.current_task()
         cancelled = _cancelled(error) or (current is not None and current.cancelling() > 0)
         timed_out = isinstance(error, TimeoutError)
+        known_refusal = _known_primary_refusal(error)
         initialization_refused = (
             type(error) is _InitializeRefused
             or (type(error) is ProcessExchangeError
@@ -719,5 +782,8 @@ async def run_read_transaction(
                                                detail=(_initialization_detail(
                                                    conversation.initialize_observation,
                                                ) if initialization_refused
+                                               and diagnostic_custody_current and not timed_out
+                                               else refusal_detail(known_refusal)
+                                               if known_refusal is not None
                                                and diagnostic_custody_current and not timed_out
                                                else "Claude READ refused")))

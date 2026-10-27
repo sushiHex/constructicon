@@ -14,6 +14,7 @@ import pytest
 
 from constructicon.core.errors import ContractViolation
 from constructicon.core.executor import (
+    ExecutorError,
     ExecutorFailure,
     ExecutorSuccess,
     RateLimitInfo,
@@ -376,6 +377,22 @@ async def test_terminal_refusal_retains_emitted_telemetry_without_native_text(as
     assert result.elapsed_s > 0 and result.requested_model == "model"
     assert result.served_model is None and result.raw_reply is None and result.output is None
     await a.executor.close(acquired, "discard")
+
+
+@pytest.mark.parametrize("detail", ["PRIVATE-ACCOUNT-CANARY",
+                                    "Claude READ refused [known_refusal=PRIVATE-CANARY]"])
+async def test_provider_does_not_forward_unknown_driver_detail(assembled, monkeypatch, detail):
+    async def failed(*args, **kwargs):
+        return ExecutorFailure(error=ExecutorError(kind="exit", detail=detail))
+
+    monkeypatch.setattr(native.claude_read, "run_read_transaction", failed)
+    acquired = await acquire_ready(assembled)
+    outcome = await execute(assembled, acquired)
+    assert isinstance(outcome, ExecutorFailure)
+    assert outcome.error.detail == "Claude READ refused"
+    assert "PRIVATE" not in outcome.model_dump_json()
+    await assembled.executor.close(acquired, "discard")
+    assert assembled.state.guards == assembled.state.locks == 0
 
 
 @pytest.mark.parametrize("change", ["control", "expiry"])

@@ -9664,3 +9664,36 @@ changes with this correction; the startup qualification source law is unchanged.
 Future live use requires reviewed controller installation, current READ identity
 and authorization, and the existing fresh-boot qualification procedure. It is
 outside the closed metadata window and includes no implicit model retry.
+
+
+### Closed Claude READ refusal diagnostics
+
+The driver now assigns fixed codes to observed refusal gates and emits a
+diagnostic only for an exact primary `_Refused` (or its exact non-timeout
+`ProcessExchangeError` wrapper). The provider and qualification node accept
+only exact members of that closed catalog; unknown details, non-exit outcomes,
+timeouts and ambiguous cleanup/cause paths remain generic. The standalone
+attempt projector uses the same closed messages to preserve bounded reasons.
+This follows existing `ExecutorError.detail` through provider and
+the qualification node's `NodeFailed` event into metadata; it adds no schema, core contract,
+attempt-record or authority change. No raw native frame or value is published.
+
+A focused red pair initially failed both assertions: wrong normal-init model
+and invalid post-intent READ path were indistinguishable. With the change, both
+produce their distinct fixed refusal codes. The five-file affected run passed
+339 tests with one platform skip, apart from two new graph fixtures that
+incorrectly changed sealed provider custody. Reconstructing the provider with
+its intended authorization and journal corrected only those fixtures; both
+then passed. Six final rate-limit, catalog and privacy checks passed after
+distinguishing a valid service rejection from malformed rate-limit metadata.
+The four selected mutants each failed by assertion: nonprimary-cause
+attribution, provider code loss, arbitrary API detail publication and metadata
+attribution to the wrong error class. Changed runtime, test and reader Ruff
+checks, strict mypy on the three changed source modules and inventory target
+liveness passed. The inventory's pre-existing long-line findings were left
+unchanged. These are focused local proofs; final-head CI owns the full gate.
+
+The diagnostics identify only a matched guard. Unknown or ambiguous causes
+stay generic, and this does not establish which frame caused the earlier live
+failure or prove a successful live READ. Any future live use needs fresh
+installation and profile qualification.

@@ -16,6 +16,25 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude READ refusal diagnostics preserve observed gates
+
+The driver maps only exact primary refusal guards to a
+closed diagnostic catalog. Exact catalog members pass through the existing
+executor detail, provider, qualification failure and metadata reason path;
+unknown details, timeouts and ambiguous cause/cleanup paths remain generic.
+No schema, core contract, attempt record or authority changed, and no native
+frame/value is published. A focused red pair for wrong init model and invalid
+post-intent READ path moved from two failures to two passes; strict mypy passed
+for the three changed source modules. The affected tests, corrected graph
+fixtures and final rate-limit cases passed; four selected mutants failed by
+assertion. A graph fixture initially changed sealed provider custody and
+correctly refused before driver entry; constructing the provider with its
+intended journal fixed the fixture without changing that guard. A matched code
+identifies a guard only, not a historical failure cause or a successful live
+READ. Future live use requires fresh installation and profile qualification.
+
+---
+
 ## Normal SDK init metadata is compatible with the fixed READ boundary
 
 Pinned SDK/native source permits a registered server's optional `source: "sdk"`

@@ -49,6 +49,26 @@ ERRORS = frozenset(
 REASONS = {
     "Claude qualification did not complete its fixed READ": "read_contract_refused",
     "the physical Linux launch probe contradicts containment": "probe_contradiction",
+    "Claude READ refused [known_refusal=record]": "claude_read_record",
+    "Claude READ refused [known_refusal=stream-bound]": "claude_read_stream_bound",
+    "Claude READ refused [known_refusal=stream-end]": "claude_read_stream_end",
+    "Claude READ refused [known_refusal=record-spacing]": "claude_read_record_spacing",
+    "Claude READ refused [known_refusal=ui-notification]": "claude_read_ui_notification",
+    "Claude READ refused [known_refusal=mcp-envelope]": "claude_read_mcp_envelope",
+    "Claude READ refused [known_refusal=mcp-handshake]": "claude_read_mcp_handshake",
+    "Claude READ refused [known_refusal=mcp-call]": "claude_read_mcp_call",
+    "Claude READ refused [known_refusal=mcp-arguments]": "claude_read_mcp_arguments",
+    "Claude READ refused [known_refusal=system-init-order]": "claude_read_system_init_order",
+    "Claude READ refused [known_refusal=system-init-session]": "claude_read_system_init_session",
+    "Claude READ refused [known_refusal=system-init-uuid]": "claude_read_system_init_uuid",
+    "Claude READ refused [known_refusal=system-init-model]": "claude_read_system_init_model",
+    "Claude READ refused [known_refusal=system-init-tools]": "claude_read_system_init_tools",
+    "Claude READ refused [known_refusal=system-init-server]": "claude_read_system_init_server",
+    "Claude READ refused [known_refusal=message]": "claude_read_message",
+    "Claude READ refused [known_refusal=rate-limit]": "claude_read_rate_limit",
+    "Claude READ refused [known_refusal=rate-limit-rejected]": "claude_read_rate_limit_rejected",
+    "Claude READ refused [known_refusal=result]": "claude_read_result",
+    "Claude READ refused [known_refusal=tail]": "claude_read_tail",
 }
 PHASES = {"acquired", "intent", "outcome"}
 DISPATCH = {"completed", "not dispatched", "possibly dispatched"}

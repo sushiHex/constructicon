@@ -23,7 +23,7 @@ from constructicon.core.component import CapabilityRequirement, ComponentDef, Py
 from constructicon.core.control import ADMIN_SCOPE, READ_SCOPE, AuthenticatedActor
 from constructicon.core.envelope import utc_now
 from constructicon.core.errors import ContractViolation
-from constructicon.core.executor import ExecutorSuccess, TaskSpec
+from constructicon.core.executor import ExecutorFailure, ExecutorSuccess, TaskSpec
 from constructicon.core.grants import EffectiveGrants, GrantRequest, ModelSelection, Posture
 from constructicon.core.graph import Graph, GraphNode, Ref
 from constructicon.core.identity import canonical_json, digest
@@ -45,6 +45,7 @@ from constructicon.substrate.executors.claude_provider import (
     ClaudeOperatorHandle,
     ClaudeOperatorProvider,
 )
+from constructicon.substrate.executors.claude_read import known_refusal_detail
 from constructicon.substrate.executors.claude_read_worker import READ_WORKER_LIMITS
 from constructicon.substrate.executors.linux import LinuxLauncher, LinuxLaunchProfile
 from constructicon.substrate.executors.qualification import read_authorization
@@ -72,6 +73,11 @@ async def read_node(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[str,
     result = await executor.execute(task, workspace=workspace, grants=ctx.grants)
     if (not isinstance(result, ExecutorSuccess) or type(result.raw_reply) is not str
             or result.raw_reply.strip() != "ready"):
+        detail = (known_refusal_detail(result.error.detail)
+                  if isinstance(result, ExecutorFailure) and result.error.kind == "exit"
+                  else None)
+        if detail is not None:
+            raise ContractViolation(detail)
         raise ContractViolation("Claude qualification did not complete its fixed READ")
     # The provider requires one completed callback and its joined process before
     # success. The fixed fixture contains no private repository data.
