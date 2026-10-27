@@ -127,3 +127,58 @@ Exit 1 can accompany structured invalid evidence: retain and inspect that JSON.
 Do not discard it or treat absent diagnostics as a passing observation. The
 Linux generated-chain test exercises this reader against the actual fake READ
 artifacts; portable tests exercise missing, refusing and bounded publication paths.
+
+## Metadata-only session
+
+`read_metadata_session.py` compiles, transports or checks one fixed collection.
+It shares the READ entry's existing private staging, SSH/SCP arguments and
+closed-stdin capture boundary. There is no successor, retry, VM operation,
+installation, store acquisition, login or vendor/model execution.
+
+```bash
+python -I -B scripts/ops/read_metadata_session.py describe < /dev/null
+
+python -I -B scripts/ops/read_metadata_session.py compile \
+  --request PRIVATE_REQUEST_JSON --history PRIVATE_HISTORY_DIR \
+  --out FRESH_PACKAGE_DIR --revision REVIEWED_SOURCE_REVISION < /dev/null
+
+python -I -B scripts/ops/read_metadata_session.py transport \
+  --package PACKAGE_DIR --manifest PACKAGE_SHA256 \
+  --history PRIVATE_HISTORY_DIR --captures FRESH_PRIVATE_CAPTURE_DIR \
+  --revision REVIEWED_SOURCE_REVISION < /dev/null
+
+python -I -B scripts/ops/read_metadata_session.py check \
+  --package PACKAGE_DIR --manifest PACKAGE_SHA256 \
+  --history PRIVATE_HISTORY_DIR --captures PRIVATE_CAPTURE_DIR \
+  --revision REVIEWED_SOURCE_REVISION < /dev/null
+```
+
+The private history contains exact `read-context.json`, `bindings.json` and
+`authorization-candidate.json` bytes. The request binds their hashes and checks
+the original boot, controller, run directory, authorization and derived run ID.
+These are historical lookup identities. Expiry and model grants are not reused
+as present authority. The independent `fresh` context binds the observed boot,
+SSH target/alias, fresh namespace and previously owner-approved drift inputs.
+Custody and address discovery remain measured operator prerequisites; no JSON
+boolean manufactures approval.
+
+The generated command checks the current boot and reuses the reviewed G1 drift
+guard, separating its exact marker from collector JSON. It invokes only the
+fixed reader as `m8-service` with isolated system Python and closed stdin. Source
+travels as a safely quoted `-c` argument: service access to the operator's private
+staging directory is not widened. This standalone inspection does not run or
+qualify the installed controller. Drift retains its declared coverage limits.
+
+`check` validates the package, request, capture context, actual process completion
+and closed bounded observation. A completed reader exit1 retains invalid/partial
+facts and returns `collection_checked: false`; timeout, SSH failure or absent
+output cannot pass. `collection_checked: true` confirms the inspection and
+projection checks only. Missing or partial records remain unknown and cannot
+authorize another attempt or establish model execution, request count or billing.
+
+Keep all requests, history, packages, custody observations and captures private.
+Use a Git-byte-exact source image and explicitly select its measured revision;
+Windows checkout line endings are not interchangeable with reviewed Git bytes.
+Live use requires the bounded owner-selected window and fresh custody/boot/drift
+checks. Unexpected output stops collection; retain the prefix and park without
+retry. This metadata window carries no model-call authority.

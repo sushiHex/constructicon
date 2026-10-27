@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 from scripts.ops import claude_read_commands as commands
 from scripts.ops import claude_read_session as session
+from scripts.ops import read_metadata_session as metadata
 
 ROOT = Path(__file__).resolve().parents[1]
 ENTRY = ROOT / "scripts/ops/claude_read_session.py"
@@ -237,7 +238,9 @@ def test_generated_phases_carry_actual_receipts_through_withdrawal(
         assert argv[0] == session.SCP and argv[-1].startswith(TARGET + ":")
         directory = argv[-1].split(":", 1)[1]
         assert directory.endswith("/") and "/" not in directory[:-1]
-        files = argv[-5:-1]
+        assert argv[1:2 + len(session.ssh_options(ALIAS))] == ["-q", *session.ssh_options(ALIAS)]
+        files = argv[2 + len(session.ssh_options(ALIAS)):-1]
+        assert files
         for source in files:
             result = original_run(["/usr/bin/install", "-m", "0600", source,
                                    str(operator_home / directory / Path(source).name)], **kwargs)
@@ -416,3 +419,43 @@ def test_generated_phases_carry_actual_receipts_through_withdrawal(
         assert report["journal"]["state"] == "valid"
         assert report["journal"]["partial"] is False
         assert report["journal"]["run_status"] == "succeeded"
+
+        history = tmp_path / "metadata-history"
+        history.mkdir()
+        for source, name in ((evidence / "read-context.json", "read-context.json"),
+                             (tmp_path / "read-bindings.json", "bindings.json"),
+                             (evidence / "authorization-candidate.json",
+                              "authorization-candidate.json")):
+            (history / name).write_bytes(source.read_bytes())
+        request = {
+            "schema_version": 1,
+            "retained": {
+                "context_sha256": commands.sha((history / "read-context.json").read_bytes()),
+                "bindings_sha256": commands.sha((history / "bindings.json").read_bytes()),
+                "authorization_sha256": commands.sha(
+                    (history / "authorization-candidate.json").read_bytes()),
+                "controller_commit": record["controller_commit"],
+                "boot": values["EXPECTED_BOOT"], "run_root": values["RUN"],
+                "authorization_id": authorization.authorization_id,
+                "run_id": str(authorization.run_id), "max_epoch": 1,
+            },
+            "fresh": {"boot": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+                      "target": TARGET, "alias": ALIAS, "namespace": "read-rehearsal-accept",
+                      "drift_sha256": record["pins"]["drift_sha256"],
+                      "drift_stdout": record["pins"]["drift_stdout"]},
+        }
+        request_path = tmp_path / "metadata-request.json"
+        _json(request_path, request)
+        package, metadata_captures = tmp_path / "metadata-package", tmp_path / "metadata-captures"
+        metadata_captures.mkdir()
+        metadata_revision = metadata.revision()
+        manifest = metadata.compile_package(request_path, history, package, metadata_revision)
+        status = metadata.transport(package, manifest, metadata_revision, history,
+                                    metadata_captures)
+        assert commands.completed_zero(status), (
+            status, (metadata_captures / "metadata-native.stdout").read_bytes(),
+            (metadata_captures / "metadata-native.stderr").read_bytes(),
+        )
+        checked = metadata.check(package, manifest, metadata_revision, history, metadata_captures)
+        assert checked["collection_checked"] is True
+        assert checked["observation"] == report

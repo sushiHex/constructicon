@@ -106,8 +106,16 @@ def _copy_path(path):
 
 def transport_commands(package, manifest, bindings, target, alias, phase):
     """The same exact argv in production and the credential-free process double."""
-    _target(target, alias)
     name = commands.remote_name(bindings, phase, manifest)
+    return staging_commands(package, manifest, name, target, alias)
+
+
+def staging_commands(package, manifest, name, target, alias):
+    """Existing fixed four-file transport; callers bind the compiled script."""
+    _target(target, alias)
+    commands.require(
+        commands.SHA.fullmatch(manifest) and re.fullmatch(r"[a-z][a-z0-9-]{0,127}", name)
+    )
     ssh = [SSH, "-T", *ssh_options(alias), target]
     code = (
         'import os,pathlib,stat,sys;h=pathlib.Path(os.environ["HOME"]);u=os.geteuid();'
