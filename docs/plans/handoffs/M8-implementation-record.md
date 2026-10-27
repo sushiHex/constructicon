@@ -9558,3 +9558,51 @@ never chmodded as a workaround. Both existing and newly created SQLite sidecar
 paths use the same rule. The actual producer is tested under umask077 and022;
 the accepting/refusing mode cases and a writable-mode mutant pin the distinction.
 The hosted accepting test remains required before delivery.
+
+
+### Source-bound metadata collection separates history from current authority
+
+`scripts/ops/read_metadata_session.py` supplies the missing one-collection
+compile/transport/check entry around the retained evidence reader. A small shared
+staging extraction preserves the existing READ entry's four SSH/SCP commands;
+this is not a second runbook engine. Fixed source bytes, request, script and
+manifest are revalidated before transport and receipt acceptance.
+
+The request separates hash-checked historical READ context/bindings/authorization
+from fresh boot, target, namespace and drift inputs. Original authorization bytes
+identify the retained run through the existing command law; expired model grants
+never become present execution authority. Current boot and reviewed G1 drift are
+actually checked before the isolated service-user reader runs. Custody and target
+discovery are independently measured operator prerequisites, not invented
+programmatic approval flags. The existing owner-approved drift-tool and expected
+output digests are reused unchanged.
+
+A fresh controller or D2 qualification is not introduced as a prerequisite for
+this standalone file inspection: it imports no installed controller, starts no
+contained workload and makes no vendor request. Historical controller identity
+remains provenance. The drift check retains its declared coverage limits and
+does not establish a fresh runtime qualification. Root receives no new repository
+code to execute; the collector runs as the fixed non-root service identity.
+
+The service user cannot traverse the operator's0700 staging directory. Exact
+public reader source is therefore delivered as a safely quoted isolated Python
+argument. G1's marker is checked separately from collector JSON. Native exit1
+preserves its closed invalid/partial facts without a positive collection result;
+timeout, SSH failure and missing output cannot pass. Missing/partial observations
+never become complete evidence or model-call authority. Capture bounds remain
+post-completion checks, not streaming or disk-write caps.
+
+Portable evidence covers actual isolated CLI execution, child-process argument
+transport, source/history/request tampering, old/current boot separation,
+collisions, nonzero and timeout receipts, and bounded closed publication. A
+private offline smoke also compiled the actual retained identity artifacts with
+deliberate non-executable fresh-context placeholders and checked script syntax;
+it performed no host phase. The existing Linux accepting rehearsal now runs the
+actual metadata transport after READ withdrawal and compares its projection with
+an independent service-user collection of the same fake artifacts. Its execution
+remains required CI evidence, never inferred from Windows skips.
+
+This entry authorizes no installation, maintenance acquisition, login, model
+request, retry or successor. Owner selection and package review are procedural
+authority; hashes identify inputs and source. The single earlier live READ remains
+spent and its cause remains unmeasured until the bounded collection actually runs.

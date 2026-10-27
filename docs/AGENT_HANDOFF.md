@@ -16,6 +16,27 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Metadata inspection has its own source-bound operating entry
+
+`scripts/ops/read_metadata_session.py` compiles, transports and checks one fixed
+retained-evidence collection through the existing private SSH/SCP staging and
+capture boundary. Historical READ context, bindings and authorization are
+hash-checked lookup identities; fresh boot, target and drift inputs are separate.
+Expired READ grants never authorize an inspection or a new model attempt.
+
+The generated script checks current boot and reviewed G1 drift, then invokes only
+the fixed reader under the service identity. Its source is passed as a quoted
+isolated Python argument because the service cannot read the operator's private
+staging directory. Drift and JSON receipts are separate. Invalid/partial reader
+results remain available, and missing or incomplete process output cannot pass.
+
+This is standalone metadata inspection, with no controller import, fresh runtime
+qualification, installation, store acquisition or vendor request. Custody remains
+an external measured prerequisite and owner selection remains procedural
+authority. The hosted fake rehearsal exercises actual package transport after
+withdrawal; it does not establish private-host execution or a successful live
+Claude READ.
+
 ## Retained READ facts are inspected before another live attempt
 
 The corrected-controller session passed fresh startup qualification and exact

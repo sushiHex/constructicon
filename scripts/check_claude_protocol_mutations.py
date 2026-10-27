@@ -2035,6 +2035,24 @@ EVIDENCE_MUTANTS = (
 )
 MUTANTS += EVIDENCE_MUTANTS
 
+METADATA = "scripts.ops.read_metadata_session:"
+METADATA_TEST = "tests/test_read_metadata_session.py::"
+METADATA_MUTANTS = (
+    ("metadata history bytes match independently pinned digests", METADATA + "request_checked",
+     "require(sha(body) == old[key])", "require(True)",
+     METADATA_TEST + "test_mismatched_identity_source_or_request_refuses[history-bytes]"),
+    ("metadata run identity derives from the retained authorization", METADATA + "request_checked",
+     '== old["run_id"]', '== old["run_id"] or True',
+     METADATA_TEST + "test_mismatched_identity_source_or_request_refuses[old-run]"),
+    ("metadata command retains the actual reviewed drift guard", METADATA + "render",
+     'guard = commands._fence("guard", "G1: private drift boundary")', 'guard = ""',
+     METADATA_TEST + "test_accepts_historical_boot_and_expired_identity_distinct_from_current"),
+    ("invalid metadata is retained without positive collection", METADATA + "check",
+     '"collection_checked": not invalid', '"collection_checked": True',
+     METADATA_TEST + "test_native_nonpositive_or_incomplete_facts_never_pass[invalid]"),
+)
+MUTANTS += METADATA_MUTANTS
+
 
 if __name__ == "__main__":
     raise SystemExit(run(MUTANTS))
