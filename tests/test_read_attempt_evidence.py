@@ -732,3 +732,42 @@ def test_real_isolated_cli_argument_errors_never_echo_input():
     )
     assert result.returncode == 2 and result.stdout == b""
     assert result.stderr.decode() == "read evidence arguments refused" + os.linesep
+
+
+def test_actual_current_journal_schema_and_producer_are_readable(files):
+    from constructicon.api.system import Constructicon
+    from constructicon.core.address import RunId
+    from constructicon.core.graph import Graph
+    from constructicon.core.ports import Port
+    from constructicon.substrate.journal.sqlite import SqliteJournal
+
+    database = files / "read.sqlite"
+    database.unlink()
+    previous = os.umask(0o077)
+    try:
+        journal = SqliteJournal(database)
+        system = Constructicon(journal=journal)
+        inputs = {"request": {"authorization": AUTH}}
+        graph = Graph(
+            name="fixed-metadata",
+            inputs=(Port(name="request", type_id="fixture", schema_hash="v1"),),
+            outputs=(),
+            nodes=(),
+        )
+        manifest = system.validate(graph, inputs)
+        journal.create_run(
+            RunId(RUN),
+            manifest_json=manifest.model_dump_json(),
+            manifest_hash=manifest.manifest_hash,
+            input_hash=manifest.input_hash,
+            inputs=inputs,
+        )
+    finally:
+        os.umask(previous)
+    # This deliberately uses no journal constructor/UDFs on the read side.
+    with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=0) as connection:
+        connection.execute("PRAGMA query_only=ON")
+        connection.execute("PRAGMA trusted_schema=OFF")
+        assert connection.execute("SELECT inputs_json FROM runs WHERE run_id=?", (RUN,)).fetchone()
+    result = collect(files)["journal"]
+    assert result["state"] == "valid" and result["run_status"] == "pending"

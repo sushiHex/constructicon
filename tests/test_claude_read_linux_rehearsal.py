@@ -83,6 +83,44 @@ print(json.dumps(report, sort_keys=True))
         return {"observation_failed": "invalid output"}
 
 
+def _collector_diagnostic(collector: str, arguments: list[str], run_process) -> dict:
+    """Locate caught failures in the fake fixture without publishing exception text."""
+    code = r'''
+import json, sys
+source, arguments = sys.argv[1], sys.argv[2:]
+namespace = {"__name__": "fixture_collector"}
+exec(compile(source, "<fixture-collector>", "exec"), namespace)
+events = []
+allowed = {"ValueError", "TypeError", "KeyError", "OSError", "FileNotFoundError",
+           "RuntimeError", "OperationalError", "DatabaseError", "RecursionError"}
+def trace(frame, event, arg):
+    if event == "exception" and frame.f_code.co_filename == "<fixture-collector>":
+        kind = type(arg[1]).__name__
+        events.append([frame.f_code.co_name, frame.f_lineno, kind if kind in allowed else "other"])
+        del events[:-32]
+    return trace
+sys.settrace(trace)
+try:
+    status = namespace["main"](arguments)
+except BaseException:
+    status = -1
+finally:
+    sys.settrace(None)
+print(json.dumps({"status": status, "exceptions": events}, sort_keys=True), file=sys.stderr)
+'''
+    result = run_process(
+        ["sudo", "-n", "-u", "m8-service", "/usr/bin/python3", "-I", "-S", "-B",
+         "-c", code, collector, *arguments], stdin=subprocess.DEVNULL,
+        capture_output=True, check=False, timeout=30,
+    )
+    if result.returncode != 0 or len(result.stderr) > 8192:
+        return {"observation_failed": result.returncode}
+    try:
+        return json.loads(result.stderr)
+    except (ValueError, UnicodeDecodeError):
+        return {"observation_failed": "invalid output"}
+
+
 def test_failure_observation_keeps_bounded_facts_and_redacts_paths(tmp_path):
     _json(tmp_path / "read-attempt.json", {
         "phase": "outcome", "dispatch": "possibly dispatched",
@@ -108,6 +146,17 @@ def test_failure_observation_keeps_bounded_facts_and_redacts_paths(tmp_path):
     assert observed["node_failures"] == [{"error_type": "ContractViolation",
                                           "error": "failed at <path>"}]
     assert "not emitted" not in json.dumps(observed)
+
+
+def test_collector_diagnostic_reports_caught_location_without_exception_text():
+    def local_python(argv, **kwargs):
+        return subprocess.run([sys.executable, "-I", "-S", "-B", "-c", *argv[9:]], **kwargs)
+
+    source = ('def main(argv):\n    try:\n        raise ValueError("PRIVATE")\n'
+              '    except ValueError:\n        return 1\n')
+    observed = _collector_diagnostic(source, [], local_python)
+    assert observed == {"status": 1, "exceptions": [["main", 3, "ValueError"]]}
+    assert "PRIVATE" not in json.dumps(observed)
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="requires the disposable Linux foundation")
@@ -303,15 +352,17 @@ def test_generated_phases_carry_actual_receipts_through_withdrawal(
         )
         assert authorization.authorization_id == values["AUTHORIZATION_ID"]
         collector = (ROOT / "scripts/ops/read_attempt_evidence.py").read_text(encoding="utf-8")
+        collector_arguments = ["--run-root", values["RUN"], "--authorization-id",
+                               authorization.authorization_id, "--run-id",
+                               str(authorization.run_id), "--max-epoch", "1"]
         result = original_run(
             ["sudo", "-n", "-u", "m8-service", "/usr/bin/python3", "-I", "-S", "-B",
-             "-c", collector, "--run-root", values["RUN"], "--authorization-id",
-             authorization.authorization_id, "--run-id", str(authorization.run_id),
-             "--max-epoch", "1"],
+             "-c", collector, *collector_arguments],
             stdin=subprocess.DEVNULL, capture_output=True, check=False, timeout=30,
         )
         assert result.returncode == 0, (
-            result.returncode, result.stdout[:32768], result.stderr[:4096]
+            result.returncode, result.stdout[:32768], result.stderr[:4096],
+            _collector_diagnostic(collector, collector_arguments, original_run)
         )
         assert result.stderr == b""
         assert len(result.stdout) <= 32768
