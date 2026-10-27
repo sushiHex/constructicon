@@ -9697,3 +9697,46 @@ The diagnostics identify only a matched guard. Unknown or ambiguous causes
 stay generic, and this does not establish which frame caused the earlier live
 failure or prove a successful live READ. Any future live use needs fresh
 installation and profile qualification.
+
+### Pinned Claude MCP call metadata compatibility
+
+Static inspection independently rehashed the pinned native 2.1.296 member
+(`24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de`).
+Both call routes supply `_meta` (B@244714747 and B@244984073); request
+construction adds `progressToken` (B@226909767 and B@244117794), and tool
+construction can add `claudecode/toolUseId` (B@244676009 and B@244940243).
+The SDK transport forwards the message (B@232321267), with SDK connection
+sites at B@244722457 and B@244996333. These are source observations, not a
+local vendor execution or a measured historical failure cause.
+
+The former exact `{name, arguments}` comparison refused these calls before
+worker entry. The repair admits an optional `_meta` object and discards it
+wholesale. The pinned metadata schemas are open (native B@226875175; paired
+SDK `sdk.mjs` S@621410), so guessing a whitelist of vendor metadata keys would
+introduce another compatibility limit. Existing strict JSON parsing and
+record/stream bounds cover the entire object. Metadata never selects a worker,
+changes the path, reaches worker input, or appears in host replies or outcomes.
+Required parameters, refusal of unexpected surrounding parameters, tool/server
+identity, phase, call count and physical custody remain unchanged.
+
+Two faithful metadata-bearing regressions failed by assertion on the previous
+driver, with a completed handshake and user write but zero worker entries.
+The corrected driver passed all 218 focused tests, including empty/nested
+metadata, private canaries, routing-like inert fields and wrong-type/parameter
+refusals. Three distinct mutants were assertion-killed: refusal of normal
+metadata, admission of non-object metadata and admission of an extra call
+parameter. Changed-file Ruff, strict driver mypy and inventory target checks
+passed; existing inventory long-line findings were left untouched. The shared
+compiled fake peer now sends metadata in the existing generated READ rehearsal;
+that Linux proof belongs to final-head CI, not the local Windows results.
+
+Astra independently traced the pinned producer and transport, then reviewed
+the narrow metadata boundary without an actionable finding. Fable's separate
+diagnosis confirmed the failure window and limits of generic failure telemetry;
+timing or a relayed connection alone does not prove a timeout or backend reply.
+No model-name, permission, progress-notification or acceptance-budget change
+was justified. The historical cause and live READ success remain unestablished.
+Controller preparation was paused before deployment of the known-incompatible
+parser. Future use requires corrected-source installation, fresh qualification
+and separately selected actual READ pins; this code delivery opens no live
+window.

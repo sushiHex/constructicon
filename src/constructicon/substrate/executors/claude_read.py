@@ -477,7 +477,10 @@ class ClaudeReadTransaction:
                     or method != "tools/call" or self._calls >= CALL_LIMIT):
                 raise _Refused(ClaudeReadRefusalCode.MCP_CALL)
             params = message.get("params")
-            if (type(params) is not dict or set(params) != {"name", "arguments"}
+            # Native MCP metadata is open JSON, discarded under the existing record budget.
+            if (type(params) is not dict
+                    or set(params) not in ({"name", "arguments"}, {"name", "arguments", "_meta"})
+                    or ("_meta" in params and type(params["_meta"]) is not dict)
                     or params.get("name") != "read_file"):
                 raise _Refused(ClaudeReadRefusalCode.MCP_CALL)
             arguments = params["arguments"]

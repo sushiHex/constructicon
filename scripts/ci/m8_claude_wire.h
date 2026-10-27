@@ -204,9 +204,11 @@ static int claude_wire(int argc, char **argv) {
     if (callback) {
         wire_mcp("outer-tools/call", ready
                  ? "{\"jsonrpc\":\"2.0\",\"id\":19,\"method\":\"tools/call\","
-                   "\"params\":{\"name\":\"read_file\",\"arguments\":{\"path\":\"ready.txt\"}}}"
+                   "\"params\":{\"name\":\"read_file\",\"arguments\":{\"path\":\"ready.txt\"},"
+                   "\"_meta\":{\"progressToken\":19,\"claudecode/toolUseId\":\"tool-use-id\"}}}"
                  : "{\"jsonrpc\":\"2.0\",\"id\":19,\"method\":\"tools/call\","
-                   "\"params\":{\"name\":\"read_file\",\"arguments\":{\"path\":\"calc.py\"}}}");
+                   "\"params\":{\"name\":\"read_file\",\"arguments\":{\"path\":\"calc.py\"},"
+                   "\"_meta\":{\"progressToken\":19,\"claudecode/toolUseId\":\"tool-use-id\"}}}");
         wire_ack("\"request_id\":\"outer-tools/call\"", "\"id\":19");
         WIRE_CHECK(strstr(wire_frame, "\"isError\":false") != NULL);
         wire_token("\"text\":", result, sizeof(result));
