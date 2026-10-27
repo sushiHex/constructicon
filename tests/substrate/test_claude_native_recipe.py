@@ -162,6 +162,63 @@ def launcher(tmp_path):
     )
 
 
+def test_launch_profile_selection_is_closed_and_revision_bound(tmp_path):
+    profile = linux.LinuxLaunchProfile
+    assert profile.GENERIC_WORKLOAD.label == (
+        "constructicon-m8-launch//&constructicon-m8-workload (enforce)"
+    )
+    assert profile.CLAUDE_BOOTSTRAP.label == linux.CLAUDE_BOOTSTRAP_LABEL
+    native = launcher(tmp_path)
+    generic = replace(native, claude=None)
+    worker = replace(generic, launch_profile=profile.CLAUDE_BOOTSTRAP)
+    assert native.effective_profile is profile.CLAUDE_BOOTSTRAP
+    assert generic.effective_profile is profile.GENERIC_WORKLOAD
+    assert worker.effective_profile is profile.CLAUDE_BOOTSTRAP
+    assert worker.claude is None and worker.vendor is None
+    assert worker.revision != generic.revision
+    assert (replace(worker, limits=linux.ProcessLimits()).effective_profile
+            is profile.CLAUDE_BOOTSTRAP)
+    for invalid in ("claude-bootstrap", True, 1, object()):
+        with pytest.raises(ContractViolation):
+            replace(generic, launch_profile=invalid)
+    with pytest.raises(ContractViolation):
+        replace(native, launch_profile=profile.GENERIC_WORKLOAD)
+    codex = replace(generic, vendor=linux.NativeVendor(tmp_path / "codex", tmp_path / "catalog"))
+    assert codex.effective_profile is profile.GENERIC_WORKLOAD
+    with pytest.raises(ContractViolation):
+        replace(codex, launch_profile=profile.CLAUDE_BOOTSTRAP)
+
+
+@pytest.mark.parametrize("selection", ["generic", "bootstrap"])
+async def test_probe_requires_the_selected_exact_profile(
+    tmp_path, on_linux, monkeypatch, selection,
+):
+    profile = linux.LinuxLaunchProfile
+    selected = (profile.GENERIC_WORKLOAD if selection == "generic"
+                else profile.CLAUDE_BOOTSTRAP)
+    other = (profile.CLAUDE_BOOTSTRAP if selection == "generic"
+             else profile.GENERIC_WORKLOAD)
+    subject = replace(launcher(tmp_path), claude=None, launch_profile=selected)
+    observed = {"profile": selected.label, "nested_denied": True, "sys_absent": True,
+                "status": "NoNewPrivs:\t1\nCapEff:\t0000000000000000\n",
+                "namespaces": {name: "child" for name in (
+                    "user", "mnt", "pid", "ipc", "uts", "net")}}
+    monkeypatch.setattr(linux.LinuxLauncher, "check_artifacts", lambda self: None)
+    monkeypatch.setattr(linux.os, "MFD_CLOEXEC", 0, raising=False)
+    monkeypatch.setattr(linux.os, "memfd_create", lambda *_: os.open(os.devnull, os.O_RDONLY),
+                        raising=False)
+    monkeypatch.setattr(linux.os, "readlink", lambda _path: "host")
+
+    async def run(self, *_args, **_kwargs):
+        return linux.ProcessResult(0, json.dumps(observed).encode(), b"", .01)
+
+    monkeypatch.setattr(linux.LinuxLauncher, "_run", run)
+    await subject.probe()
+    observed["profile"] = other.label
+    with pytest.raises(ContractViolation, match="contradicts containment"):
+        await subject.probe()
+
+
 def test_login_recipe_is_exact_and_does_not_select_model_authority(tmp_path):
     native = recipe_module()
     subject = launcher(tmp_path)

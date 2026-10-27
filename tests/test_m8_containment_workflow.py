@@ -144,6 +144,9 @@ PROOFS = {
     "Rehearse the q12 continuation's real-tool steps": (
         "foundation", "tests/test_m8_maintenance_q12_rehearsal.py",
     ),
+    "Rehearse the generated Claude READ chain": (
+        "foundation", "tests/test_claude_read_linux_rehearsal.py",
+    ),
     "Prove the host plans the package CI installed": (
         "foundation", "tests/test_m8_host_runtime.py",
     ),

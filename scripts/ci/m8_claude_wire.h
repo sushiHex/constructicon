@@ -27,6 +27,17 @@ static void wire_read(void) {
     WIRE_CHECK(strchr(wire_frame, '\r') == NULL);
 }
 
+/* Maintenance closes input after its final observation; READ continues. */
+static int wire_input_closed(void) {
+    int byte = fgetc(stdin);
+    if (byte == EOF) {
+        WIRE_CHECK(!ferror(stdin));
+        return 1;
+    }
+    WIRE_CHECK(ungetc(byte, stdin) != EOF);
+    return 0;
+}
+
 /* Copy one JSON string token, retaining its quoting/escapes for a wire reply.
  * The controller owns these exact compact JSON frames. This fixture is not a
  * general parser or an authority boundary; every scan has the frame bound. */
@@ -112,7 +123,8 @@ static void wire_ack(const char *outer, const char *rpc) {
 }
 
 static int claude_wire(int argc, char **argv) {
-    if (argc != 14 || (strcmp(argv[11], "fixture-read") && strcmp(argv[11], "fixture-zero") &&
+    if (argc != 14 || (strcmp(argv[11], "fixture-read") && strcmp(argv[11], "fixture-ready") &&
+                      strcmp(argv[11], "fixture-zero") &&
                       strcmp(argv[11], "fixture-startup") &&
                       strcmp(argv[11], "fixture-startup-subscribed") &&
                       strcmp(argv[11], "fixture-startup-ui") &&
@@ -153,10 +165,13 @@ static int claude_wire(int argc, char **argv) {
         }
         return 0;
     }
-    int callback = !strcmp(model, "fixture-read");
+    int ready = !strcmp(model, "fixture-ready");
+    int callback = ready || !strcmp(model, "fixture-read");
     wire_observation("\"subtype\":\"initialize\"", model, 0);
+    if (wire_input_closed()) return 0;
     wire_observation("\"subtype\":\"get_settings\"", model, 0);
     wire_observation("\"subtype\":\"get_hooks_listing\"", model, 0);
+    if (wire_input_closed()) return 0;
     wire_observation("\"subtype\":\"initialize\"", model, 0);
     WIRE_CHECK(strstr(wire_frame, "\"sdkMcpServers\":[\"constructicon_read\"]") != NULL);
     wire_mcp("outer-initialize", "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"initialize\","
@@ -181,12 +196,17 @@ static int claude_wire(int argc, char **argv) {
            "\"uuid\":\"" WIRE_UUID "\"}\n", model);
     printf("{\"type\":\"assistant\",\"session_id\":\"" WIRE_SESSION "\",\"uuid\":\"" WIRE_UUID "\","
            "\"parent_tool_use_id\":null,\"message\":{\"role\":\"assistant\",\"content\":%s}}\n",
-           callback ? "[{\"type\":\"tool_use\",\"id\":\"tool-use-id\","
+           ready ? "[{\"type\":\"tool_use\",\"id\":\"tool-use-id\","
+                   "\"name\":\"mcp__constructicon_read__read_file\",\"input\":{\"path\":\"ready.txt\"}}]"
+             : callback ? "[{\"type\":\"tool_use\",\"id\":\"tool-use-id\","
                       "\"name\":\"mcp__constructicon_read__read_file\",\"input\":{\"path\":\"calc.py\"}}]"
                     : "[{\"type\":\"text\",\"text\":\"zero-callback\"}]");
     if (callback) {
-        wire_mcp("outer-tools/call", "{\"jsonrpc\":\"2.0\",\"id\":19,\"method\":\"tools/call\","
-                 "\"params\":{\"name\":\"read_file\",\"arguments\":{\"path\":\"calc.py\"}}}");
+        wire_mcp("outer-tools/call", ready
+                 ? "{\"jsonrpc\":\"2.0\",\"id\":19,\"method\":\"tools/call\","
+                   "\"params\":{\"name\":\"read_file\",\"arguments\":{\"path\":\"ready.txt\"}}}"
+                 : "{\"jsonrpc\":\"2.0\",\"id\":19,\"method\":\"tools/call\","
+                   "\"params\":{\"name\":\"read_file\",\"arguments\":{\"path\":\"calc.py\"}}}");
         wire_ack("\"request_id\":\"outer-tools/call\"", "\"id\":19");
         WIRE_CHECK(strstr(wire_frame, "\"isError\":false") != NULL);
         wire_token("\"text\":", result, sizeof(result));
