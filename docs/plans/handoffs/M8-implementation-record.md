@@ -9606,3 +9606,61 @@ This entry authorizes no installation, maintenance acquisition, login, model
 request, retry or successor. Owner selection and package review are procedural
 authority; hashes identify inputs and source. The single earlier live READ remains
 spent and its cause remains unmeasured until the bounded collection actually runs.
+
+
+### Retained metadata locates the READ stage; normal SDK init metadata is admitted
+
+The [metadata-only session](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6436142160)
+used the source-bound entry delivered in PR #313. Actual current boot and target
+were compared separately from the retained C143 identities, the finite package
+was independently checked, and its one transport and local receipt check passed.
+Both artifact observations were valid and non-partial. The VM was parked, fresh
+off/idle checks passed, and custody was released. No vendor/model, login, refresh,
+store, installation, checkpoint, re-baseline or retry operation ran.
+
+The historical outcome records failure and `possibly dispatched`, callback
+started/completed0/0, both binding checks, and a closed relay. The same-run
+journal records failure and the generic outer READ-contract refusal. C143 source
+places durable intent after pre-turn initialize MODE_MATCH, settings, hooks and
+MCP handshake checks, but before awaiting the user write. The provider increments
+its callback-start counter before invoking the worker. This locates the failure
+after intent and before worker entry; it does not prove actual delivery, every
+native MCP request, the rejected frame, backend request count, usage or billing.
+Binding/cleanup facts are not a specific protocol-failure diagnosis.
+
+A separate pinned-source audit demonstrates one normal-frame incompatibility.
+The official [Agent SDK0.3.296 package](https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.296.tgz)
+declares optional `mcp_servers[].source` in `sdk.d.ts:5986-5992`; the verified file
+SHA-256 is `fc2866dfe2c01468edb19b1d94f26156bfacecdf1e7f1452b276ed2f8cc0b08f`.
+The pinned native2.1.296 artifact (257,068,216 bytes, SHA-256
+`24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de`)
+constructs SDK server configs at byte233679304, maps their origin to `sdk` at
+216102618, carries it into the init builder at233428164 and emits a defined
+source at222723383. These are offsets into the verified native artifact, not a
+claim that it was executed locally. Both pinned files were read and hashed only.
+
+The prior exact dictionary comparison refused that legitimate source-bearing
+row. An actual-driver regression reached the registered three-step handshake
+and one user write, then failed before any worker call on the old parser; legacy
+controls passed. The correction accepts exactly one connected registered server
+with optional literal-string `sdk` source. Omitted source remains valid. Null,
+project/plugin/unknown sources, extra fields or servers, wrong types, changed
+names/statuses and altered model/tool/session identity still refuse. No origin
+field supplies routing, permissions or callback authority. All existing native
+byte/deadline/handshake and one-callback bounds remain.
+
+The compiled harmless peer now emits this normal source-bearing shape, so
+existing actual wire/worker and hosted READ rehearsals exercise it. Portable
+legacy omission remains covered. The focused driver and real compiled-peer
+paths passed; distinct guard mutants had passing baselines and assertion kills.
+Independent narrow review found no authority change or remaining blocker;
+required exact-head CI remains the delivery evidence for Linux execution.
+
+The live offending frame is unmeasured. This is an independently reproduced
+compatibility defect consistent with the stage, not a proved cause or completed
+live READ. No new diagnostic contract or generic unknown-field allowance was
+added. The READ protocol revision hashes the entire driver module and therefore
+changes with this correction; the startup qualification source law is unchanged.
+Future live use requires reviewed controller installation, current READ identity
+and authorization, and the existing fresh-boot qualification procedure. It is
+outside the closed metadata window and includes no implicit model retry.
