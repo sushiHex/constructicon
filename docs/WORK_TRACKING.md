@@ -237,6 +237,24 @@ transport rather than only string construction. Stop repeating a nondiagnostic
 live run; define a new bounded evidence question first. This does not relax live
 host custody, exact installation, credential, deployment or model-call authority.
 
+Before starting a live session, finish preparation that needs no live-produced evidence,
+and confirm the selected stages' source, task, model, limits and applicable cost
+decisions. Leave boot, qualification and generation facts unresolved until
+measured. Resolve operation names and input contracts against the reviewed CLI
+revision selected for that phase. Prefer its existing compile/check entry points over
+private helper calls or redundant validation. Exercise newly composed local glue
+offline through the actual entry with bounded fixtures or explicitly historical
+evidence. Reuse unchanged proofs; this is not another full-suite requirement.
+
+Ground accepting protocol fixtures in the pinned producer's source/schema or an
+authorized recorded observation, rather than only the consumer's expectations.
+Distinguish local preparation errors, issued remote commands and observed vendor
+refusals in the result. Correct an operator error at that boundary; it is not
+evidence for a product patch, broader hardening or repeated design review.
+Preserve uncertainty about dispatch and budget use, discharge cleanup, and obey
+the selected stop/resume rules. These preparation rules grant no permission to
+relax a frozen procedure or resume a stopped window.
+
 Progress reports lead with working behavior, the remaining critical-path blocker
 and the next action. Test counts, mutation counts and merged PRs are supporting
 evidence, not delivery milestones. When a gate blocks, diagnose it or use the
