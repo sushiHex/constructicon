@@ -443,3 +443,163 @@ def test_actual_verifier_marker_statement_matches_phase_contract(tmp_path, phase
     )
     assert child.returncode == 0 and child.stderr == b""
     assert child.stdout == commands.PHASES[phase].stdout.removeprefix(b"drift-checked\n")
+
+
+def _prepare_cli(*args):
+    return subprocess.run(
+        [sys.executable, "-I", "-B", str(Path(session.__file__)), *map(str, args)],
+        stdin=subprocess.DEVNULL, capture_output=True, check=False,
+    )
+
+
+def _installation(record):
+    return {
+        "schema_version": 1,
+        "controller_commit": record["controller_commit"],
+        "controller_workspace": record["controller_workspace"],
+        "launch_workspace": record["launch_workspace"],
+        "selected_plan": record["selected_plan"],
+        "pins": record["pins"],
+        "operator_home": "/home/fixture",
+        "actor": record["values"]["ACTOR"],
+    }
+
+
+def test_prepare_bindings_real_cli_derives_fresh_paths_and_never_overwrites(tmp_path):
+    old = binding_record()
+    old["values"].update(R="/home/fixture/m8-claude-first-read-wrong",
+                         RUN="/var/lib/m8-cr-run-wrong", Q="sha256:" + "a" * 64)
+    facts = tmp_path / "installation.json"
+    write(facts, _installation(old))
+    output = tmp_path / "prepared.json"
+    args = ("prepare-bindings", "--installation", facts, "--namespace", "new-session",
+            "--boot", old["values"]["EXPECTED_BOOT"], "--out", output,
+            "--operator-revision", commands.operator_revision())
+    child = _prepare_cli(*args)
+    assert child.returncode == 0 and child.stderr == b""
+    assert json.loads(child.stdout) == {"bindings_sha256": commands.sha(output.read_bytes())}
+    result = json.loads(output.read_bytes())
+    assert result["values"]["R"] == "/home/fixture/m8-claude-first-read-new-session"
+    for key, prefix in (("RUN", "run"), ("AUTH", "auth"), ("ACQ", "acq")):
+        assert result["values"][key] == "/var/lib/m8-cr-" + prefix + "-new-session"
+    assert result["values"]["QUAL"] == result["values"]["RUN"] + "/qualify.json"
+    assert all(result["values"][key] == "UNREVIEWED" for key in commands.LATE)
+    before = output.read_bytes()
+    repeated = _prepare_cli(*args)
+    assert repeated.returncode != 0 and repeated.stdout == b""
+    assert output.read_bytes() == before
+
+
+@pytest.mark.parametrize("extra", ["values", "namespace", "R", "Q"])
+def test_prepare_bindings_refuses_prior_session_state(tmp_path, extra):
+    facts = _installation(binding_record())
+    facts[extra] = binding_record().get(extra, "old-session")
+    source, output = tmp_path / "facts.json", tmp_path / "out.json"
+    write(source, facts)
+    result = _prepare_cli("prepare-bindings", "--installation", source,
+                          "--namespace", "new-session", "--out", output,
+                          "--operator-revision", commands.operator_revision())
+    assert result.returncode != 0 and result.stdout == b"" and not output.exists()
+
+
+@pytest.mark.parametrize(
+    "phase", ["qualify-check", "inventory", "publish", "mint", "candidate-pins"]
+)
+def test_prepare_late_refuses_missing_checked_phase_and_never_fabricates_approval(tmp_path, phase):
+    source = tmp_path / "bindings.json"
+    write(source, binding_record())
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    output = tmp_path / "out.json"
+    child = _prepare_cli("prepare-late", "--phase", phase, "--bindings", source,
+                         "--evidence", evidence, "--out", output,
+                         "--operator-revision", commands.operator_revision())
+    assert child.returncode != 0 and child.stdout == b"" and not output.exists()
+    assert not (evidence / "owner-approval.json").exists()
+
+
+def _synthetic_readback(evidence, phase, part, filename, raw):
+    (evidence / filename).write_bytes(raw)
+    name = phase + "-readback-" + part
+    write(evidence / (name + ".status.json"),
+          {"completed": True, "returncode": 0, "timed_out": False})
+    (evidence / (name + ".stderr")).write_bytes(b"")
+    write(evidence / (name + "-context.json"),
+          {"request": json.loads((evidence / (phase + "-context.json")).read_bytes()),
+           "part": part, "sha256": commands.sha(raw)})
+
+
+def test_prepare_inventory_real_cli_accepts_checked_receipt_and_rejects_mismatch(
+    tmp_path, consumer_world,
+):
+    record, evidence = consumer_world
+    package, manifest, pins, bindings = build(tmp_path, record, "inventory", evidence)
+    synthetic_receipt(evidence, package, manifest, pins, bindings)
+    _synthetic_readback(evidence, "inventory", "stderr", "inventory.command.stderr", b"")
+    _synthetic_readback(evidence, "inventory", "inventory", "inventory.json",
+                        b'{"highest_generation": 7, "withdrawn": true}\n')
+    source = tmp_path / "inventory-input.json"
+    write(source, record)
+    out = tmp_path / "inventory-prepared.json"
+    args = ("prepare-late", "--phase", "inventory", "--bindings", source,
+            "--evidence", evidence, "--out", out, "--operator-revision",
+            commands.operator_revision())
+    child = _prepare_cli(*args)
+    assert child.returncode == 0 and child.stderr == b""
+    assert json.loads(child.stdout) == {"bindings_sha256": commands.sha(out.read_bytes())}
+    values = json.loads(out.read_bytes())["values"]
+    assert (values["FLOOR"], values["GENERATION"]) == ("7", "8")
+    context = evidence / "inventory-readback-inventory-context.json"
+    damaged = json.loads(context.read_bytes())
+    damaged["part"] = "stderr"
+    write(context, damaged)
+    refused_out = tmp_path / "refused.json"
+    refused = _prepare_cli(*args[:args.index(out)], refused_out, *args[args.index(out) + 1:])
+    assert refused.returncode != 0 and refused.stdout == b"" and not refused_out.exists()
+
+
+def test_prepare_offline_unknown_boot_and_socket_bound(tmp_path):
+    facts = tmp_path / "facts.json"
+    write(facts, _installation(binding_record()))
+    out = tmp_path / "unmeasured.json"
+    common = ("--installation", facts, "--operator-revision", commands.operator_revision())
+    made = _prepare_cli("prepare-bindings", *common, "--namespace", "short", "--out", out)
+    assert made.returncode == 0
+    assert json.loads(out.read_bytes())["values"]["EXPECTED_BOOT"] == "UNREVIEWED"
+    compile_result = _prepare_cli("compile", "--phase", "d2-preserve", "--bindings", out,
+                                  "--evidence", tmp_path, "--out", tmp_path / "package",
+                                  "--operator-revision", commands.operator_revision())
+    assert compile_result.returncode != 0 and not (tmp_path / "package").exists()
+    edge = tmp_path / "edge.json"
+    result = _prepare_cli("prepare-bindings", *common, "--namespace", "a" * 30,
+                          "--out", edge)
+    assert result.returncode == 0 and edge.is_file()
+    too_long = tmp_path / "too-long.json"
+    result = _prepare_cli("prepare-bindings", *common, "--namespace", "a" * 31,
+                          "--out", too_long)
+    assert result.returncode != 0 and not too_long.exists()
+    malformed = tmp_path / "malformed.json"
+    result = _prepare_cli("prepare-bindings", *common, "--namespace", "short",
+                          "--boot", "not-a-uuid", "--out", malformed)
+    assert result.returncode != 0 and not malformed.exists()
+
+
+def test_prepare_cleanup_uses_canonical_path_and_refuses_overwrite(tmp_path):
+    record = binding_record()
+    record["values"].update(FLOOR="7", GENERATION="8")
+    source = tmp_path / "bindings.json"
+    write(source, record)
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    args = ("prepare-cleanup", "--bindings", source, "--evidence", evidence,
+            "--operator-revision", commands.operator_revision())
+    child = _prepare_cli(*args)
+    assert child.returncode == 0 and child.stderr == b""
+    result = json.loads(child.stdout)
+    assert result["phase"] == "withdraw-after"
+    package = evidence / "cleanup-package"
+    commands.package_checked(package, result["package_manifest"], commands.operator_revision())
+    before = {p.name: p.read_bytes() for p in package.iterdir()}
+    repeated = _prepare_cli(*args)
+    assert repeated.returncode != 0 and repeated.stdout == b""
+    assert {p.name: p.read_bytes() for p in package.iterdir()} == before

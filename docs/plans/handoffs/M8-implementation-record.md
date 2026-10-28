@@ -9996,3 +9996,54 @@ Final focused execution passed 333 tests with two Windows physical skips. Astra
 reviewed final driver `312a60fbb243c272ffa278e19cb41dbe8ac1a127` and confirmed the
 rate-phase delta preserves the known-session and rejected-status guards; no
 actionable finding remained.
+
+
+## #308 — shared local preparation for the Claude READ checkpoint
+
+The owner selected the delivery-blocking subset of the otherwise deferred
+packaging work after the C739 session stopped at `parents`, before
+qualification, publication, activation or another READ. Source inspection
+confirmed a copied prior-session R; the native command emitted only its drift
+marker before refusal. The exact rejected predicate was not measured. This
+entry does not claim a fifth live attempt or a historical raw-frame diagnosis.
+
+The existing operator entry adds three explicit local actions. Initial
+preparation accepts installation facts without historical session fields and
+derives disjoint role-named roots and request identities from one namespace.
+Omitted boot remains `UNREVIEWED`. Late preparation derives qualification from
+`checker.stdout` and its retained JSON, generation from inventory, and later
+hashes from the canonical seal/candidate/owner artifact, reusing existing
+phase and evidence checks. Cleanup preparation uses the existing compiler at
+`evidence/cleanup-package`; it cannot choose another output directory.
+
+The owner artifact must already exist at its canonical location and its digest
+must be independently supplied. No command grants authority, creates an owner
+decision, executes a successor, transports commands, retries, or starts a VM.
+Existing accepting and abort-after-activation Linux rehearsals now use the
+production preparation entry rather than performing their own field extraction.
+Tests remain fake-based and introduce no vendor binary invocation.
+
+This is local operator tooling. Installed controller C739 and its source pins
+remain independent from the new operator Git/content revision and metadata
+source digest. New packages bind both honestly; no whole-tree equality or old
+receipt relabeling follows. No frozen plan, runtime contract, lane workflow,
+credential, host state or acceptance requirement changes. The remaining #308
+READ/OBSERVE/recovery consumers and the live #40 checkpoint stay open.
+
+Focused local execution passed 68 tests with two Linux-only rehearsal skips.
+Actual isolated CLI subprocesses exercised accepting fresh preparation and
+inventory derivation, unknown boot, socket-length bounds, occupied outputs,
+missing receipts and mismatched readback context. Three one-off source mutations
+were rejected by test assertions: accepting historical installation fields,
+skipping early path/socket validation, and skipping inventory readback validation.
+The source was restored after each experiment; these were not committed code
+or a new inventory framework. The initial experiment reporter expected the
+literal `AssertionError`, while pytest short output emitted `E assert`; that
+reporter mismatch was corrected and all three measurements rerun.
+
+Changed-script and test Ruff checks passed. Astra independently reviewed the
+preparation authority/evidence boundary and found no introduced blocking defect.
+Its documentation clarification is included: old receipts retain their recorded
+revision but cannot satisfy a new operator revision's gates. Accepting and
+abort-after-activation native generated-chain behavior remains a final-head
+Linux CI obligation, not a Windows proof. No duplicate full local suite ran.

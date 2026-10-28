@@ -16,6 +16,31 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude READ preparation shares the accepting rehearsal path
+
+The operator CLI now prepares fresh session bindings from installation-only
+facts and one namespace, derives late values from canonical checked phase
+receipts, and builds withdrawal at `evidence/cleanup-package`. The Linux
+accepting and abort-after-activation rehearsal uses those same explicit local
+CLI actions. An existing owner-approval artifact and independently selected
+digest remain required; preparation does not create authority or run a phase.
+
+This addresses repeated manual input-assembly failures, not a proven vendor
+failure or live READ success. In the stopped C739 window, copying an old R
+was a verified binding error: R is the fresh session workspace, not a reusable
+store. The parents command refused before qualification or READ; its exact
+rejected operand was not measured. Do not turn that compatible refusal into
+an invented remote-path observation.
+
+Operator and metadata content revisions change with the local tools. The
+installed controller commit stays independently pinned; this local-only slice
+requires new packages and fresh receipts, not controller reinstallation.
+Unknown boot, path absence, custody, qualification and model success remain
+unmeasured until their real gates run. Broader recovery/OBSERVE preparation
+and Claude qualification remain outside this slice.
+
+---
+
 ## Claude READ barrier failures use closed diagnostic categories
 
 The callback barrier distinguishes a queued unaccepted complete record from

@@ -206,14 +206,24 @@ def test_generated_phases_carry_actual_receipts_through_withdrawal(
         if os.environ.get("M8_CLAUDE_REHEARSAL_REQUIRED"):
             pytest.fail("required Claude rehearsal bindings are absent")
         pytest.skip("the pre-provisioned Claude rehearsal foundation is absent")
-    record = json.loads(Path(fixture).read_bytes())
+    fixture_record = json.loads(Path(fixture).read_bytes())
     case = "abort" if abort_after_activation else "accept"
-    record["namespace"] += "-" + case
-    for key in ("R", "RUN", "AUTH", "ACQ"):
-        record["values"][key] += "-" + case
-    record["values"]["QUAL"] = record["values"]["RUN"] + "/qualify.json"
-    for key in ("READ_KEY", "AUTHORIZATION_ID"):
-        record["values"][key] += "-" + case
+    revision = commands.operator_revision()
+    installation = {"schema_version": 1,
+                    "controller_commit": fixture_record["controller_commit"],
+                    "controller_workspace": fixture_record["controller_workspace"],
+                    "launch_workspace": fixture_record["launch_workspace"],
+                    "selected_plan": fixture_record["selected_plan"],
+                    "pins": fixture_record["pins"], "operator_home": "/home/runner",
+                    "actor": fixture_record["values"]["ACTOR"]}
+    installation_path = tmp_path / "installation.json"
+    _json(installation_path, installation)
+    binding_path = tmp_path / "initial-bindings.json"
+    prepared = _cli("prepare-bindings", "--installation", str(installation_path),
+                    "--namespace", case, "--boot", fixture_record["values"]["EXPECTED_BOOT"],
+                    "--out", str(binding_path), "--operator-revision", revision)
+    assert prepared == {"bindings_sha256": commands.sha(binding_path.read_bytes())}
+    record = json.loads(binding_path.read_bytes())
     assert record["values"]["RUN"] == "/var/lib/m8-cr-run-" + case
     bindings = commands.Bindings.from_dict(record)
     assert bindings.values["EXPECTED_BOOT"] == (
@@ -222,8 +232,14 @@ def test_generated_phases_carry_actual_receipts_through_withdrawal(
     evidence, captures = tmp_path / "evidence", tmp_path / "captures"
     evidence.mkdir()
     captures.mkdir()
-    revision = commands.operator_revision()
     original_run = subprocess.run
+    # Synthetic authority is an explicit input to this disposable test only.
+    approval_path = evidence / "owner-approval.json"
+    _json(approval_path, {"schema": 1,
+                          "owner_decision": "https://github.com/sushiHex/constructicon/issues/77#issuecomment-1",
+                          "procedure_sha256": commands.DOC_SHA,
+                          "source_c": record["controller_commit"],
+                          "acceptance": commands.ACCEPTANCE})
     operator_home = Path("/home/runner")
     assert os.getuid() == operator_home.stat().st_uid
 
@@ -322,7 +338,10 @@ def test_generated_phases_carry_actual_receipts_through_withdrawal(
     cleanup = None
     for phase in commands.PHASES:
         if phase == "activate":
-            cleanup = build("withdraw-after", evidence / "cleanup-package")
+            made = cli("prepare-cleanup", "--bindings", str(binding_path),
+                       "--evidence", str(evidence), "--operator-revision", revision)
+            assert made["phase"] == "withdraw-after"
+            cleanup = made["package_manifest"], evidence / "cleanup-package"
         if phase == "withdraw-after":
             assert cleanup is not None
             manifest, package = cleanup
@@ -360,26 +379,44 @@ def test_generated_phases_carry_actual_receipts_through_withdrawal(
                     commands.compile_phase(commands.Bindings.from_dict(record), "qualify", evidence)
             finally:
                 digest_path.write_bytes(actual_digest)
-        elif phase == "qualify-check":
-            values["Q"] = (evidence / "checker.stdout").read_text().strip()
-            values["QUAL_RAW_SHA256"] = commands.sha((evidence / "qualification.json").read_bytes())
-        elif phase == "inventory":
-            floor = json.loads((evidence / "inventory.json").read_bytes())["highest_generation"]
-            values["FLOOR"], values["GENERATION"] = str(floor), str(floor + 1)
-        elif phase == "publish":
-            values["SEALED_SHA256"] = commands.sha(
-                (evidence / "published-sealed.json").read_bytes())
-        elif phase == "mint":
-            values["CANDIDATE_SHA256"] = commands.sha(
-                (evidence / "authorization-candidate.json").read_bytes())
-        elif phase == "candidate-pins":
-            approval = {"schema": 1, "owner_decision": "https://github.com/sushiHex/constructicon/issues/77#issuecomment-1",
-                        "procedure_sha256": commands.DOC_SHA,
-                        "source_c": record["controller_commit"],
-                        "acceptance": commands.ACCEPTANCE}
-            _json(evidence / "owner-approval.json", approval)
-            values["OWNER_APPROVAL_SHA256"] = commands.sha(
-                (evidence / "owner-approval.json").read_bytes())
+        elif phase in ("qualify-check", "inventory", "publish", "mint", "candidate-pins"):
+            next_path = tmp_path / (phase + "-prepared-bindings.json")
+            extra = []
+            if phase == "candidate-pins":
+                extra = ["--owner-approval", str(approval_path), "--owner-approval-sha256",
+                         commands.sha(approval_path.read_bytes())]
+            prepare_args = ("prepare-late", "--phase", phase, "--bindings", str(binding_path),
+                            "--evidence", str(evidence), "--out", str(next_path),
+                            "--operator-revision", revision, *extra)
+            if phase in ("qualify-check", "inventory", "candidate-pins"):
+                # Attack the selected phase's actual bytes or the explicit approval pin.
+                damaged_path = (evidence / "checker.stdout" if phase == "qualify-check" else
+                                evidence / "inventory-readback-inventory-context.json")
+                if phase != "candidate-pins":
+                    saved = damaged_path.read_bytes()
+                    if phase == "qualify-check":
+                        damaged_path.write_bytes(b"sha256:" + b"0" * 64 + b"\n")
+                    else:
+                        context = json.loads(saved)
+                        context["part"] = "stderr"
+                        _json(damaged_path, context)
+                    bad_args = prepare_args
+                else:
+                    bad_args = (*prepare_args[:-1], "0" * 64)
+                try:
+                    rejected = original_run([sys.executable, "-I", "-B", str(ENTRY), *bad_args],
+                                            stdin=subprocess.DEVNULL, capture_output=True,
+                                            check=False, timeout=120, cwd=ROOT)
+                    assert rejected.returncode != 0 and rejected.stdout == b""
+                    assert not next_path.exists()
+                finally:
+                    if phase != "candidate-pins":
+                        damaged_path.write_bytes(saved)
+            prepared = cli(*prepare_args)
+            assert prepared == {"bindings_sha256": commands.sha(next_path.read_bytes())}
+            binding_path = next_path
+            record = json.loads(binding_path.read_bytes())
+            values = record["values"]
     if not abort_after_activation:
         assert (evidence / "read-status.json").read_bytes() == b'{"status": "succeeded"}\n'
     assert (evidence / "withdraw-after.command.stdout").read_bytes() == b"withdrawn-checked\n"
