@@ -40,6 +40,11 @@ def ui_invalidate(**changes):
             "uuid": "opaque", "session_id": "", **changes}
 
 
+def lifecycle(peer, status="completed", **changes):
+    return {"type": "command_lifecycle", "command_uuid": peer.users[0]["uuid"],
+            "state": status, "uuid": NATIVE_UUID, "session_id": SESSION, **changes}
+
+
 class Peer:
     def __init__(self, *, plan=ClaudePlan.PRO, callback=True, fragment=8192, defect=None):
         self.plan, self.callback, self.fragment, self.defect = plan, callback, fragment, defect
@@ -266,6 +271,186 @@ async def test_normal_init_sdk_server_source_metadata_preserves_one_read():
         "callback_replies": launcher.peer.callback_replies,
     }
     assert len(calls) == launcher.peer.callback_replies == 1
+
+
+async def test_native_queued_started_lifecycle_preserves_one_exact_read():
+    class LifecyclePeer(Peer):
+        def emit(self, value):
+            if value.get("type") == "system" and value.get("subtype") == "init":
+                for state, identifier in (
+                    ("queued", NATIVE_UUID),
+                    ("started", "00000000-0000-4000-8000-000000000003"),
+                ):
+                    super().emit({
+                        "type": "command_lifecycle", "command_uuid": self.users[0]["uuid"],
+                        "state": state, "uuid": identifier, "session_id": SESSION,
+                    })
+            super().emit(value)
+
+    launcher = Launcher(LifecyclePeer())
+    outcome, calls = await run(launcher)
+    assert launcher.joined and len(launcher.peer.users) == 1
+    assert launcher.peer.handshake == ["initialize", "initialized", "list"]
+    assert isinstance(outcome, ExecutorSuccess), {
+        "outcome": outcome.status,
+        "refusal": outcome.error.detail if isinstance(outcome, ExecutorFailure) else None,
+        "worker_calls": len(calls), "callback_replies": launcher.peer.callback_replies,
+    }
+    assert [path for path, _remaining in calls] == ["README.md"]
+    assert launcher.peer.callback_replies == 1
+
+
+async def test_completed_after_callback_reply_survives_control_quiet_and_tail():
+    class CompletionPeer(Peer):
+        def emit(self, value):
+            if self.callback_replies:
+                super().emit(lifecycle(self))
+                # Repetitions and informational events have no ordering authority.
+                super().emit(lifecycle(self, "queued"))
+            super().emit(value)
+
+        async def close_stdin(self):
+            self.emit(lifecycle(self))
+            await super().close_stdin()
+
+    launcher = Launcher(CompletionPeer())
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorSuccess)
+    assert len(calls) == launcher.peer.callback_replies == 1 and launcher.joined
+
+
+async def test_zero_call_completed_still_needs_a_correlated_result():
+    class CompletionPeer(Peer):
+        def terminal(self):
+            self.emit(lifecycle(self))
+            super().terminal()
+
+    launcher = Launcher(CompletionPeer(callback=False))
+    outcome, calls = await run(launcher)
+    # Framing permits zero callbacks; the provider independently enforces its callback proof.
+    assert isinstance(outcome, ExecutorSuccess) and calls == []
+    assert launcher.peer.callback_replies == 0
+    failed, _ = await run(Launcher(CompletionPeer(callback=False, defect="terminal-session")))
+    assert isinstance(failed, ExecutorFailure)
+
+
+@pytest.mark.parametrize("position", ["before-call", "co-buffered"])
+async def test_completed_cannot_authorize_a_new_or_buffered_callback(position):
+    class CompletionPeer(Peer):
+        def mcp(self, method, **kwargs):
+            if method == "tools/call" and position == "before-call":
+                self.emit(lifecycle(self))
+            super().mcp(method, **kwargs)
+            if method == "tools/call" and position == "co-buffered":
+                self.emit(lifecycle(self))
+
+    launcher = Launcher(CompletionPeer())
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure)
+    assert outcome.error.detail == "Claude READ refused [known_refusal=command-lifecycle]"
+    assert calls == [] and launcher.peer.callback_replies == 0 and launcher.joined
+
+
+@pytest.mark.parametrize("state", ["completed", "cancelled", "discarded", "refused"])
+@pytest.mark.parametrize("simultaneous", [False, True])
+async def test_terminal_lifecycle_during_worker_cancels_and_joins(state, simultaneous):
+    launcher = Launcher()
+    joined = False
+
+    async def worker(path, remaining):
+        nonlocal joined
+        launcher.peer.emit(lifecycle(launcher.peer, state))
+        try:
+            if simultaneous:
+                await asyncio.sleep(0)
+                return "file text"
+            await asyncio.Event().wait()
+        finally:
+            joined = True
+
+    outcome, _ = await asyncio.wait_for(run(launcher, worker=worker), 1)
+    assert isinstance(outcome, ExecutorFailure) and joined and launcher.joined
+    code = (claude_read.ClaudeReadRefusalCode.LIFECYCLE if state == "completed"
+            else claude_read.ClaudeReadRefusalCode.LIFECYCLE_TERMINATED)
+    assert outcome.error.detail == claude_read.refusal_detail(code)
+    assert launcher.peer.callback_replies == 0
+
+
+@pytest.mark.parametrize("state", ["cancelled", "discarded", "refused"])
+async def test_negative_lifecycle_in_body_cannot_authorize_a_callback(state):
+    class TerminatedPeer(Peer):
+        def emit(self, value):
+            if value.get("type") == "system" and value.get("subtype") == "init":
+                super().emit(lifecycle(self, state))
+            super().emit(value)
+
+    launcher = Launcher(TerminatedPeer())
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure)
+    assert outcome.error.detail == "Claude READ refused [known_refusal=command-terminated]"
+    assert calls == [] and launcher.peer.callback_replies == 0 and launcher.joined
+
+
+@pytest.mark.parametrize("changes", [
+    {"command_uuid": NATIVE_UUID}, {"session_id": NATIVE_UUID}, {"uuid": "private-canary"},
+    {"state": "private-canary"}, {"state": []}, {"private-canary": "private-canary"},
+])
+async def test_lifecycle_exact_shape_and_correlation_refuse_without_private_values(changes):
+    class InvalidPeer(Peer):
+        def emit(self, value):
+            if value.get("type") == "system" and value.get("subtype") == "init":
+                super().emit(lifecycle(self, "started", **changes))
+            super().emit(value)
+
+    launcher = Launcher(InvalidPeer())
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure) and calls == []
+    assert outcome.error.detail == "Claude READ refused [known_refusal=command-lifecycle]"
+    assert "private-canary" not in repr(outcome) and launcher.joined
+
+
+def test_lifecycle_before_dispatch_refuses_even_with_exact_correlation():
+    transaction = claude_read.ClaudeReadTransaction(
+        TaskSpec(instruction="read"), selected_plan=ClaudePlan.PRO, model="model", effort="high",
+        worker=None, input_limit=1000, output_limit=1000, deadline=100,
+    )
+    transaction._state = "ready"
+    transaction._startup_session = SESSION
+    record = {"type": "command_lifecycle", "command_uuid": transaction._user_uuid,
+              "state": "queued", "uuid": NATIVE_UUID, "session_id": SESSION}
+    with pytest.raises(claude_read._Refused) as refused:
+        transaction._lifecycle(record)
+    assert refused.value.code is claude_read.ClaudeReadRefusalCode.LIFECYCLE
+    assert transaction._state == "ready" and transaction._calls == 0
+    assert transaction._command_completed is False
+
+
+@pytest.mark.parametrize(("record", "code"), [
+    ({"type": "private-canary", "private-canary": "private-canary"}, "unhandled-record"),
+    ({"type": "system", "subtype": "status"}, "system-status"),
+    ({"type": "system", "subtype": "ui_panes"}, "system-ui-panes"),
+    ({"type": "system", "subtype": "background_tasks_changed"}, "system-background"),
+    ({"type": "system", "subtype": "private-canary"}, "system-other"),
+    ({"type": "system", "subtype": []}, "system-other"),
+])
+async def test_unhandled_record_categories_are_static_and_private(record, code):
+    class UnknownPeer(Peer):
+        def emit(self, value):
+            if value.get("type") == "system" and value.get("subtype") == "init":
+                super().emit(record)
+            super().emit(value)
+
+    outcome, calls = await run(Launcher(UnknownPeer()))
+    assert isinstance(outcome, ExecutorFailure) and calls == []
+    assert outcome.error.detail == f"Claude READ refused [known_refusal={code}]"
+    assert "private-canary" not in repr(outcome)
+
+
+@pytest.mark.parametrize("raw", [b"invalid\n", b"[]\n", b"{}\r\n"])
+def test_parse_faults_have_a_distinct_closed_code(raw):
+    with pytest.raises(claude_read._Refused) as refused:
+        claude_read._parse(raw)
+    assert refused.value.code is claude_read.ClaudeReadRefusalCode.RECORD_PARSE
 
 
 @pytest.mark.parametrize("metadata", [

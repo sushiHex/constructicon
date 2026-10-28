@@ -16,6 +16,32 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Native Claude command-lifecycle frames need framing, not READ authority
+
+Static inspection of the hash-verified pinned native source found ordinary
+stdio `command_lifecycle` events for `queued` and `started` before the turn.
+The prior READ driver rejected this unrecognized record type. That establishes
+a normal-frame compatibility gap, not the type of the historical live frame or
+its cause: the live evidence records only `claude_read_record` and zero worker
+calls. Do not infer which frame was seen.
+
+The lifecycle producer also emits `completed` before the terminal result. The
+framing path now uses a shared completion latch. `queued` and `started`
+are non-authoritative; their presence, order or duplication must not grant work
+or determine acceptance. `cancelled`, `discarded` and `refused` remain negative
+and always fail. A bodyless `completed` event may be accepted as framing, while
+the whole READ still requires its existing callback. Worker quiet checks,
+terminal result/mode validation and final drain remain required. Existing write
+and completed-call accounting are already correct and need no restructuring.
+
+Do not extend this to background command acceptance: source proof and a second
+empty-dispatch observation are absent. The closed diagnostic catalog now
+separates parse refusals from unhandled known system categories without
+publishing native strings. This source evidence does not establish a repaired
+runtime or a successful live READ.
+
+---
+
 ## Pinned Claude tool-call metadata is inert
 
 Pinned native MCP calls include `_meta`; the READ parser previously rejected

@@ -9740,3 +9740,58 @@ Controller preparation was paused before deployment of the known-incompatible
 parser. Future use requires corrected-source installation, fresh qualification
 and separately selected actual READ pins; this code delivery opens no live
 window.
+
+
+### Native Claude command-lifecycle frames and the fixed READ boundary
+
+Static inspection of the hash-verified native 2.1.296 artifact
+(`24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de`)
+found an ordinary stdio `command_lifecycle` record with exactly the keys
+`type`, `command_uuid`, `state`, `uuid` and `session_id` (B@208370850). Its
+closed states are `queued`, `started`, `completed`, `cancelled`, `discarded`
+and `refused`. The Qfe stdio path is at B@233792629; install forwarding at
+B@233591788 and field emission at B@233563633. The ordinary intake enqueues
+the event at B@233184759, emits `started` at B@233156176, and emits completion
+at B@224427601 before the result. These are source facts, not a local native
+execution or proof of a historical live frame.
+
+The prior driver classified an unrecognized frame type as `record`. The live
+attempt's readback contains only that coarse code and zero worker calls, so it
+does not identify the offending frame or prove historical cause. In
+particular, source compatibility does not by itself establish what the live
+process delivered.
+
+The bounded framing implementation shares one completion latch across the existing
+handlers. `queued` and `started` remain non-authoritative and impose no
+required presence, order or uniqueness. Negative lifecycle states always fail.
+A bodyless `completed` event can be consumed by framing, but the whole READ
+still fails unless its existing callback requirement is met. Pre-worker and
+post-terminal quiet checks, actual result and mode validation, and final drain
+remain in force. `_write` and `calls_completed` are already correct; this does
+not call for restructuring them. Background acceptance is excluded because
+there is no source proof or second empty-dispatch snapshot. Diagnostic handling
+keeps its closed catalog, distinguishes parse refusal from unhandled fixed
+system categories, and never forwards native strings. The shared compiled fake
+peer now emits the source-backed queued/started/completed sequence. Its physical
+Linux proof belongs to final-head CI, not local Windows results.
+
+Astra's narrow source and interleaving review found no actionable defect in
+driver blob `a2e22c34db15c29adcd25586c99c62e4acb1287c`, compiled-peer source
+`08ad8d6b3e0de91e1e1d18af32eb755cb607f2c2` and reader mapping
+`ba5edd34bfe211b1d12810a80e767535cdce722a`. An earlier concern that completion
+could be consumed between response write and completed-call accounting was
+refuted against source: `_write` buffers with `_audit`, not `_quiet`, and the
+positive write already precedes the counter increment. That ordering is unchanged.
+Four distinct mutants were assertion-killed: accepting a wrong command identity,
+accepting a negative terminal state, authorizing a callback co-buffered with
+completion, and rejecting normal lifecycle framing. An isolated in-flight
+comparison mutant survived because the independent quiet guard still refused
+the same worker state; it is not claimed as a kill. No native execution,
+installation or successful live READ is established by these offline proofs.
+
+Focused driver, provider and evidence-reader tests passed: 347 passed and one
+Windows symlink-privilege skip. This includes a provider-level refusal proving
+that completed lifecycle framing plus a result cannot replace the READ callback.
+All 45 inventory integrity tests passed. Changed-file Ruff and strict driver
+mypy passed. Full verification and the compiled Linux peer remain final-head
+CI evidence; the local Windows skip is not a physical proof.

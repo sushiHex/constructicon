@@ -47,7 +47,7 @@ from constructicon.substrate.executors.operator_store import BindingCheck
 from constructicon.substrate.git import contained
 from constructicon.substrate.git.authority import _remove_tree
 from tests.gitworld import push_to_main
-from tests.substrate.test_claude_read import NATIVE_UUID, SESSION, Peer
+from tests.substrate.test_claude_read import NATIVE_UUID, SESSION, Peer, lifecycle
 from tests.substrate.test_contained_workspace import context, stale_row
 from tests.substrate.test_contained_workspace import provider as provider
 
@@ -354,6 +354,24 @@ async def test_native_success_cannot_replace_callback_relay_or_protocol_proof(as
     result = await execute(a, acquired)
     assert isinstance(result, ExecutorFailure)
     assert a.state.native_joined and a.state.closed
+    assert record(a)["dispatch"] == "possibly dispatched"
+    await a.executor.close(acquired, "discard")
+    assert a.state.guards == a.state.locks == 0
+
+
+async def test_completed_lifecycle_and_result_cannot_replace_provider_callback_proof(assembled):
+    class CompletedPeer(Peer):
+        def terminal(self):
+            self.emit(lifecycle(self))
+            super().terminal()
+
+    a = assembled
+    a.state.peer = CompletedPeer(callback=False)
+    acquired = await acquire_ready(a)
+    result = await execute(a, acquired)
+    assert isinstance(result, ExecutorFailure)
+    assert a.state.native_joined and a.state.closed
+    assert a.state.peer.callback_replies == 0 and a.state.workers == []
     assert record(a)["dispatch"] == "possibly dispatched"
     await a.executor.close(acquired, "discard")
     assert a.state.guards == a.state.locks == 0
