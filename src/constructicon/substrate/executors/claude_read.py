@@ -478,7 +478,7 @@ class ClaudeReadTransaction:
                 value = _parse(self._records[0])
                 if not (self._background(value) or self._ui(value) or self._lifecycle(value)
                         or self._thinking_tokens(value) or self._heartbeat(value)
-                        or (self._state == "dispatched" and self._rate_limit_event(value))
+                        or self._rate_limit_event(value)
                         or (self._state == "dispatched" and value.get("type") == "assistant"
                             and self._message(value))):
                     break
@@ -523,7 +523,7 @@ class ClaudeReadTransaction:
             response = await self._next()
             value = _parse(response)
             if (self._ui(value) or self._background(value) or self._lifecycle(value)
-                    or self._thinking_tokens(value)):
+                    or self._thinking_tokens(value) or self._rate_limit_event(value)):
                 continue
             if register and value.get("type") == "control_request":
                 await self._mcp(value, handshake=True)
@@ -547,7 +547,7 @@ class ClaudeReadTransaction:
             while True:
                 snapshot = _parse(await self._next())
                 if (self._ui(snapshot) or self._lifecycle(snapshot)
-                        or self._thinking_tokens(snapshot)):
+                        or self._thinking_tokens(snapshot) or self._rate_limit_event(snapshot)):
                     continue
                 if register and snapshot.get("type") == "control_request":
                     await self._mcp(snapshot, handshake=True)
@@ -775,7 +775,7 @@ class ClaudeReadTransaction:
             if self._records:
                 value = _parse(self._records.pop(0))
                 if not (self._ui(value) or self._background(value) or self._lifecycle(value)
-                        or self._thinking_tokens(value)):
+                        or self._thinking_tokens(value) or self._rate_limit_event(value)):
                     raise _Refused(ClaudeReadRefusalCode.TAIL)
             elif self._pending is not None:
                 await self._wait_read()

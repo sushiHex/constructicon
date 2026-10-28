@@ -27,7 +27,8 @@ Source and differential fakes exposed real compatibility gaps: later assistant
 blocks may arrive during an SDK callback, and a valid record may span reads.
 The barrier now finishes observed partial framing before granting work or releasing
 its private result, using the same owned reader. Known assistant and rate-limit
-validation is shared with the body. Exact source-backed heartbeat progress is
+validation is shared with the body. Known-session rate updates also pass through
+control and tail validation; rejection still demotes success. Exact heartbeat progress is
 inert; rejected rate status, terminal/completion, EOF, malformed/forbidden records,
 expired deadlines and bounds still refuse and join work. No arbitrary correlated
 record is accepted, and no speculative read is awaited after the buffer clears.

@@ -626,6 +626,68 @@ async def test_session_rate_events_during_worker_use_existing_validation(status)
         assert outcome.rate_limit.is_using_overage is False
 
 
+@pytest.mark.parametrize(("position", "status"), [
+    ("control", "allowed"), ("snapshot", "allowed_warning"), ("quiet", "allowed"),
+    ("tail", "allowed_warning"), ("tail", "rejected"),
+])
+async def test_session_rate_events_remain_classified_after_result(position, status):
+    class PostResultRatePeer(Peer):
+        inserted = False
+
+        def rate(self):
+            return {"type": "rate_limit_event", "uuid": NATIVE_UUID, "session_id": SESSION,
+                    "rate_limit_info": {"status": status, "isUsingOverage": False}}
+
+        def emit(self, value):
+            if self.post and not self.inserted:
+                match = ((position == "control" and value.get("type") == "control_response")
+                         or (position in ("snapshot", "quiet")
+                             and value.get("subtype") == "background_tasks_changed"))
+                if match:
+                    self.inserted = True
+                    if position == "quiet":
+                        super().emit(value)
+                        super().emit(self.rate())
+                        return
+                    super().emit(self.rate())
+            super().emit(value)
+
+        async def close_stdin(self):
+            if position == "tail":
+                self.inserted = True
+                self.emit(self.rate())
+            await super().close_stdin()
+
+    launcher = Launcher(PostResultRatePeer())
+    outcome, calls = await run(launcher)
+    assert launcher.peer.inserted and launcher.joined
+    assert len(calls) == launcher.peer.callback_replies == 1
+    assert isinstance(outcome, ExecutorFailure if status == "rejected" else ExecutorSuccess)
+    if status == "rejected":
+        assert outcome.error.detail == "Claude READ refused [known_refusal=rate-limit-rejected]"
+        assert outcome.raw_reply is None
+    else:
+        assert outcome.raw_reply == "task output"
+    assert outcome.usage == Usage(input_tokens=1, output_tokens=1)
+    assert outcome.rate_limit is not None and outcome.rate_limit.detail == {"status": status}
+    assert outcome.rate_limit.is_using_overage is False
+
+
+async def test_session_rate_event_without_known_session_still_refuses_startup():
+    class EarlyRatePeer(Peer):
+        def emit(self, value):
+            if value.get("type") == "control_response":
+                super().emit({"type": "rate_limit_event", "uuid": NATIVE_UUID,
+                              "session_id": SESSION, "rate_limit_info": {"status": "allowed"}})
+            super().emit(value)
+
+    launcher = Launcher(EarlyRatePeer())
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure) and calls == [] and launcher.joined
+    assert launcher.peer.users == [] and launcher.peer.callback_replies == 0
+    assert outcome.rate_limit is None
+
+
 class PartialBarrierPeer(Peer):
     """Hold a real pending native read after delivering a known frame prefix."""
 

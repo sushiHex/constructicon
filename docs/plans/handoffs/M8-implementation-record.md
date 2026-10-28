@@ -9911,8 +9911,10 @@ pinned producer's IDs are strings, its parent is the original tool-use ID, and
 elapsed seconds are integers without a schema minimum (B@208333447). Its exact
 READ-tool heartbeat is inert while dispatched; estimates/time do not grant work
 or become billed usage. Session-wide rate changes enqueue independently of tool
-completion (B@233245434, B@233600197). Their existing validator is shared at the
-barrier; allowed/warning retains existing bounded telemetry, rejected still fails.
+completion (B@233245434, B@233600197), remaining subscribed until teardown
+(B@233655590). Their existing validator is shared at the barrier, control responses
+and snapshots, and final drain once the session is known. Allowed/warning retains
+existing bounded telemetry; rejected still fails, including after the result.
 The compiled peer scripts these ordinary records without claiming measured time.
 
 Fable's bounded advisory review identified reader ownership/cancellation concerns.
@@ -9929,11 +9931,22 @@ The source-backed differential cases now pass. Focused checks include permitting
 and refusing worker/reader races, unresolved-result withholding, cancellation,
 EOF/terminal, deadline and bound cases. Five distinct new mutants and four
 refreshed existing targets passed their baselines and were assertion-killed.
-Astra's final review of driver `43361fe4d118e40839f3c21218a8d1b997704caa` and C
+Astra reviewed driver `43361fe4d118e40839f3c21218a8d1b997704caa` and C
 peer `8880333be4302474dbf6160e641c6f21c55fbcda` found no actionable defect. These
 offline proofs establish no live success or permission for another attempt.
 
-Final focused execution passed 327 tests with two Windows native-containment
-skips, plus all 45 inventory integrity tests. Changed-file Ruff and strict driver
+Before the final rate-phase extension, 327 focused tests passed with two Windows
+native-containment skips, plus all 45 inventory integrity tests. Ruff and strict driver
 mypy passed. The compiled fake ran locally; the skipped physical lanes and broad
 verification remain final-head CI evidence, not claims about local Windows proof.
+
+The final rate-phase extension reused the unchanged validator in four existing
+framing paths; no pre-session admission or schema change was added. Six focused
+post-result/unknown-session cases and the full 327-test driver file passed.
+The nine selected mutation proofs remain at the preceding tested revision;
+their replaced target text and killing tests are unchanged. Final-head CI reruns
+the required inventory rather than relabeling local runs as new measurements.
+Final focused execution passed 333 tests with two Windows physical skips. Astra
+reviewed final driver `312a60fbb243c272ffa278e19cb41dbe8ac1a127` and confirmed the
+rate-phase delta preserves the known-session and rejected-status guards; no
+actionable finding remained.
