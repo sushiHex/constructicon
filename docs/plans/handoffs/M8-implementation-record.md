@@ -9795,3 +9795,62 @@ that completed lifecycle framing plus a result cannot replace the READ callback.
 All 45 inventory integrity tests passed. Changed-file Ruff and strict driver
 mypy passed. Full verification and the compiled Linux peer remain final-head
 CI evidence; the local Windows skip is not a physical proof.
+
+### Claude READ thinking progress and deterministic tool permission
+
+Fable's decision review challenged proceeding directly to installation. Astra's
+static trace of the pinned, hash-verified 2.1.296 producer confirmed a second
+normal-wire gap: `ir` derives thinking estimates (B@224411532), the engine emits
+`system/thinking_tokens` (B@224420472), `J` stamps UUID/session (B@224413985),
+the ordinary wrapper forwards it through `Rk` (B@233288419), optionally stamps
+the user UUID (B@233457736), and the verbose stdio writer emits it (B@233585200).
+No partial-message flag gates this progress. Its schema at B@208360150 has exact
+type/subtype, two integer estimate fields, UUID/session and optional user UUID.
+
+READ consumes that exact correlated shape without retaining estimates, reporting
+them as usage, granting authority or spending the eight-event UI allowance. The
+same handler serves body, control, quiet and tail paths. Predispatch progress,
+extra keys, wrong correlation and non-integer estimates refuse. Signed integers
+are accepted because the pinned schema specifies no minimum. Existing stream
+bounds, result/callback/completion checks and observed EOF/partial-frame refusal
+remain intact. A test fixture initially completed before EOF had been observed;
+holding the worker until the actual observation corrected the fixture, rather
+than claiming a new unread-buffer freshness guarantee.
+
+The fixed command now selects `--permission-mode default --allowedTools
+mcp__constructicon_read__read_file`, with the exact tool as one argument. Explicit
+mode precedes automatic defaults in `Zyr` (B@211178951), skips the default rollout
+under `if(!M)` (B@211183700), and supplies CLI permission rules through `t2r`
+(B@223702750). Literal tool-name matching at B@212106873 permits the existing tool
+after deny/ask/safety checks (B@218962300). Safe mode preserves those CLI inputs.
+The existing startup policy rejects an added `allowManagedPermissionRulesOnly`
+setting, which could otherwise discard CLI allows. This is backend cooperation,
+not authority: the admitted catalog, server/path/callback limits and physical
+boundary still decide what work can occur. Login remains separate and unchanged.
+
+Two review overclaims were rejected. The old permission recipe was not a proven
+inevitable denial: rollout-selected automatic mode could classify the request.
+The historical generic record refusal also cannot identify its raw frame by
+elimination. Source proof establishes compatibility gaps independently of that
+unseen cause. The named per-turn notification review found no basis for broadening
+background, partial-stream or arbitrary system-event acceptance. No vendor binary,
+host operation, credential operation or live READ was used for this code delivery.
+
+The exact permission-command test failed by assertion before the recipe change;
+a source-shaped thinking fixture likewise failed on the old parser. Focused
+proofs passed: 265 READ tests, 79 recipe tests and six compiled-fake tests. Two
+native-containment tests were skipped on Windows; final-head Linux CI owns their
+physical evidence. Five distinct new mutants were assertion-killed: open progress
+shape, boolean estimate, wrong user correlation, automatic permission mode and
+wildcard tool permission. The refreshed existing lifecycle body mutant was also
+assertion-killed. No duplicate full local suite or broad source audit was run.
+
+Three other existing UI-consumer mutant targets were refreshed after adding the
+shared handler; each passed its baseline and was assertion-killed. All 45 inventory
+integrity tests passed. Changed-file Ruff and strict mypy for both changed source
+modules passed. Astra independently reviewed driver blob
+`3fe782d9573acab749f8a92ec27b4877e9833d5f`, native recipe
+`93a13ab013cc70f992d8df8076e042b7f00a36a6` and compiled-peer source
+`25c9ad45ac2efdf92cb33d1edffe2955926c7b28` without an actionable finding.
+Only test-line wrapping followed that review. Final-head CI supplies broad and
+physical proof; neither this source correction nor its fake establishes live READ.

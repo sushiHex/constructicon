@@ -385,11 +385,31 @@ class ClaudeReadTransaction:
             self._command_completed = True
         return True
 
+    def _thinking_tokens(self, value: dict[str, object]) -> bool:
+        if value.get("type") != "system" or value.get("subtype") != "thinking_tokens":
+            return False
+        required = {"type", "subtype", "estimated_tokens", "estimated_tokens_delta",
+                    "uuid", "session_id"}
+        # Pinned producer emits turn progress independently of partial messages.
+        # These signed integer estimates are private, never authoritative usage.
+        if (set(value) not in (required, required | {"user_message_uuid"})
+                or self._state not in ("dispatched", "terminal", "checked")
+                or type(value.get("estimated_tokens")) is not int
+                or type(value.get("estimated_tokens_delta")) is not int
+                or not _uuid(value.get("uuid"))
+                or not _uuid(value.get("session_id"))
+                or value.get("session_id") != (self._session or self._startup_session)
+                or ("user_message_uuid" in value
+                    and value["user_message_uuid"] != self._user_uuid)):
+            raise _Refused(ClaudeReadRefusalCode.SYSTEM_OTHER)
+        return True
+
     def _quiet(self) -> None:
         self._audit()
         while self._records:
             value = _parse(self._records[0])
-            if not (self._background(value) or self._ui(value) or self._lifecycle(value)):
+            if not (self._background(value) or self._ui(value) or self._lifecycle(value)
+                    or self._thinking_tokens(value)):
                 break
             self._records.pop(0)
         if self._command_completed and self._state == "dispatched" and self._calls_completed == 0:
@@ -425,7 +445,8 @@ class ClaudeReadTransaction:
         while True:
             response = await self._next()
             value = _parse(response)
-            if self._ui(value) or self._background(value) or self._lifecycle(value):
+            if (self._ui(value) or self._background(value) or self._lifecycle(value)
+                    or self._thinking_tokens(value)):
                 continue
             if register and value.get("type") == "control_request":
                 await self._mcp(value, handshake=True)
@@ -448,7 +469,8 @@ class ClaudeReadTransaction:
         if kind == "initialize" and (register or self._state == "terminal"):
             while True:
                 snapshot = _parse(await self._next())
-                if self._ui(snapshot) or self._lifecycle(snapshot):
+                if (self._ui(snapshot) or self._lifecycle(snapshot)
+                        or self._thinking_tokens(snapshot)):
                     continue
                 if register and snapshot.get("type") == "control_request":
                     await self._mcp(snapshot, handshake=True)
@@ -585,7 +607,7 @@ class ClaudeReadTransaction:
         await self._control("initialize", register=True)
         while self._handshake != 3:
             value = _parse(await self._next())
-            if self._lifecycle(value):
+            if self._lifecycle(value) or self._thinking_tokens(value):
                 continue
             await self._mcp(value, handshake=True)
         self._quiet()
@@ -596,7 +618,7 @@ class ClaudeReadTransaction:
                                  "parent_tool_use_id": None, "client_composed": True}), user=True)
         while True:
             value = _parse(await self._next())
-            if self._ui(value) or self._lifecycle(value):
+            if self._ui(value) or self._lifecycle(value) or self._thinking_tokens(value):
                 continue
             if value.get("type") == "control_request":
                 await self._mcp(value)
@@ -707,7 +729,8 @@ class ClaudeReadTransaction:
         while not self._eof or self._records:
             if self._records:
                 value = _parse(self._records.pop(0))
-                if not (self._ui(value) or self._background(value) or self._lifecycle(value)):
+                if not (self._ui(value) or self._background(value) or self._lifecycle(value)
+                        or self._thinking_tokens(value)):
                     raise _Refused(ClaudeReadRefusalCode.TAIL)
             elif self._pending is not None:
                 pending, self._pending = self._pending, None

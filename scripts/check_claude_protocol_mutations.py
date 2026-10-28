@@ -1422,14 +1422,14 @@ READ_UI_MUTANTS = (
      "self._background(value) or self._ui(value)", "self._background(value)",
      READ_TEST + "test_ui_during_worker_is_inert_without_weakening_pending_record_checks"),
     ("READ consumes UI before a control response", READ + "ClaudeReadTransaction._control",
-     "if self._ui(value) or self._background(value) or self._lifecycle(value):",
-     "if self._background(value) or self._lifecycle(value):",
+     "self._ui(value) or self._background(value)", "self._background(value)",
      READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[ui-0]"),
     ("READ consumes UI before a required control snapshot", READ + "ClaudeReadTransaction._control",
-     "if self._ui(snapshot) or self._lifecycle(snapshot):", "if self._lifecycle(snapshot):",
+     "self._ui(snapshot) or self._lifecycle(snapshot)", "self._lifecycle(snapshot)",
      READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[ui-0]"),
     ("READ consumes UI before dispatched body records", READ + "ClaudeReadTransaction._body",
-     "if self._ui(value) or self._lifecycle(value):", "if self._lifecycle(value):",
+     "if self._ui(value) or self._lifecycle(value) or self._thinking_tokens(value):",
+     "if self._lifecycle(value) or self._thinking_tokens(value):",
      READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[ui-0]"),
     ("READ consumes UI in the terminal tail", READ + "ClaudeReadTransaction._body",
      "self._ui(value) or self._background(value)", "self._background(value)",
@@ -2121,10 +2121,37 @@ COMMAND_LIFECYCLE_MUTANTS = (
      READ_TEST + "test_completed_cannot_authorize_a_new_or_buffered_callback[co-buffered]"),
     ("normal lifecycle records are consumed by the READ body",
      READ + "ClaudeReadTransaction._body",
-     "if self._ui(value) or self._lifecycle(value):", "if self._ui(value):",
+     "if self._ui(value) or self._lifecycle(value) or self._thinking_tokens(value):",
+     "if self._ui(value) or self._thinking_tokens(value):",
      READ_TEST + "test_native_queued_started_lifecycle_preserves_one_exact_read"),
 )
 MUTANTS += COMMAND_LIFECYCLE_MUTANTS
+
+THINKING_PROGRESS_MUTANTS = (
+    ("thinking progress retains its closed envelope", READ + "ClaudeReadTransaction._thinking_tokens",
+     'set(value) not in (required, required | {"user_message_uuid"})', "False",
+     READ_TEST + "test_thinking_progress_exact_shape_and_correlation_refuse[changes7]"),
+    ("thinking progress estimates are integers rather than booleans",
+     READ + "ClaudeReadTransaction._thinking_tokens",
+     'type(value.get("estimated_tokens")) is not int',
+     'not isinstance(value.get("estimated_tokens"), int)',
+     READ_TEST + "test_thinking_progress_exact_shape_and_correlation_refuse[changes0]"),
+    ("thinking progress cannot claim another user turn",
+     READ + "ClaudeReadTransaction._thinking_tokens",
+     'value["user_message_uuid"] != self._user_uuid', "False",
+     READ_TEST + "test_thinking_progress_exact_shape_and_correlation_refuse[changes5]"),
+)
+MUTANTS += THINKING_PROGRESS_MUTANTS
+
+READ_PERMISSION_RECIPE_MUTANTS = (
+    ("READ recipe selects default permission mode", NATIVE + "ClaudeNativeVendor.command",
+     '"--permission-mode", "default"', '"--permission-mode", "auto"',
+     NATIVE_TEST + "test_fixed_command_has_no_prompt_or_expansion_and_seals_model_effort"),
+    ("READ recipe allows only its fixed MCP tool", NATIVE + "ClaudeNativeVendor.command",
+     '"mcp__constructicon_read__read_file"', '"*"',
+     NATIVE_TEST + "test_fixed_command_has_no_prompt_or_expansion_and_seals_model_effort"),
+)
+MUTANTS += READ_PERMISSION_RECIPE_MUTANTS
 
 
 if __name__ == "__main__":
