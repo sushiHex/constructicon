@@ -53,6 +53,15 @@ def thinking_tokens(peer, **changes):
             "user_message_uuid": peer.users[0]["uuid"], **changes}
 
 
+def heartbeat(**changes):
+    # Pinned gsr/yWo/nte: 30s timer, original native parent ID and a fresh
+    # heartbeat ID, projected independently of includePartialMessages.
+    return {"type": "tool_progress", "tool_use_id": "tool-use-id-heartbeat-0",
+            "tool_name": "mcp__constructicon_read__read_file",
+            "parent_tool_use_id": "tool-use-id", "elapsed_time_seconds": 31,
+            "heartbeat": True, "session_id": SESSION, "uuid": NATIVE_UUID, **changes}
+
+
 class Peer:
     def __init__(self, *, plan=ClaudePlan.PRO, callback=True, fragment=8192, defect=None):
         self.plan, self.callback, self.fragment, self.defect = plan, callback, fragment, defect
@@ -353,6 +362,8 @@ async def test_thinking_progress_cannot_hide_worker_obstructions(obstruction):
             launcher.peer.terminal()
         elif obstruction == "partial":
             launcher.peer.output.extend(b'{"type":')
+            launcher.peer.closed = True
+            launcher.peer.ready.set()
         elif obstruction == "eof":
             launcher.peer.closed = True
             launcher.peer.ready.set()
@@ -388,6 +399,428 @@ def test_thinking_progress_requires_dispatch_and_never_mutates_metadata():
     assert record == before and transaction._usage is None
     assert transaction._calls == 0 and transaction._command_completed is False
     assert transaction._ui_records == 0 and transaction._session is None
+
+
+@pytest.mark.parametrize("kind", [
+    "thinking-complete", "thinking-split", "assistant-before", "assistant-delayed",
+])
+async def test_source_backed_records_during_pending_worker_preserve_turn(kind):
+    class PendingWorkerPeer(Peer):
+        def __init__(self):
+            super().__init__()
+            self.worker_release = asyncio.Event()
+            self.armed = False
+            self.frame_delivered = False
+            self.remainder = b''
+            self.initial_assistant = None
+            self.worker_started = False
+            self.worker_joined = False
+            self.worker_returned = False
+
+        def text_row(self):
+            assert self.initial_assistant is not None
+            # Pinned native block_stop assembler B@218457799 produces
+            # one closed block per assistant row; nte B@223470500 projects it.
+            row = {**self.initial_assistant,
+                'uuid': '00000000-0000-4000-8000-000000000003',
+                'timestamp': '2026-10-28T00:00:00.002Z',
+                'message': {**self.initial_assistant['message'],
+                    'content': [{'type': 'text', 'text': 'Reading the requested file.'}]}}
+            # Headless wrapper stamps only the first top-level assistant row.
+            row.pop('user_message_uuid', None)
+            return row
+
+        def emit(self, value):
+            if value.get('type') == 'assistant':
+                value['message'].update(id='msg_fixed_source_fixture', type='message',
+                    model='model', stop_reason=None, stop_sequence=None,
+                    usage={'input_tokens': 1, 'output_tokens': 1})
+                value['timestamp'] = '2026-10-28T00:00:00.001Z'
+                value['request_id'] = 'req_fixed_source_fixture'
+                value['user_message_uuid'] = self.users[0]['uuid']
+                self.initial_assistant = value
+                super().emit(value)
+                if kind == 'assistant-before':
+                    super().emit(self.text_row())
+                return
+            super().emit(value)
+
+        def send_during_worker(self):
+            assert self.worker_started and not self.worker_returned
+            assert not self.output  # No pre-callback terminal or other native frame.
+            # The original tool-use assistant always precedes dispatch. The
+            # second row is a later text block from the SAME API message.
+            frame = self.text_row() if kind == 'assistant-delayed' else thinking_tokens(self)
+            raw = wire(frame)
+            self.armed = True
+            if kind == 'thinking-split':
+                self.remainder = raw[17:]
+                raw = raw[:17]
+            self.output.extend(raw)
+            self.ready.set()
+
+        async def read(self, maximum=8192):
+            if self.armed and self.frame_delivered:
+                if self.remainder:
+                    self.output.extend(self.remainder)
+                    self.remainder = b''
+                    self.ready.set()
+                self.worker_release.set()
+            raw = await super().read(maximum)
+            if self.armed:
+                self.frame_delivered = True
+            return raw
+
+    peer = PendingWorkerPeer()
+    launcher = Launcher(peer)
+    async def worker(path, remaining):
+        assert path == 'README.md'
+        peer.worker_started = True
+        peer.send_during_worker()
+        try:
+            # The worker remains suspended across a native read, as the real
+            # worker does across closure/thread/process/drain/release awaits.
+            await peer.worker_release.wait()
+            peer.worker_returned = True
+            return 'file text'
+        finally:
+            peer.worker_joined = True
+
+    outcome, _ = await asyncio.wait_for(run(launcher, worker=worker), 1)
+    assert peer.worker_started and peer.worker_joined and launcher.joined
+    assert isinstance(outcome, ExecutorSuccess), outcome
+    assert peer.worker_returned and peer.callback_replies == 1
+    assert outcome.usage == Usage(input_tokens=1, output_tokens=1)
+    assert outcome.raw_reply == "task output"
+
+
+@pytest.mark.parametrize("changes", [
+    {"session_id": NATIVE_UUID}, {"user_message_uuid": NATIVE_UUID},
+    {"parent_tool_use_id": "nested"}, {"message": {"role": "user"}},
+    {"error": "private-canary"},
+])
+async def test_assistant_during_worker_reuses_body_message_validation(changes):
+    peer = Peer()
+    launcher = Launcher(peer)
+    joined = False
+
+    async def worker(path, remaining):
+        nonlocal joined
+        peer.emit({"type": "assistant", "session_id": SESSION, "uuid": NATIVE_UUID,
+                   "parent_tool_use_id": None, "message": {"role": "assistant",
+                   "content": [{"type": "text", "text": "Reading."}]}, **changes})
+        try:
+            await asyncio.sleep(0)
+            return "file text"
+        finally:
+            joined = True
+
+    outcome, _ = await asyncio.wait_for(run(launcher, worker=worker), 1)
+    assert isinstance(outcome, ExecutorFailure)
+    assert outcome.error.detail == "Claude READ refused [known_refusal=message]"
+    assert peer.callback_replies == 0 and joined and launcher.joined
+    assert "private-canary" not in outcome.model_dump_json()
+
+
+async def test_native_heartbeat_is_private_inert_during_worker_and_before_result():
+    class HeartbeatPeer(Peer):
+        def terminal(self):
+            self.emit(heartbeat())
+            super().terminal()
+
+    peer = HeartbeatPeer()
+    launcher = Launcher(peer)
+    emitted = heartbeat()
+    original = dict(emitted)
+
+    async def worker(path, remaining):
+        peer.emit(emitted)
+        await asyncio.sleep(0)
+        return "file text"
+
+    outcome, _ = await run(launcher, worker=worker)
+    assert isinstance(outcome, ExecutorSuccess), outcome
+    assert peer.callback_replies == 1 and launcher.joined and emitted == original
+    assert outcome.usage == Usage(input_tokens=1, output_tokens=1)
+    assert launcher.conversation._ui_records == 0
+    assert "tool_progress" not in outcome.model_dump_json()
+    assert b"tool_progress" not in b"".join(peer.writes)
+
+
+@pytest.mark.parametrize("changes", [
+    {"session_id": NATIVE_UUID}, {"tool_name": "other"}, {"parent_tool_use_id": None},
+    {"elapsed_time_seconds": True}, {"elapsed_time_seconds": 1.0}, {"heartbeat": False},
+    {"task_id": "unapproved-extension"},
+])
+async def test_heartbeat_closed_shape_and_correlation_refuse_during_worker(changes):
+    peer = Peer()
+    launcher = Launcher(peer)
+    joined = False
+
+    async def worker(path, remaining):
+        nonlocal joined
+        peer.emit(heartbeat(**changes))
+        try:
+            await asyncio.sleep(0)
+            return "file text"
+        finally:
+            joined = True
+
+    outcome, _ = await asyncio.wait_for(run(launcher, worker=worker), 1)
+    assert isinstance(outcome, ExecutorFailure) and joined and launcher.joined
+    assert peer.callback_replies == 0 and outcome.usage is None
+
+
+@pytest.mark.parametrize("status", ["allowed", "allowed_warning", "rejected", "wrong-session"])
+async def test_session_rate_events_during_worker_use_existing_validation(status):
+    class RatePeer(Peer):
+        def __init__(self):
+            super().__init__()
+            self.injected = self.delivered = False
+            self.finish_worker = asyncio.Event()
+
+        async def read(self, maximum=8192):
+            if self.delivered:
+                self.finish_worker.set()
+            raw = await super().read(maximum)
+            if self.injected:
+                self.delivered = True
+            return raw
+
+    peer = RatePeer()
+    launcher = Launcher(peer)
+    joined = returned = False
+
+    async def worker(path, remaining):
+        nonlocal joined, returned
+        # Pinned qS stdio subscription enqueues session-wide cqo rate frames
+        # independently of whether an MCP callback is waiting for its result.
+        peer.injected = True
+        peer.emit({"type": "rate_limit_event", "uuid": NATIVE_UUID,
+                   "session_id": NATIVE_UUID if status == "wrong-session" else SESSION,
+                   "rate_limit_info": {"status": "allowed" if status == "wrong-session" else status,
+                                       "isUsingOverage": False}})
+        try:
+            await peer.finish_worker.wait()
+            returned = True
+            return "file text"
+        finally:
+            joined = True
+
+    outcome, _ = await asyncio.wait_for(run(launcher, worker=worker), 1)
+    assert joined and launcher.joined
+    if status in ("allowed", "allowed_warning"):
+        assert isinstance(outcome, ExecutorSuccess), outcome
+        assert returned and peer.callback_replies == 1
+        assert outcome.usage == Usage(input_tokens=1, output_tokens=1)
+    else:
+        assert isinstance(outcome, ExecutorFailure) and not returned
+        assert peer.callback_replies == 0 and outcome.usage is None
+        code = "rate-limit" if status == "wrong-session" else "rate-limit-rejected"
+        assert outcome.error.detail == f"Claude READ refused [known_refusal={code}]"
+    if status == "wrong-session":
+        assert outcome.rate_limit is None
+    else:
+        assert outcome.rate_limit is not None
+        assert outcome.rate_limit.detail == {"status": status}
+        assert outcome.rate_limit.is_using_overage is False
+
+
+class PartialBarrierPeer(Peer):
+    """Hold a real pending native read after delivering a known frame prefix."""
+
+    def __init__(self, *, before_worker=False):
+        super().__init__()
+        self.before_worker = before_worker
+        self.prefix_sent = self.prefix_delivered = False
+        self.read_blocked = asyncio.Event()
+        self.release_read = asyncio.Event()
+        self.read_joined = False
+        self.suffix = b""
+
+    def prefix(self):
+        raw = wire(thinking_tokens(self))
+        self.suffix = raw[17:]
+        self.output.extend(raw[:17])
+        self.prefix_sent = True
+        self.ready.set()
+
+    def mcp(self, method, **kwargs):
+        super().mcp(method, **kwargs)
+        if self.before_worker and method == "tools/call":
+            self.prefix()
+
+    async def read(self, maximum=8192):
+        if self.prefix_delivered:
+            self.read_blocked.set()
+            try:
+                await self.release_read.wait()
+            finally:
+                self.read_joined = True
+        raw = await super().read(maximum)
+        if self.prefix_sent:
+            self.prefix_delivered = True
+        return raw
+
+    def finish(self, suffix=None):
+        self.output.extend(self.suffix if suffix is None else suffix)
+        self.ready.set()
+        self.release_read.set()
+
+
+@pytest.mark.parametrize("phase", ["before-worker", "active-worker", "finished-worker"])
+async def test_observed_partial_frame_holds_worker_authority_and_private_result(phase):
+    peer = PartialBarrierPeer(before_worker=phase == "before-worker")
+    launcher = Launcher(peer)
+    started = asyncio.Event()
+    finish_worker = asyncio.Event()
+    returned = asyncio.Event()
+    joined = False
+
+    async def worker(path, remaining):
+        nonlocal joined
+        started.set()
+        if phase != "before-worker":
+            peer.prefix()
+        try:
+            await finish_worker.wait()
+            returned.set()
+            return "file text"
+        finally:
+            joined = True
+
+    running = asyncio.create_task(run(launcher, worker=worker))
+    try:
+        await asyncio.wait_for(peer.read_blocked.wait(), 1)
+        if phase == "finished-worker":
+            finish_worker.set()
+            await asyncio.wait_for(returned.wait(), 1)
+        assert started.is_set() is (phase != "before-worker")
+        assert launcher.peer.callback_replies == 0 and not running.done()
+        assert launcher.conversation._calls_completed == 0
+        peer.finish()
+        finish_worker.set()
+        outcome, _ = await asyncio.wait_for(running, 1)
+        assert isinstance(outcome, ExecutorSuccess), outcome
+        assert started.is_set() and returned.is_set() and joined and peer.read_joined
+        assert launcher.peer.callback_replies == 1 and launcher.joined
+    finally:
+        if not running.done():
+            running.cancel()
+        with suppress(asyncio.CancelledError):
+            await running
+
+
+@pytest.mark.parametrize("phase", ["before-worker", "active-worker", "finished-worker"])
+@pytest.mark.parametrize("fault", [
+    "cancel", "eof", "terminal", "malformed", "completed", "second-call", "user",
+    "deadline", "record-bound", "stream-bound",
+])
+async def test_partial_barrier_refuses_damage_and_joins_reader_and_worker(phase, fault):
+    peer = PartialBarrierPeer(before_worker=phase == "before-worker")
+    launcher = Launcher(peer)
+    finish_worker = asyncio.Event()
+    returned = asyncio.Event()
+    worker_joined = False
+    started = False
+
+    async def worker(path, remaining):
+        nonlocal started, worker_joined
+        started = True
+        if phase != "before-worker":
+            peer.prefix()
+        try:
+            await finish_worker.wait()
+            returned.set()
+            return "file text"
+        finally:
+            worker_joined = True
+
+    running = asyncio.create_task(run(launcher, worker=worker))
+    try:
+        await asyncio.wait_for(peer.read_blocked.wait(), 1)
+        if phase == "finished-worker":
+            finish_worker.set()
+            await asyncio.wait_for(returned.wait(), 1)
+        assert not running.done() and peer.callback_replies == 0
+        if fault == "cancel":
+            running.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await running
+        else:
+            if fault == "eof":
+                peer.closed = True
+                peer.finish(b"")
+            elif fault == "malformed":
+                peer.finish(b"invalid\n")
+            elif fault == "record-bound":
+                peer.finish(b"x" * claude_read.RECORD_BYTES)
+            elif fault == "stream-bound":
+                launcher.conversation._output_limit = launcher.conversation._output_bytes + 1
+                peer.finish()
+            elif fault == "deadline":
+                launcher.conversation._deadline = asyncio.get_running_loop().time()
+                peer.finish()
+            else:
+                # A legal prefix never hides the complete forbidden frame after it.
+                peer.finish()
+                if fault == "terminal":
+                    peer.terminal()
+                elif fault == "completed":
+                    peer.emit(lifecycle(peer))
+                elif fault == "user":
+                    peer.emit({"type": "user", "session_id": SESSION, "uuid": NATIVE_UUID,
+                               "parent_tool_use_id": None, "message": {"role": "user",
+                               "content": [{"type": "tool_result", "tool_use_id": "tool-use-id",
+                                            "content": "unearned result"}]}})
+                else:
+                    peer.mcp("tools/call", identifier=23)
+            outcome, _ = await asyncio.wait_for(running, 1)
+            assert isinstance(outcome, ExecutorFailure)
+        assert started is (phase != "before-worker")
+        assert worker_joined is started and peer.read_joined and launcher.joined
+        assert peer.callback_replies == 0
+    finally:
+        if not running.done():
+            running.cancel()
+        with suppress(asyncio.CancelledError):
+            await running
+
+
+@pytest.mark.parametrize("cleanup_error", [False, True])
+async def test_next_retains_and_joins_native_reader_on_cancellation(cleanup_error):
+    entered = asyncio.Event()
+    released = asyncio.Event()
+    reader = None
+
+    class BlockedPeer(Peer):
+        async def read(self, maximum=8192):
+            nonlocal reader
+            reader = asyncio.current_task()
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                released.set()
+                if cleanup_error:
+                    raise OSError("private read cleanup failure")
+
+    launcher = Launcher(BlockedPeer())
+    running = asyncio.create_task(run(launcher))
+    await asyncio.wait_for(entered.wait(), 1)
+    running.cancel()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        assert released.is_set() and launcher.joined
+        assert launcher.conversation._pending is None
+    finally:
+        # Also join a deliberately orphaned reader when this test kills the
+        # ownership mutant; a failing assertion must not leave work behind.
+        if reader is not None and not reader.done():
+            reader.cancel()
+            with suppress(asyncio.CancelledError, OSError):
+                await reader
 
 
 async def test_native_queued_started_lifecycle_preserves_one_exact_read():
@@ -1317,6 +1750,8 @@ async def test_native_damage_cancels_and_joins_active_worker_before_response(kin
             launcher.peer.terminal()
         else:
             launcher.peer.output.extend(b"{" if kind == "partial" else b"invalid\n")
+            if kind == "partial":
+                launcher.peer.closed = True  # Truncated JSON, not a fragment awaiting its suffix.
             launcher.peer.ready.set()
         try:
             await asyncio.Event().wait()

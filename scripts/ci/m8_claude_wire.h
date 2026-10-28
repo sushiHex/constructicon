@@ -210,7 +210,7 @@ static int claude_wire(int argc, char **argv) {
            "\"mcp_servers\":[{\"name\":\"constructicon_read\",\"status\":\"connected\",\"source\":\"sdk\"}],"
            "\"uuid\":\"" WIRE_UUID "\"}\n", model);
     printf("{\"type\":\"assistant\",\"session_id\":\"" WIRE_SESSION "\",\"uuid\":\"" WIRE_UUID "\","
-           "\"parent_tool_use_id\":null,\"message\":{\"role\":\"assistant\",\"content\":%s}}\n",
+           "\"parent_tool_use_id\":null,\"message\":{\"id\":\"message-id\",\"role\":\"assistant\",\"content\":%s}}\n",
            ready ? "[{\"type\":\"tool_use\",\"id\":\"tool-use-id\","
                    "\"name\":\"mcp__constructicon_read__read_file\",\"input\":{\"path\":\"ready.txt\"}}]"
              : callback ? "[{\"type\":\"tool_use\",\"id\":\"tool-use-id\","
@@ -225,6 +225,17 @@ static int claude_wire(int argc, char **argv) {
                  : "{\"jsonrpc\":\"2.0\",\"id\":19,\"method\":\"tools/call\","
                    "\"params\":{\"name\":\"read_file\",\"arguments\":{\"path\":\"calc.py\"},"
                    "\"_meta\":{\"progressToken\":19,\"claudecode/toolUseId\":\"tool-use-id\"}}}");
+        puts("{\"type\":\"assistant\",\"session_id\":\"" WIRE_SESSION "\","
+             "\"uuid\":\"00000000-0000-4000-8000-000000000003\",\"parent_tool_use_id\":null,"
+             "\"message\":{\"id\":\"message-id\",\"role\":\"assistant\","
+             "\"content\":[{\"type\":\"text\",\"text\":\"Reading the file.\"}]}}");
+        /* Scripted elapsed fixture data; this peer does not wait 30 seconds. */
+        puts("{\"type\":\"tool_progress\",\"tool_use_id\":\"tool-use-id-heartbeat-1\","
+             "\"tool_name\":\"mcp__constructicon_read__read_file\",\"parent_tool_use_id\":\"tool-use-id\","
+             "\"elapsed_time_seconds\":30,\"heartbeat\":true,\"session_id\":\"" WIRE_SESSION "\","
+             "\"uuid\":\"00000000-0000-4000-8000-000000000004\"}");
+        puts("{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed\","
+             "\"isUsingOverage\":false},\"uuid\":\"" WIRE_UUID "\",\"session_id\":\"" WIRE_SESSION "\"}");
         wire_ack("\"request_id\":\"outer-tools/call\"", "\"id\":19");
         WIRE_CHECK(strstr(wire_frame, "\"isError\":false") != NULL);
         wire_token("\"text\":", result, sizeof(result));

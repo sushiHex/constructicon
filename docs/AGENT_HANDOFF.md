@@ -16,6 +16,30 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude READ barriers classify records, not pipe chunks
+
+The generation-6 live READ at `a9c8f9f` entered one callback but completed none;
+checked, nonpartial metadata identified `claude_read_record_spacing`. It did not
+identify a raw frame. Withdrawal and named-target Off/idle checks passed; the
+attempt budget is spent and custody released. This is not live READ success.
+
+Source and differential fakes exposed real compatibility gaps: later assistant
+blocks may arrive during an SDK callback, and a valid record may span reads.
+The barrier now finishes observed partial framing before granting work or releasing
+its private result, using the same owned reader. Known assistant and rate-limit
+validation is shared with the body. Exact source-backed heartbeat progress is
+inert; rejected rate status, terminal/completion, EOF, malformed/forbidden records,
+expired deadlines and bounds still refuse and join work. No arbitrary correlated
+record is accepted, and no speculative read is awaited after the buffer clears.
+
+Reader ownership now survives suspension/cancellation without detaching its task.
+Keep the uninterrupted positive-response-write/completed-count transition. Normal
+fragmentation is not damage; unresolved or invalid framing cannot release output.
+This repairs source-proven gaps, not a proven historical frame or a qualified new
+live revision. Any next attempt requires corrected installation and fresh scope.
+
+---
+
 ## Claude READ progress is framing; its tool permission is explicit
 
 The pinned ordinary stdio route forwards `system/thinking_tokens` independently

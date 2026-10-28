@@ -335,15 +335,19 @@ class ClaudeReadTransaction:
             pending, self._pending = self._pending, None
             self._receive(pending.result())
 
+    async def _wait_read(self) -> None:
+        assert self._pending is not None
+        # Waiting must not detach or cancel the reader. The transaction owns its
+        # cancellation/join even if this await is interrupted before framing.
+        await asyncio.wait((self._pending,), return_when=asyncio.FIRST_COMPLETED)
+        self._audit()
+
     async def _next(self) -> bytes:
         self._audit()
         while not self._records:
             if self._eof or self._pending is None:
                 raise _Refused(ClaudeReadRefusalCode.STREAM_END)
-            pending, self._pending = self._pending, None
-            chunk = await pending
-            self._check()
-            self._receive(chunk)
+            await self._wait_read()
         return self._records.pop(0)
 
     def _background(self, value: dict[str, object]) -> bool:
@@ -404,18 +408,91 @@ class ClaudeReadTransaction:
             raise _Refused(ClaudeReadRefusalCode.SYSTEM_OTHER)
         return True
 
-    def _quiet(self) -> None:
-        self._audit()
-        while self._records:
-            value = _parse(self._records[0])
-            if not (self._background(value) or self._ui(value) or self._lifecycle(value)
-                    or self._thinking_tokens(value)):
-                break
-            self._records.pop(0)
-        if self._command_completed and self._state == "dispatched" and self._calls_completed == 0:
-            raise _Refused(ClaudeReadRefusalCode.LIFECYCLE)
-        if self._records or self._buffer or self._eof:
-            raise _Refused(ClaudeReadRefusalCode.SPACING)
+    def _heartbeat(self, value: dict[str, object]) -> bool:
+        if value.get("type") != "tool_progress":
+            return False
+        # Pinned top-level gsr/yWo/nte heartbeat, not general tool progress.
+        # Native IDs and elapsed estimates are private metadata, never authority.
+        if (set(value) != {"type", "tool_use_id", "tool_name", "parent_tool_use_id",
+                          "elapsed_time_seconds", "heartbeat", "session_id", "uuid"}
+                or self._state != "dispatched" or self._session is None
+                or value.get("session_id") != self._session
+                or not _uuid(value.get("session_id")) or not _uuid(value.get("uuid"))
+                or value.get("tool_name") != "mcp__constructicon_read__read_file"
+                or not _text(value.get("tool_use_id"), RECORD_BYTES)
+                or not _text(value.get("parent_tool_use_id"), RECORD_BYTES)
+                or type(value.get("elapsed_time_seconds")) is not int
+                or value.get("heartbeat") is not True):
+            raise _Refused(ClaudeReadRefusalCode.UNHANDLED)
+        return True
+
+    def _rate_limit_event(self, value: dict[str, object]) -> bool:
+        if value.get("type") != "rate_limit_event":
+            return False
+        info = value.get("rate_limit_info")
+        if (set(value) != {"type", "rate_limit_info", "uuid", "session_id"}
+                or self._session is None or value.get("session_id") != self._session
+                or not _uuid(value.get("uuid")) or type(info) is not dict
+                or info.get("status") not in ("allowed", "allowed_warning", "rejected")):
+            raise _Refused(ClaudeReadRefusalCode.RATE_LIMIT)
+        overage = info.get("isUsingOverage")
+        if "isUsingOverage" in info and type(overage) is not bool:
+            raise _Refused(ClaudeReadRefusalCode.RATE_LIMIT)
+        self._rate_limit = RateLimitInfo(
+            is_using_overage=overage if type(overage) is bool else None,
+            detail={"status": info["status"]},
+        )
+        if info["status"] == "rejected":
+            raise _Refused(ClaudeReadRefusalCode.RATE_LIMIT_REJECTED)
+        return True
+
+    def _message(self, value: dict[str, object]) -> bool:
+        if value.get("type") not in ("assistant", "user"):
+            return False
+        if (self._session is None or value.get("session_id") != self._session
+                or not _uuid(value.get("uuid"))
+                or value.get("parent_tool_use_id") is not None
+                or type(value.get("message")) is not dict):
+            raise _Refused(ClaudeReadRefusalCode.MESSAGE)
+        message = value["message"]
+        assert isinstance(message, dict)
+        if (message.get("role") != value["type"] or "error" in value
+                or "aborted" in value or "agent_id" in value
+                or value.get("user_message_uuid", self._user_uuid) != self._user_uuid
+                or value.get("user_message_uuids", [self._user_uuid]) != [self._user_uuid]):
+            raise _Refused(ClaudeReadRefusalCode.MESSAGE)
+        if value["type"] == "user":
+            content = message.get("content")
+            if (self._calls_completed != 1 or type(content) is not list or not content
+                    or any(type(block) is not dict or block.get("type") != "tool_result"
+                           for block in content)):
+                raise _Refused(ClaudeReadRefusalCode.MESSAGE)
+        return True
+
+    async def _quiet(self) -> None:
+        # Classify received frames before granting work or releasing its result.
+        # A partial record is not a record type: finish only that observed frame.
+        while True:
+            self._audit()
+            while self._records:
+                value = _parse(self._records[0])
+                if not (self._background(value) or self._ui(value) or self._lifecycle(value)
+                        or self._thinking_tokens(value) or self._heartbeat(value)
+                        or (self._state == "dispatched" and self._rate_limit_event(value))
+                        or (self._state == "dispatched" and value.get("type") == "assistant"
+                            and self._message(value))):
+                    break
+                self._records.pop(0)
+            if (self._command_completed and self._state == "dispatched"
+                    and self._calls_completed == 0):
+                raise _Refused(ClaudeReadRefusalCode.LIFECYCLE)
+            if self._records or self._eof:
+                raise _Refused(ClaudeReadRefusalCode.SPACING)
+            if not self._buffer:
+                return
+            if self._pending is None:
+                raise _Refused(ClaudeReadRefusalCode.STREAM_END)
+            await self._wait_read()
 
     async def _write(self, raw: bytes, *, user: bool = False) -> None:
         self._check()
@@ -429,7 +506,7 @@ class ClaudeReadTransaction:
         self._audit()
 
     async def _control(self, kind: str, *, register: bool = False) -> None:
-        self._quiet()
+        await self._quiet()
         identifier = secrets.token_hex(16)
         if kind == "initialize":
             raw = initialize_request(identifier)
@@ -565,7 +642,7 @@ class ClaudeReadTransaction:
             if not validate_read_path(path):
                 raise _Refused(ClaudeReadRefusalCode.MCP_ARGUMENTS)
             assert isinstance(path, str)
-            self._quiet()  # A terminal or partial frame in this chunk defeats worker authority.
+            await self._quiet()  # Classify buffered frames before worker authority.
             self._calls += 1  # ID and admitted start are spent before the worker's first await.
             text = await self._read_worker(path)
             if not _text(text, TEXT_BYTES):
@@ -585,9 +662,9 @@ class ClaudeReadTransaction:
             while not task.done():
                 assert self._pending is not None
                 await asyncio.wait((task, self._pending), return_when=asyncio.FIRST_COMPLETED)
-                self._quiet()  # Read wins even when worker and EOF/terminal finish together.
+                await self._quiet()  # Read wins even when worker and EOF/terminal finish together.
             text = await task
-            self._quiet()
+            await self._quiet()
             return text
         except BaseException as error:
             if not task.done():
@@ -610,7 +687,7 @@ class ClaudeReadTransaction:
             if self._lifecycle(value) or self._thinking_tokens(value):
                 continue
             await self._mcp(value, handshake=True)
-        self._quiet()
+        await self._quiet()
         self._state = "ready"
         self._state = "dispatched"
         await self._write(_wire({"type": "user", "uuid": self._user_uuid,
@@ -618,7 +695,8 @@ class ClaudeReadTransaction:
                                  "parent_tool_use_id": None, "client_composed": True}), user=True)
         while True:
             value = _parse(await self._next())
-            if self._ui(value) or self._lifecycle(value) or self._thinking_tokens(value):
+            if (self._ui(value) or self._lifecycle(value) or self._thinking_tokens(value)
+                    or self._heartbeat(value)):
                 continue
             if value.get("type") == "control_request":
                 await self._mcp(value)
@@ -638,41 +716,8 @@ class ClaudeReadTransaction:
                 if not _registered_sdk_server(value.get("mcp_servers")):
                     raise _Refused(ClaudeReadRefusalCode.INIT_SERVER)
                 self._session = str(value["session_id"])
-            elif value.get("type") in ("assistant", "user"):
-                if (self._session is None or value.get("session_id") != self._session
-                        or not _uuid(value.get("uuid"))
-                        or value.get("parent_tool_use_id") is not None
-                        or type(value.get("message")) is not dict):
-                    raise _Refused(ClaudeReadRefusalCode.MESSAGE)
-                message = value["message"]
-                assert isinstance(message, dict)
-                if (message.get("role") != value["type"] or "error" in value
-                        or "aborted" in value or "agent_id" in value
-                        or value.get("user_message_uuid", self._user_uuid) != self._user_uuid
-                        or value.get("user_message_uuids", [self._user_uuid]) != [self._user_uuid]):
-                    raise _Refused(ClaudeReadRefusalCode.MESSAGE)
-                if value["type"] == "user":
-                    content = message.get("content")
-                    if (self._calls_completed != 1 or type(content) is not list or not content
-                            or any(type(block) is not dict or block.get("type") != "tool_result"
-                                   for block in content)):
-                        raise _Refused(ClaudeReadRefusalCode.MESSAGE)
-            elif value.get("type") == "rate_limit_event":
-                info = value.get("rate_limit_info")
-                if (set(value) != {"type", "rate_limit_info", "uuid", "session_id"}
-                        or self._session is None or value.get("session_id") != self._session
-                        or not _uuid(value.get("uuid")) or type(info) is not dict
-                        or info.get("status") not in ("allowed", "allowed_warning", "rejected")):
-                    raise _Refused(ClaudeReadRefusalCode.RATE_LIMIT)
-                overage = info.get("isUsingOverage")
-                if "isUsingOverage" in info and type(overage) is not bool:
-                    raise _Refused(ClaudeReadRefusalCode.RATE_LIMIT)
-                self._rate_limit = RateLimitInfo(
-                    is_using_overage=overage if type(overage) is bool else None,
-                    detail={"status": info["status"]},
-                )
-                if info["status"] == "rejected":
-                    raise _Refused(ClaudeReadRefusalCode.RATE_LIMIT_REJECTED)
+            elif self._message(value) or self._rate_limit_event(value):
+                pass
             elif value.get("type") == "result":
                 allowed = {"type", "subtype", "is_error", "session_id", "user_message_uuid",
                            "result", "uuid", "duration_ms", "duration_api_ms", "num_turns",
@@ -721,7 +766,7 @@ class ClaudeReadTransaction:
                 raise _Refused(_unhandled(value))
         self._state = "terminal"
         await self._observations()
-        self._quiet()
+        await self._quiet()
         self._state = "checked"
         assert self._io is not None
         await self._io.close_stdin()
@@ -733,10 +778,7 @@ class ClaudeReadTransaction:
                         or self._thinking_tokens(value)):
                     raise _Refused(ClaudeReadRefusalCode.TAIL)
             elif self._pending is not None:
-                pending, self._pending = self._pending, None
-                chunk = await pending
-                self._check()
-                self._receive(chunk)
+                await self._wait_read()
             else:
                 raise _Refused(ClaudeReadRefusalCode.TAIL)
         if self._buffer:
