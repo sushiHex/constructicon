@@ -45,6 +45,14 @@ def lifecycle(peer, status="completed", **changes):
             "state": status, "uuid": NATIVE_UUID, "session_id": SESSION, **changes}
 
 
+def thinking_tokens(peer, **changes):
+    # Pinned 2.1.296 bF schema + ir/J producer + headless Rk/turn UUID stamp:
+    # both estimates are integers, with no minimum; the turn stamp is optional.
+    return {"type": "system", "subtype": "thinking_tokens", "estimated_tokens": 37,
+            "estimated_tokens_delta": 5, "uuid": NATIVE_UUID, "session_id": SESSION,
+            "user_message_uuid": peer.users[0]["uuid"], **changes}
+
+
 class Peer:
     def __init__(self, *, plan=ClaudePlan.PRO, callback=True, fragment=8192, defect=None):
         self.plan, self.callback, self.fragment, self.defect = plan, callback, fragment, defect
@@ -271,6 +279,115 @@ async def test_normal_init_sdk_server_source_metadata_preserves_one_read():
         "callback_replies": launcher.peer.callback_replies,
     }
     assert len(calls) == launcher.peer.callback_replies == 1
+
+
+async def test_thinking_progress_is_private_inert_across_body_worker_control_and_tail():
+    class ThinkingPeer(Peer):
+        def emit(self, value):
+            if self.users:
+                progress = thinking_tokens(self)
+                # The source permits an absent correlation stamp as well.
+                if value.get("type") == "assistant":
+                    del progress["user_message_uuid"]
+                super().emit(progress)
+            super().emit(value)
+
+        async def close_stdin(self):
+            self.emit(thinking_tokens(self))
+            await super().close_stdin()
+
+    launcher = Launcher(ThinkingPeer())
+    worker_done = False
+
+    async def worker(path, remaining):
+        nonlocal worker_done
+        for _ in range(claude_read.UI_RECORDS + 1):
+            launcher.peer.emit(thinking_tokens(launcher.peer))
+        await asyncio.sleep(0)
+        worker_done = True
+        return "file text"
+
+    outcome, _ = await run(launcher, worker=worker)
+    assert isinstance(outcome, ExecutorSuccess), outcome
+    assert worker_done and launcher.joined and launcher.peer.closed
+    assert launcher.peer.callback_replies == 1 and len(launcher.peer.users) == 1
+    assert outcome.usage == Usage(input_tokens=1, output_tokens=1)
+    assert outcome.raw_reply == "task output" and outcome.rate_limit is None
+    assert launcher.conversation._ui_records == 0
+    assert "thinking_tokens" not in outcome.model_dump_json()
+    assert b"thinking_tokens" not in b"".join(launcher.peer.writes)
+
+
+@pytest.mark.parametrize("changes", [
+    {"estimated_tokens": True}, {"estimated_tokens_delta": False},
+    {"estimated_tokens": 1.0}, {"estimated_tokens_delta": None},
+    {"session_id": NATIVE_UUID}, {"user_message_uuid": NATIVE_UUID},
+    {"uuid": "private-canary"}, {"private-canary": "private-canary"},
+])
+async def test_thinking_progress_exact_shape_and_correlation_refuse(changes):
+    class InvalidPeer(Peer):
+        def emit(self, value):
+            if value.get("type") == "system" and value.get("subtype") == "init":
+                super().emit(thinking_tokens(self, **changes))
+            super().emit(value)
+
+    launcher = Launcher(InvalidPeer())
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure) and calls == []
+    assert outcome.usage is None and launcher.peer.callback_replies == 0 and launcher.joined
+    assert outcome.error.detail == "Claude READ refused [known_refusal=system-other]"
+    assert "private-canary" not in outcome.model_dump_json()
+
+
+@pytest.mark.parametrize("obstruction", ["callback", "result", "partial", "eof", "completed"])
+async def test_thinking_progress_cannot_hide_worker_obstructions(obstruction):
+    launcher = Launcher()
+    worker_joined = False
+
+    async def worker(path, remaining):
+        nonlocal worker_joined
+        launcher.peer.emit(thinking_tokens(launcher.peer))
+        if obstruction == "callback":
+            launcher.peer.mcp("tools/call", identifier=23)
+        elif obstruction == "result":
+            launcher.peer.terminal()
+        elif obstruction == "partial":
+            launcher.peer.output.extend(b'{"type":')
+        elif obstruction == "eof":
+            launcher.peer.closed = True
+            launcher.peer.ready.set()
+        else:
+            launcher.peer.emit(lifecycle(launcher.peer))
+        try:
+            if obstruction == "eof":
+                await asyncio.Event().wait()  # Let the next read affirm EOF after progress.
+            await asyncio.sleep(0)
+            return "file text"
+        finally:
+            worker_joined = True
+
+    outcome, _ = await asyncio.wait_for(run(launcher, worker=worker), 1)
+    assert isinstance(outcome, ExecutorFailure)
+    assert worker_joined and launcher.joined and launcher.peer.callback_replies == 0
+    assert outcome.usage is None
+
+
+def test_thinking_progress_requires_dispatch_and_never_mutates_metadata():
+    transaction = claude_read.ClaudeReadTransaction(
+        TaskSpec(instruction="read"), selected_plan=ClaudePlan.PRO, model="model", effort="high",
+        worker=None, input_limit=1000, output_limit=1000, deadline=100,
+    )
+    transaction._startup_session = SESSION
+    record = {"type": "system", "subtype": "thinking_tokens", "estimated_tokens": -1,
+              "estimated_tokens_delta": -1, "uuid": NATIVE_UUID, "session_id": SESSION}
+    before = dict(record)
+    with pytest.raises(claude_read._Refused):
+        transaction._thinking_tokens(record)
+    transaction._state = "dispatched"
+    assert transaction._thinking_tokens(record)
+    assert record == before and transaction._usage is None
+    assert transaction._calls == 0 and transaction._command_completed is False
+    assert transaction._ui_records == 0 and transaction._session is None
 
 
 async def test_native_queued_started_lifecycle_preserves_one_exact_read():

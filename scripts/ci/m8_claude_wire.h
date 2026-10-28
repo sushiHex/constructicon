@@ -75,6 +75,12 @@ static void wire_ui(void) {
          "\"uuid\":\"plain-id\",\"session_id\":\"\",\"instances\":[]}");
 }
 
+static void wire_thinking(const char *user_uuid, int tokens, int delta) {
+    printf("{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"estimated_tokens\":%d,"
+           "\"estimated_tokens_delta\":%d,\"uuid\":\"" WIRE_UUID "\",\"session_id\":\"" WIRE_SESSION "\",\"user_message_uuid\":%s}\n",
+           tokens, delta, user_uuid);
+}
+
 static void wire_lifecycle(const char *user_uuid, const char *state) {
     printf("{\"type\":\"command_lifecycle\",\"command_uuid\":%s,\"state\":\"%s\","
            "\"uuid\":\"" WIRE_UUID "\",\"session_id\":\"" WIRE_SESSION "\"}\n",
@@ -129,12 +135,12 @@ static void wire_ack(const char *outer, const char *rpc) {
 }
 
 static int claude_wire(int argc, char **argv) {
-    if (argc != 14 || (strcmp(argv[11], "fixture-read") && strcmp(argv[11], "fixture-ready") &&
-                      strcmp(argv[11], "fixture-zero") &&
-                      strcmp(argv[11], "fixture-startup") &&
-                      strcmp(argv[11], "fixture-startup-subscribed") &&
-                      strcmp(argv[11], "fixture-startup-ui") &&
-                      strcmp(argv[11], "fixture-startup-ui-overflow")))
+    if (argc != 18 || (strcmp(argv[15], "fixture-read") && strcmp(argv[15], "fixture-ready") &&
+                      strcmp(argv[15], "fixture-zero") &&
+                      strcmp(argv[15], "fixture-startup") &&
+                      strcmp(argv[15], "fixture-startup-subscribed") &&
+                      strcmp(argv[15], "fixture-startup-ui") &&
+                      strcmp(argv[15], "fixture-startup-ui-overflow")))
         return -1;
 #ifdef _WIN32
     WIRE_CHECK(_setmode(_fileno(stdin), _O_BINARY) != -1);
@@ -142,11 +148,12 @@ static int claude_wire(int argc, char **argv) {
 #endif
     const char *fixed[] = {"--print", "--input-format", "stream-json", "--output-format",
                           "stream-json", "--verbose", "--safe-mode", "--tools", "",
-                          "--model"};
+                          "--permission-mode", "default", "--allowedTools",
+                          "mcp__constructicon_read__read_file", "--model"};
     for (size_t i = 0; i < sizeof(fixed) / sizeof(fixed[0]); i++)
         WIRE_CHECK(!strcmp(argv[i + 1], fixed[i]));
-    WIRE_CHECK(!strcmp(argv[12], "--effort") && !strcmp(argv[13], "low"));
-    const char *model = argv[11];
+    WIRE_CHECK(!strcmp(argv[16], "--effort") && !strcmp(argv[17], "low"));
+    const char *model = argv[15];
     int ui = !strcmp(model, "fixture-startup-ui") ||
              !strcmp(model, "fixture-startup-ui-overflow");
     if (!strcmp(model, "fixture-startup") || !strcmp(model, "fixture-startup-subscribed") || ui) {
@@ -209,6 +216,7 @@ static int claude_wire(int argc, char **argv) {
              : callback ? "[{\"type\":\"tool_use\",\"id\":\"tool-use-id\","
                       "\"name\":\"mcp__constructicon_read__read_file\",\"input\":{\"path\":\"calc.py\"}}]"
                     : "[{\"type\":\"text\",\"text\":\"zero-callback\"}]");
+    wire_thinking(user_uuid, 3, 3);
     if (callback) {
         wire_mcp("outer-tools/call", ready
                  ? "{\"jsonrpc\":\"2.0\",\"id\":19,\"method\":\"tools/call\","
@@ -222,6 +230,7 @@ static int claude_wire(int argc, char **argv) {
         wire_token("\"text\":", result, sizeof(result));
     } else strcpy(result, "\"zero-callback\"");
     WIRE_CHECK(strlen(result) < WIRE_RECORD_BYTES - 2048);
+    wire_thinking(user_uuid, 5, 2);
     wire_lifecycle(user_uuid, "completed");
     printf("{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,"
            "\"session_id\":\"" WIRE_SESSION "\",\"user_message_uuid\":%s,\"result\":%s,"

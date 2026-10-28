@@ -84,6 +84,8 @@ class ClaudeNativeVendor:
     def command(self) -> tuple[str, ...]:
         return (EXECUTABLE, "--print", "--input-format", "stream-json", "--output-format",
                 "stream-json", "--verbose", "--safe-mode", "--tools", "",
+                "--permission-mode", "default", "--allowedTools",
+                "mcp__constructicon_read__read_file",
                 "--model", self.model, "--effort", self.effort)
 
     def check(self) -> None:

@@ -63,7 +63,9 @@ def wire_peer(tmp_path_factory):
 async def test_compiled_fake_peer_completes_the_actual_bounded_read_protocol(wire_peer, model):
     """Portable wire/transaction evidence only; no isolation is claimed here."""
     command = (str(wire_peer), "--print", "--input-format", "stream-json", "--output-format",
-               "stream-json", "--verbose", "--safe-mode", "--tools", "", "--model", model,
+               "stream-json", "--verbose", "--safe-mode", "--tools", "",
+               "--permission-mode", "default",
+               "--allowedTools", "mcp__constructicon_read__read_file", "--model", model,
                "--effort", "low")
     child = await asyncio.create_subprocess_exec(
         *command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
@@ -115,7 +117,9 @@ async def test_compiled_fake_peer_completes_the_actual_bounded_read_protocol(wir
                                   ("initialize", "get_settings", "get_hooks_listing")])
 def test_compiled_fake_peer_closes_after_maintenance_observations(wire_peer, kinds):
     command = (str(wire_peer), "--print", "--input-format", "stream-json", "--output-format",
-               "stream-json", "--verbose", "--safe-mode", "--tools", "", "--model",
+               "stream-json", "--verbose", "--safe-mode", "--tools", "",
+               "--permission-mode", "default",
+               "--allowedTools", "mcp__constructicon_read__read_file", "--model",
                "fixture-ready", "--effort", "low")
     frames = b"".join((json.dumps({"type": "control_request", "request_id": str(index),
                                    "request": {"subtype": kind}}, separators=(",", ":"))
@@ -130,7 +134,9 @@ def test_compiled_fake_peer_closes_after_maintenance_observations(wire_peer, kin
 
 async def test_maintenance_eof_cannot_complete_a_read(wire_peer):
     command = (str(wire_peer), "--print", "--input-format", "stream-json", "--output-format",
-               "stream-json", "--verbose", "--safe-mode", "--tools", "", "--model",
+               "stream-json", "--verbose", "--safe-mode", "--tools", "",
+               "--permission-mode", "default",
+               "--allowedTools", "mcp__constructicon_read__read_file", "--model",
                "fixture-ready", "--effort", "low")
     child = await asyncio.create_subprocess_exec(
         *command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,

@@ -16,6 +16,26 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude READ progress is framing; its tool permission is explicit
+
+The pinned ordinary stdio route forwards `system/thinking_tokens` independently
+of partial-message output. READ now accepts its exact correlated shape as inert
+progress across the existing framing paths. Signed integer estimates stay private:
+they do not become billed usage, grant callbacks or consume the UI-event allowance.
+Stream bounds and worker/result/completion/cleanup checks remain authoritative.
+
+The fixed stream recipe now selects permission mode `default` and allows only
+`mcp__constructicon_read__read_file`. SDK registration alone did not allow it,
+but calling the old recipe an inevitable denial was also wrong: automatic mode
+could classify it. The new explicit choice removes that dependency. Login argv,
+the tool catalog and physical server/path/callback restrictions are unchanged.
+
+These are source-backed pre-install corrections, not an identified historical
+live cause or a successful subscription READ. Changed recipe identities require
+fresh installation and qualification; no old generation or spent attempt is reused.
+
+---
+
 ## Native Claude command-lifecycle frames need framing, not READ authority
 
 Static inspection of the hash-verified pinned native source found ordinary

@@ -48,7 +48,9 @@ def test_fixed_command_has_no_prompt_or_expansion_and_seals_model_effort(tmp_pat
                                        expected_tree=EXPECTED_TREE)
     assert vendor.command == (native.EXECUTABLE, "--print", "--input-format", "stream-json",
                               "--output-format", "stream-json", "--verbose", "--safe-mode",
-                              "--tools", "", "--model", "model", "--effort", "high")
+                              "--tools", "", "--permission-mode", "default", "--allowedTools",
+                              "mcp__constructicon_read__read_file", "--model", "model",
+                              "--effort", "high")
     assert replace(vendor, model="other").revision != vendor.revision
     assert replace(vendor, effort="low").revision != vendor.revision
     other_tree = replace(vendor, expected_tree=digest("fake-vendor", 1, "other"))
