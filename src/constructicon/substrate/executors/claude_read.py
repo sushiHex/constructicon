@@ -31,7 +31,11 @@ from constructicon.core.identity import parse_json_value
 from constructicon.core.process import ProcessIO
 from constructicon.substrate.executors.claude_initialize import _cancelled, _clean
 from constructicon.substrate.executors.claude_native import ClaudeNativeStoreMount
-from constructicon.substrate.executors.claude_native_events import exact_inert_notification
+from constructicon.substrate.executors.claude_native_events import (
+    ClaudeSystemRecordCategory,
+    exact_inert_notification,
+    system_record_category,
+)
 from constructicon.substrate.executors.claude_protocol import (
     RECORD_BYTES,
     ClaudeInitializeObservation,
@@ -67,6 +71,14 @@ class ClaudeReadRefusalCode(StrEnum):
     """Observed guard failures only; codes never describe private wire values."""
 
     RECORD = "record"
+    RECORD_PARSE = "record-parse"
+    UNHANDLED = "unhandled-record"
+    SYSTEM_STATUS = "system-status"
+    SYSTEM_UI_PANES = "system-ui-panes"
+    SYSTEM_BACKGROUND = "system-background"
+    SYSTEM_OTHER = "system-other"
+    LIFECYCLE = "command-lifecycle"
+    LIFECYCLE_TERMINATED = "command-terminated"
     STREAM_BOUND = "stream-bound"
     STREAM_END = "stream-end"
     SPACING = "record-spacing"
@@ -145,10 +157,24 @@ def _parse(raw: bytes) -> dict[str, object]:
     try:
         value = parse_json_value(raw[:-1].decode("utf-8"))
     except (ValueError, UnicodeError, RecursionError):
-        raise _Refused(ClaudeReadRefusalCode.RECORD) from None
+        raise _Refused(ClaudeReadRefusalCode.RECORD_PARSE) from None
     if type(value) is not dict or b"\r" in raw:
-        raise _Refused(ClaudeReadRefusalCode.RECORD)
+        raise _Refused(ClaudeReadRefusalCode.RECORD_PARSE)
     return value
+
+
+def _unhandled(value: dict[str, object]) -> ClaudeReadRefusalCode:
+    if value.get("type") != "system":
+        return ClaudeReadRefusalCode.UNHANDLED
+    return {
+        ClaudeSystemRecordCategory.UI_INVALIDATE: ClaudeReadRefusalCode.UI,
+        ClaudeSystemRecordCategory.COMMANDS_CHANGED: ClaudeReadRefusalCode.UI,
+        ClaudeSystemRecordCategory.STATUS: ClaudeReadRefusalCode.SYSTEM_STATUS,
+        ClaudeSystemRecordCategory.UI_PANES: ClaudeReadRefusalCode.SYSTEM_UI_PANES,
+        ClaudeSystemRecordCategory.BACKGROUND_TASKS_CHANGED:
+            ClaudeReadRefusalCode.SYSTEM_BACKGROUND,
+        ClaudeSystemRecordCategory.OTHER: ClaudeReadRefusalCode.SYSTEM_OTHER,
+    }[system_record_category(value)]
 
 
 def _text(value: object, limit: int) -> bool:
@@ -265,6 +291,7 @@ class ClaudeReadTransaction:
         self._rpc_ids: set[tuple[type[object], str | int]] = set()
         self._calls = 0
         self._calls_completed = 0
+        self._command_completed = False
         self._ui_records = 0
         self._reply: str | None = None
         self._rate_limit: RateLimitInfo | None = None
@@ -336,13 +363,37 @@ class ClaudeReadTransaction:
         self._ui_records += 1
         return True
 
+    def _lifecycle(self, value: dict[str, object]) -> bool:
+        if value.get("type") != "command_lifecycle":
+            return False
+        state = value.get("state")
+        if (set(value) != {"type", "command_uuid", "state", "uuid", "session_id"}
+                or self._state not in ("dispatched", "terminal", "checked")
+                or value.get("command_uuid") != self._user_uuid
+                or not _uuid(value.get("uuid"))
+                or value.get("session_id") != (self._session or self._startup_session)
+                or not _uuid(value.get("session_id"))
+                or type(state) is not str
+                or state not in ("queued", "started", "completed", "cancelled", "discarded",
+                                 "refused")):
+            raise _Refused(ClaudeReadRefusalCode.LIFECYCLE)
+        if state in ("cancelled", "discarded", "refused"):
+            raise _Refused(ClaudeReadRefusalCode.LIFECYCLE_TERMINATED)
+        if state == "completed":
+            if self._calls != self._calls_completed:
+                raise _Refused(ClaudeReadRefusalCode.LIFECYCLE)
+            self._command_completed = True
+        return True
+
     def _quiet(self) -> None:
         self._audit()
         while self._records:
             value = _parse(self._records[0])
-            if not (self._background(value) or self._ui(value)):
+            if not (self._background(value) or self._ui(value) or self._lifecycle(value)):
                 break
             self._records.pop(0)
+        if self._command_completed and self._state == "dispatched" and self._calls_completed == 0:
+            raise _Refused(ClaudeReadRefusalCode.LIFECYCLE)
         if self._records or self._buffer or self._eof:
             raise _Refused(ClaudeReadRefusalCode.SPACING)
 
@@ -374,7 +425,7 @@ class ClaudeReadTransaction:
         while True:
             response = await self._next()
             value = _parse(response)
-            if self._ui(value) or self._background(value):
+            if self._ui(value) or self._background(value) or self._lifecycle(value):
                 continue
             if register and value.get("type") == "control_request":
                 await self._mcp(value, handshake=True)
@@ -397,7 +448,7 @@ class ClaudeReadTransaction:
         if kind == "initialize" and (register or self._state == "terminal"):
             while True:
                 snapshot = _parse(await self._next())
-                if self._ui(snapshot):
+                if self._ui(snapshot) or self._lifecycle(snapshot):
                     continue
                 if register and snapshot.get("type") == "control_request":
                     await self._mcp(snapshot, handshake=True)
@@ -473,6 +524,8 @@ class ClaudeReadTransaction:
                 result = {"tools": [READ_TOOL]}
             self._handshake += 1
         else:
+            if self._command_completed:
+                raise _Refused(ClaudeReadRefusalCode.LIFECYCLE)
             if (self._state != "dispatched" or self._session is None
                     or method != "tools/call" or self._calls >= CALL_LIMIT):
                 raise _Refused(ClaudeReadRefusalCode.MCP_CALL)
@@ -531,7 +584,10 @@ class ClaudeReadTransaction:
         await self._observations()
         await self._control("initialize", register=True)
         while self._handshake != 3:
-            await self._mcp(_parse(await self._next()), handshake=True)
+            value = _parse(await self._next())
+            if self._lifecycle(value):
+                continue
+            await self._mcp(value, handshake=True)
         self._quiet()
         self._state = "ready"
         self._state = "dispatched"
@@ -540,7 +596,7 @@ class ClaudeReadTransaction:
                                  "parent_tool_use_id": None, "client_composed": True}), user=True)
         while True:
             value = _parse(await self._next())
-            if self._ui(value):
+            if self._ui(value) or self._lifecycle(value):
                 continue
             if value.get("type") == "control_request":
                 await self._mcp(value)
@@ -640,7 +696,7 @@ class ClaudeReadTransaction:
                 self._reply = str(value["result"])
                 break
             else:
-                raise _Refused(ClaudeReadRefusalCode.RECORD)
+                raise _Refused(_unhandled(value))
         self._state = "terminal"
         await self._observations()
         self._quiet()
@@ -651,7 +707,7 @@ class ClaudeReadTransaction:
         while not self._eof or self._records:
             if self._records:
                 value = _parse(self._records.pop(0))
-                if not (self._ui(value) or self._background(value)):
+                if not (self._ui(value) or self._background(value) or self._lifecycle(value)):
                     raise _Refused(ClaudeReadRefusalCode.TAIL)
             elif self._pending is not None:
                 pending, self._pending = self._pending, None

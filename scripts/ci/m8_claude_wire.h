@@ -75,6 +75,12 @@ static void wire_ui(void) {
          "\"uuid\":\"plain-id\",\"session_id\":\"\",\"instances\":[]}");
 }
 
+static void wire_lifecycle(const char *user_uuid, const char *state) {
+    printf("{\"type\":\"command_lifecycle\",\"command_uuid\":%s,\"state\":\"%s\","
+           "\"uuid\":\"" WIRE_UUID "\",\"session_id\":\"" WIRE_SESSION "\"}\n",
+           user_uuid, state);
+}
+
 static void wire_observation(const char *kind, const char *model, int background) {
     char identifier[128];
     wire_read();
@@ -190,6 +196,8 @@ static int claude_wire(int argc, char **argv) {
     WIRE_CHECK(strstr(wire_frame, "\"client_composed\":true") != NULL);
     char user_uuid[128], result[WIRE_RECORD_BYTES + 1];
     wire_token("\"uuid\":", user_uuid, sizeof(user_uuid));
+    wire_lifecycle(user_uuid, "queued");
+    wire_lifecycle(user_uuid, "started");
     printf("{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"" WIRE_SESSION "\","
            "\"model\":\"%s\",\"tools\":[\"mcp__constructicon_read__read_file\"],"
            "\"mcp_servers\":[{\"name\":\"constructicon_read\",\"status\":\"connected\",\"source\":\"sdk\"}],"
@@ -214,6 +222,7 @@ static int claude_wire(int argc, char **argv) {
         wire_token("\"text\":", result, sizeof(result));
     } else strcpy(result, "\"zero-callback\"");
     WIRE_CHECK(strlen(result) < WIRE_RECORD_BYTES - 2048);
+    wire_lifecycle(user_uuid, "completed");
     printf("{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,"
            "\"session_id\":\"" WIRE_SESSION "\",\"user_message_uuid\":%s,\"result\":%s,"
            "\"uuid\":\"" WIRE_UUID "\",\"duration_ms\":1,\"duration_api_ms\":1,\"num_turns\":1,"
