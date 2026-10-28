@@ -16,6 +16,25 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude READ barrier failures use closed diagnostic categories
+
+The callback barrier distinguishes a queued unaccepted complete record from
+EOF without changing admission, termination precedence or worker-result release.
+It reuses existing system/stream codes and fixed barrier categories for control
+requests, results, user records and unknown records. A control-request category
+is not proof of a second tool call. The existing closed provider, journal and
+metadata path carries those observations; arbitrary type strings and payloads
+remain private, and historical spacing literals remain readable.
+
+This is diagnostic readiness, not live READ success or identification of the
+historical raw frame. Fable and Astra recommended this small repair before a new
+attempt. Fable's larger telemetry and mandatory finite-cost-ceiling suggestions
+were not adopted. No host action, credential operation or vendor execution is
+part of the slice. The prior window is spent; a later attempt needs its own
+exact-revision scope and fresh host checks.
+
+---
+
 ## Claude READ barriers classify records, not pipe chunks
 
 The generation-6 live READ at `a9c8f9f` entered one callback but completed none;

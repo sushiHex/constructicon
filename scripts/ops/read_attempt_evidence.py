@@ -61,6 +61,12 @@ REASONS = {
     "Claude READ refused [known_refusal=stream-bound]": "claude_read_stream_bound",
     "Claude READ refused [known_refusal=stream-end]": "claude_read_stream_end",
     "Claude READ refused [known_refusal=record-spacing]": "claude_read_record_spacing",
+    "Claude READ refused [known_refusal=barrier-control-request]": (
+        "claude_read_barrier_control_request"
+    ),
+    "Claude READ refused [known_refusal=barrier-result]": "claude_read_barrier_result",
+    "Claude READ refused [known_refusal=barrier-user]": "claude_read_barrier_user",
+    "Claude READ refused [known_refusal=barrier-unknown]": "claude_read_barrier_unknown",
     "Claude READ refused [known_refusal=ui-notification]": "claude_read_ui_notification",
     "Claude READ refused [known_refusal=mcp-envelope]": "claude_read_mcp_envelope",
     "Claude READ refused [known_refusal=mcp-handshake]": "claude_read_mcp_handshake",

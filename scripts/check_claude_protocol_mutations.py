@@ -378,7 +378,7 @@ READ_MUTANTS = (
      '"type": "invalid", "uuid": self._user_uuid',
      READ_TEST + "test_zero_callback_is_a_real_permitting_path"),
     ("READ records surplus before worker authority", READ + "ClaudeReadTransaction._quiet",
-     'if self._records or self._eof:', 'if False:',
+     'if self._records:', 'if False:',
      READ_TEST + "test_uncertain_writes_and_terminal_during_worker_never_publish_or_retry"),
     ("READ input accounting is cumulative", READ + "ClaudeReadTransaction._write",
      'self._input_bytes > self._input_limit', 'False',
@@ -2176,6 +2176,38 @@ READ_INTERLEAVING_MUTANTS = (
      READ_TEST + "test_session_rate_events_during_worker_use_existing_validation[rejected]"),
 )
 MUTANTS += READ_INTERLEAVING_MUTANTS
+
+
+READ_BARRIER_DIAGNOSTIC_TEST = (
+    READ_TEST + "test_barrier_refusal_classifies_received_record_without_private_values"
+)
+READ_BARRIER_DIAGNOSTIC_MUTANTS = (
+    ("barrier system records retain the existing closed category", READ + "_barrier_refusal",
+     "return _unhandled(value)", "return ClaudeReadRefusalCode.BARRIER_UNKNOWN",
+     READ_BARRIER_DIAGNOSTIC_TEST + "[status-during-worker]"),
+    ("barrier control request does not claim a validated method", READ + "_barrier_refusal",
+     "return ClaudeReadRefusalCode.BARRIER_CONTROL_REQUEST",
+     "return ClaudeReadRefusalCode.MCP_CALL",
+     READ_BARRIER_DIAGNOSTIC_TEST + "[control-request-during-worker]"),
+    ("barrier terminal is distinct from a control request", READ + "_barrier_refusal",
+     "return ClaudeReadRefusalCode.BARRIER_RESULT",
+     "return ClaudeReadRefusalCode.BARRIER_CONTROL_REQUEST",
+     READ_BARRIER_DIAGNOSTIC_TEST + "[result-during-worker]"),
+    ("barrier user is distinct from a terminal", READ + "_barrier_refusal",
+     "return ClaudeReadRefusalCode.BARRIER_USER", "return ClaudeReadRefusalCode.BARRIER_RESULT",
+     READ_BARRIER_DIAGNOSTIC_TEST + "[user-during-worker]"),
+    ("unknown barrier types retain a fixed fallback", READ + "_barrier_refusal",
+     "return ClaudeReadRefusalCode.BARRIER_UNKNOWN", "return ClaudeReadRefusalCode.SPACING",
+     READ_BARRIER_DIAGNOSTIC_TEST + "[unknown-during-worker]"),
+    ("queued barrier records retain precedence over EOF", READ + "ClaudeReadTransaction._quiet",
+     "if self._records:", "if self._records and not self._eof:",
+     READ_TEST + "test_barrier_queued_record_precedes_eof_without_new_reads[record-before-eof]"),
+    ("barrier EOF retains the existing stream-end category", READ + "ClaudeReadTransaction._quiet",
+     "if self._eof:\n            raise _Refused(ClaudeReadRefusalCode.STREAM_END)",
+     "if self._eof:\n            raise _Refused(ClaudeReadRefusalCode.SPACING)",
+     READ_TEST + "test_barrier_queued_record_precedes_eof_without_new_reads[eof]"),
+)
+MUTANTS += READ_BARRIER_DIAGNOSTIC_MUTANTS
 
 
 if __name__ == "__main__":
