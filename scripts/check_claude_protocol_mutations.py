@@ -378,7 +378,7 @@ READ_MUTANTS = (
      '"type": "invalid", "uuid": self._user_uuid',
      READ_TEST + "test_zero_callback_is_a_real_permitting_path"),
     ("READ records surplus before worker authority", READ + "ClaudeReadTransaction._quiet",
-     'if self._records or self._buffer or self._eof:', 'if False:',
+     'if self._records or self._eof:', 'if False:',
      READ_TEST + "test_uncertain_writes_and_terminal_during_worker_never_publish_or_retry"),
     ("READ input accounting is cumulative", READ + "ClaudeReadTransaction._write",
      'self._input_bytes > self._input_limit', 'False',
@@ -1428,8 +1428,8 @@ READ_UI_MUTANTS = (
      "self._ui(snapshot) or self._lifecycle(snapshot)", "self._lifecycle(snapshot)",
      READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[ui-0]"),
     ("READ consumes UI before dispatched body records", READ + "ClaudeReadTransaction._body",
-     "if self._ui(value) or self._lifecycle(value) or self._thinking_tokens(value):",
-     "if self._lifecycle(value) or self._thinking_tokens(value):",
+     "self._ui(value) or self._lifecycle(value) or self._thinking_tokens(value)",
+     "self._lifecycle(value) or self._thinking_tokens(value)",
      READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[ui-0]"),
     ("READ consumes UI in the terminal tail", READ + "ClaudeReadTransaction._body",
      "self._ui(value) or self._background(value)", "self._background(value)",
@@ -2116,13 +2116,13 @@ COMMAND_LIFECYCLE_MUTANTS = (
      READ_TEST + "test_negative_lifecycle_in_body_cannot_authorize_a_callback"),
     ("co-buffered completion cannot grant a worker",
      READ + "ClaudeReadTransaction._quiet",
-     'self._command_completed and self._state == "dispatched" and self._calls_completed == 0',
+     'self._command_completed and self._state == "dispatched"\n                and self._calls_completed == 0',
      "False",
      READ_TEST + "test_completed_cannot_authorize_a_new_or_buffered_callback[co-buffered]"),
     ("normal lifecycle records are consumed by the READ body",
      READ + "ClaudeReadTransaction._body",
-     "if self._ui(value) or self._lifecycle(value) or self._thinking_tokens(value):",
-     "if self._ui(value) or self._thinking_tokens(value):",
+     "self._ui(value) or self._lifecycle(value) or self._thinking_tokens(value)",
+     "self._ui(value) or self._thinking_tokens(value)",
      READ_TEST + "test_native_queued_started_lifecycle_preserves_one_exact_read"),
 )
 MUTANTS += COMMAND_LIFECYCLE_MUTANTS
@@ -2152,6 +2152,30 @@ READ_PERMISSION_RECIPE_MUTANTS = (
      NATIVE_TEST + "test_fixed_command_has_no_prompt_or_expansion_and_seals_model_effort"),
 )
 MUTANTS += READ_PERMISSION_RECIPE_MUTANTS
+
+
+READ_INTERLEAVING_MUTANTS = (
+    ("observed fragments withhold worker admission", READ + "ClaudeReadTransaction._quiet",
+     "if not self._buffer:", "if True:",
+     READ_TEST + "test_observed_partial_frame_holds_worker_authority_and_private_result[before-worker]"),
+    ("worker-time assistants use the body validator", READ + "ClaudeReadTransaction._quiet",
+     "and self._message(value)", "and True",
+     READ_TEST + "test_assistant_during_worker_reuses_body_message_validation[changes0]"),
+    ("suspended reads remain owned for cancellation and join",
+     READ + "ClaudeReadTransaction._wait_read",
+     "await asyncio.wait((self._pending,), return_when=asyncio.FIRST_COMPLETED)",
+     "pending, self._pending = self._pending, None\n"
+     "    await asyncio.wait((pending,), return_when=asyncio.FIRST_COMPLETED)",
+     READ_TEST + "test_next_retains_and_joins_native_reader_on_cancellation[False]"),
+    ("heartbeat metadata names only the fixed READ tool", READ + "ClaudeReadTransaction._heartbeat",
+     'value.get("tool_name") != "mcp__constructicon_read__read_file"', "False",
+     READ_TEST + "test_heartbeat_closed_shape_and_correlation_refuse_during_worker[changes1]"),
+    ("a rejected session rate event stops an active READ callback",
+     READ + "ClaudeReadTransaction._rate_limit_event",
+     'if info["status"] == "rejected":', "if False:",
+     READ_TEST + "test_session_rate_events_during_worker_use_existing_validation[rejected]"),
+)
+MUTANTS += READ_INTERLEAVING_MUTANTS
 
 
 if __name__ == "__main__":

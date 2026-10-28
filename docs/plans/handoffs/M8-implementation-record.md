@@ -9854,3 +9854,99 @@ modules passed. Astra independently reviewed driver blob
 `25c9ad45ac2efdf92cb33d1edffe2955926c7b28` without an actionable finding.
 Only test-line wrapping followed that review. Final-head CI supplies broad and
 physical proof; neither this source correction nor its fake establishes live READ.
+
+### Generation 6: callback entry, then spacing refusal
+
+The [authorized corrected-Claude batch](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6466253497)
+installed controller `a9c8f9f7297f72fa961243187ac29b83df77a364` through the existing
+12 phases after affirmative mismatch checks. Same-boot controller/launch/checker,
+RELOAD and qualification checks passed. Actual inventory floor 5/withdrawn true
+selected generation 6; publication, protected seal, activation, fixture, candidate
+and protected authority checks passed. Prebuilt cleanup preceded activation.
+
+The [single released READ](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6466836512)
+completed 1 without timeout, with exact failed RunStatus and empty command stderr.
+The preselected bounded metadata collection/check completed 0. Valid, nonpartial
+attempt/journal facts: callback_started 1, callback_completed 0, initial and terminal
+binding checked true, relay closed true, and NodeFailed reason
+`claude_read_record_spacing`. The raw frame, backend request count and billing
+remain unknown. Callback entry is progress beyond the previous zero-callback
+refusal; successful tool completion and live READ remain unestablished.
+
+[Cleanup and release](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6467024845)
+positively verified generation-6 withdrawal, empty stderr and the exact checked
+marker; park and named-target usage-after passed Off/idle. Custody was released.
+No second READ, login, explicit refresh, API-key creation, WRITE, checkpoint or R6
+occurred. Local preparation mistakes in address format, digest slot, cleanup
+location and source-constant evaluation were corrected before their corresponding
+guest transports; refused local captures were preserved. They were operator
+binding errors, not evidence for vendor patches or additional attempts.
+
+### Claude READ callback waits preserve framed-message meaning
+
+Astra traced the pinned producer: each content_block_stop can yield a separate
+assistant row (B@218457799). Tool work starts asynchronously (B@224127800 and
+B@224132000–224134268) while SDK sendMcpMessage awaits its response (B@232492300),
+so a later text block may be emitted during the worker. Public conversion
+(B@223470500) and wrapper correlation (B@233457250) do not make every later row
+carry a user UUID. A source-shaped row succeeded before the callback but failed
+at the old barrier while the worker was held. A known-valid thinking record
+succeeded whole but failed when split at byte 17. Root independently ran both
+passing controls and both assertion failures. These prove consumer gaps, not
+the particular unseen live-frame cause.
+
+The barrier now resolves only observed partial bytes through the existing sole
+reader before worker admission or release of its private result. It does not
+wait for hypothetical future traffic after the buffer clears. Existing assistant
+validation is reused during dispatched waits; user/result/new MCP records remain
+barred. Known terminal/completion, EOF, malformed framing, failed correlation,
+deadlines and cumulative/record bounds still refuse and cancel/join work. An empty
+observed buffer remains no proof about unread OS buffers. No await was added
+between a successful callback response write and completed-call accounting.
+
+Two conditional ordinary wait records were covered by source, not guessed from
+the failed run. A 30-second top-level tool heartbeat (B@217843905, B@217891610)
+is converted at B@223471511 to an exact eight-field tool_progress record. The
+pinned producer's IDs are strings, its parent is the original tool-use ID, and
+elapsed seconds are integers without a schema minimum (B@208333447). Its exact
+READ-tool heartbeat is inert while dispatched; estimates/time do not grant work
+or become billed usage. Session-wide rate changes enqueue independently of tool
+completion (B@233245434, B@233600197), remaining subscribed until teardown
+(B@233655590). Their existing validator is shared at the barrier, control responses
+and snapshots, and final drain once the session is known. Allowed/warning retains
+existing bounded telemetry; rejected still fails, including after the result.
+The compiled peer scripts these ordinary records without claiming measured time.
+
+Fable's bounded advisory review identified reader ownership/cancellation concerns.
+The shared wait retains the pending read until audit/cleanup, and receive re-arms
+it; the old detached direct await did not preserve that explicit ownership. This
+does not claim every old cancellation leaked a task. Rejected: admitting any
+parseable session-correlated unknown type, adding parallel-tool flags to avoid
+the intentional one-callback budget, and inventing an initial assistant-ID binding.
+Known schema/phase checks remain; metadata itself is never authority. Frozen N6c
+and startup contracts require bounded framing and received-byte accounting, not
+immediate fatal rejection of all fragments. No frozen bytes were changed.
+
+The source-backed differential cases now pass. Focused checks include permitting
+and refusing worker/reader races, unresolved-result withholding, cancellation,
+EOF/terminal, deadline and bound cases. Five distinct new mutants and four
+refreshed existing targets passed their baselines and were assertion-killed.
+Astra reviewed driver `43361fe4d118e40839f3c21218a8d1b997704caa` and C
+peer `8880333be4302474dbf6160e641c6f21c55fbcda` found no actionable defect. These
+offline proofs establish no live success or permission for another attempt.
+
+Before the final rate-phase extension, 327 focused tests passed with two Windows
+native-containment skips, plus all 45 inventory integrity tests. Ruff and strict driver
+mypy passed. The compiled fake ran locally; the skipped physical lanes and broad
+verification remain final-head CI evidence, not claims about local Windows proof.
+
+The final rate-phase extension reused the unchanged validator in four existing
+framing paths; no pre-session admission or schema change was added. Six focused
+post-result/unknown-session cases and the full 327-test driver file passed.
+The nine selected mutation proofs remain at the preceding tested revision;
+their replaced target text and killing tests are unchanged. Final-head CI reruns
+the required inventory rather than relabeling local runs as new measurements.
+Final focused execution passed 333 tests with two Windows physical skips. Astra
+reviewed final driver `312a60fbb243c272ffa278e19cb41dbe8ac1a127` and confirmed the
+rate-phase delta preserves the known-session and rejected-status guards; no
+actionable finding remained.
