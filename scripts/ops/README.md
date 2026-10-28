@@ -54,6 +54,56 @@ transport exit means native completion, not permission to skip the remaining
 receipt, actual-pin or owner checks. Failed native transport returns nonzero
 while retaining its status and bounded captures.
 
+## Local preparation
+
+Use `prepare-bindings` with a trusted installation-only JSON and one fresh
+namespace. `describe` lists its exact fields. Installation inputs carry the
+independently checked controller, launch, checker and drift identities, operator
+home, actor and selected compatible plan. They contain no old session roots,
+qualification, generation or authority. The preparer derives R (the fresh
+operator evidence workspace), RUN, AUTH, ACQ, QUAL, the idempotency key and
+authorization ID. R is never the operator-store directory.
+
+```bash
+python -I -B scripts/ops/claude_read_session.py prepare-bindings   --installation PRIVATE_INSTALLATION_JSON --namespace FRESH_NAMESPACE   --out FRESH_BINDINGS_JSON --operator-revision REVIEWED_OPERATOR_REVISION   < /dev/null
+```
+
+Omitting `--boot` preserves `UNREVIEWED`; it does not qualify a host or certify
+path absence. After measuring the actual boot in the separately approved
+session, repeat preparation with the same installation and namespace plus
+`--boot MEASURED_BOOT_UUID`, writing a different fresh bindings file. Physical
+absence and custody remain the existing host gates. No output is overwritten.
+
+After explicitly checking one completed phase and collecting all its declared
+readbacks, derive only that phase's late bindings:
+
+```bash
+python -I -B scripts/ops/claude_read_session.py prepare-late   --phase COMPLETED_PHASE --bindings PRIVATE_BINDINGS_JSON   --evidence PRIVATE_EVIDENCE_DIR --out FRESH_BINDINGS_JSON   --operator-revision REVIEWED_OPERATOR_REVISION < /dev/null
+```
+
+Supported phases are `qualify-check`, `inventory`, `publish`, `mint` and
+`candidate-pins`. Qualification uses `checker.stdout`, never a phase-success
+marker; generation comes from the checked inventory. Later digests bind the
+canonical retained seal and candidate. The `candidate-pins` action additionally
+requires `--owner-approval PRIVATE_EVIDENCE_DIR/owner-approval.json` and
+`--owner-approval-sha256 INDEPENDENTLY_APPROVED_SHA256`. Supply the existing
+explicit decision artifact; preparation never writes one or treats a freshly
+computed file digest as owner approval. Phase grants remain separate inputs.
+
+Before activation, prepare withdrawal at its canonical location:
+
+```bash
+python -I -B scripts/ops/claude_read_session.py prepare-cleanup   --bindings PRIVATE_BINDINGS_JSON --evidence PRIVATE_EVIDENCE_DIR   --operator-revision REVIEWED_OPERATOR_REVISION < /dev/null
+```
+
+This builds only `PRIVATE_EVIDENCE_DIR/cleanup-package`. Each preparation action
+is local and returns without transport, choosing a successor, granting work or
+changing the installed controller. Local operator and metadata source digests
+change with this tooling; installed controller identity remains independent.
+Retain both accurately instead of claiming a new local tree equals an older
+installed tree. Prior phase receipts retain their original operator revision and cannot satisfy
+a new revision's phase gates. Do not resume across revisions or relabel old receipts.
+
 ## Execution and recovery
 
 The source references the existing repository procedure fences through

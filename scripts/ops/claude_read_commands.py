@@ -380,6 +380,131 @@ class Bindings:
         values["__drift_hex"] = self.pins["drift_stdout"].encode("utf-8").hex()
         return values
 
+    def as_dict(self):
+        return {
+            "schema_version": 1,
+            "controller_commit": self.controller_commit,
+            "namespace": self.namespace,
+            "controller_workspace": self.controller_workspace,
+            "launch_workspace": self.launch_workspace,
+            "selected_plan": self.selected_plan,
+            "values": dict(self.values),
+            "pins": dict(self.pins),
+        }
+
+
+INSTALLATION_FIELDS = (
+    "schema_version", "controller_commit", "controller_workspace", "launch_workspace",
+    "selected_plan", "pins", "operator_home", "actor",
+)
+LATE_PHASES = {
+    "qualify-check": ("Q", "QUAL_RAW_SHA256"),
+    "inventory": ("FLOOR", "GENERATION"),
+    "publish": ("SEALED_SHA256",),
+    "mint": ("CANDIDATE_SHA256",),
+    "candidate-pins": ("OWNER_APPROVAL_SHA256",),
+}
+
+
+def prepare_bindings(installation, namespace, boot=None):
+    """Project trusted installation facts into a new, unresolved local session.
+
+    No historical paths, generation, qualification or owner decision are input.
+    A supplied boot must be an explicitly measured fact; omission remains unknown.
+    Physical absence and custody are still checked by the existing parents phase.
+    """
+    require(type(installation) is dict and set(installation) == set(INSTALLATION_FIELDS))
+    require(type(installation["schema_version"]) is int and installation["schema_version"] == 1)
+    home = installation["operator_home"]
+    require(type(home) is str and re.fullmatch(r"/home/[A-Za-z0-9_-]+", home))
+    require(type(namespace) is str and re.fullmatch(r"[a-z][a-z0-9-]{0,63}", namespace))
+    require(boot is None or type(boot) is str)
+    values = dict.fromkeys((*BASE, *LATE), "UNREVIEWED")
+    values.update(
+        EXPECTED_BOOT="UNREVIEWED" if boot is None else boot,
+        R=home + "/m8-claude-first-read-" + namespace,
+        RUN="/var/lib/m8-cr-run-" + namespace,
+        AUTH="/var/lib/m8-cr-auth-" + namespace,
+        ACQ="/var/lib/m8-cr-acq-" + namespace,
+        QUAL="/var/lib/m8-cr-run-" + namespace + "/qualify.json",
+        ACTOR=installation["actor"],
+        READ_KEY=namespace + "-read",
+        AUTHORIZATION_ID=namespace + "-read",
+    )
+    bindings = Bindings.from_dict({
+        **{key: installation[key] for key in (
+            "schema_version", "controller_commit", "controller_workspace", "launch_workspace",
+            "selected_plan", "pins",
+        )},
+        "namespace": namespace,
+        "values": values,
+    })
+    checked = bindings.expanded()
+    if boot is None:
+        # Check derived path/socket bounds without inventing a retained boot fact.
+        checked["EXPECTED_BOOT"] = "00000000-0000-0000-0000-000000000000"
+    values_checked(checked, "d2-preserve")
+    return bindings
+
+
+def prepare_late(bindings, phase, evidence, owner_approval=None, owner_approval_sha256=None):
+    """Derive one explicit phase's pins from its canonical checked evidence."""
+    require(type(bindings) is Bindings and phase in LATE_PHASES)
+    require(isinstance(evidence, Path))
+    require(
+        phase == "candidate-pins"
+        or (owner_approval is None and owner_approval_sha256 is None)
+    )
+    record = bindings.as_dict()
+    values = record["values"]
+    if phase == "qualify-check":
+        digest = bounded(evidence / "checker.stdout", 72)
+        require(re.fullmatch(rb"sha256:[0-9a-f]{64}\n", digest))
+        derived = {
+            "Q": digest[:-1].decode("ascii"),
+            "QUAL_RAW_SHA256": sha(bounded(evidence / "qualification.json", 4096)),
+        }
+    elif phase == "inventory":
+        inventory = parsed(bounded(evidence / "inventory.json", 256))
+        require(type(inventory) is dict and type(inventory.get("highest_generation")) is int)
+        floor = inventory["highest_generation"]
+        require(1 <= floor < 999999999)
+        derived = {"FLOOR": str(floor), "GENERATION": str(floor + 1)}
+    elif phase in ("publish", "mint"):
+        key, filename = (
+            ("SEALED_SHA256", "published-sealed.json")
+            if phase == "publish" else ("CANDIDATE_SHA256", "authorization-candidate.json")
+        )
+        derived = {key: sha(bounded(evidence / filename, 8192))}
+    else:
+        require(isinstance(owner_approval, Path))
+        require(
+            owner_approval.resolve(strict=True)
+            == (evidence / "owner-approval.json").resolve(strict=True)
+        )
+        require(type(owner_approval_sha256) is str and SHA.fullmatch(owner_approval_sha256))
+        snapshot(evidence, "owner-approval.json", owner_approval_sha256, 8192)
+        derived = {"OWNER_APPROVAL_SHA256": owner_approval_sha256}
+    require(all(values[key] in ("UNREVIEWED", value) for key, value in derived.items()))
+    values.update(derived)
+    prepared = Bindings.from_dict(record)
+    expanded = prepared.expanded()
+    values_checked(expanded, phase)
+    check_phase_receipt(prepared, phase, evidence)
+    if phase == "qualify-check":
+        qualification_gate(evidence, expanded, {})
+    elif phase == "inventory":
+        values_checked(expanded, "withdraw-before")
+        inventory_gate(evidence, expanded)
+    elif phase == "publish":
+        readback_receipt(evidence, expanded, phase, "sealed", "published-sealed.json")
+    elif phase == "mint":
+        readback_receipt(evidence, expanded, phase, "candidate", "authorization-candidate.json")
+    else:
+        values_checked(expanded, "authority-install")
+        authority_gate(evidence, expanded)
+    return prepared
+
 
 def _document(key):
     name, expected = DOCUMENTS[key]

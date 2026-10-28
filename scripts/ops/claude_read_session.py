@@ -269,17 +269,48 @@ def readback(package, manifest, operator_revision, evidence, part, captures, tar
 
 def main():
     parser = argparse.ArgumentParser(allow_abbrev=False)
-    parser.add_argument("action", choices=("describe", "compile", "check", "transport", "readback"))
+    parser.add_argument("action", choices=(
+        "describe", "prepare-bindings", "prepare-late", "prepare-cleanup",
+        "compile", "check", "transport", "readback",
+    ))
     parser.add_argument("--phase", choices=tuple(commands.PHASES))
     parser.add_argument("--operator-revision")
-    for name in ("bindings", "evidence", "out", "package", "grant", "captures"):
+    for name in (
+        "bindings", "evidence", "out", "package", "grant", "captures", "installation",
+        "owner-approval",
+    ):
         parser.add_argument("--" + name, type=Path)
-    for name in ("manifest", "grant-sha256", "target", "alias", "part"):
+    for name in (
+        "manifest", "grant-sha256", "target", "alias", "part", "namespace", "boot",
+        "owner-approval-sha256",
+    ):
         parser.add_argument("--" + name)
     args = parser.parse_args()
     if args.action == "describe":
         result = {
             "operator_revision": commands.operator_revision(),
+            "preparation": {
+                "installation_fields": list(commands.INSTALLATION_FIELDS),
+                "installation_schema_version": 1,
+                "installation_pin_fields": sorted(commands.PIN_KEYS),
+                "operator_home": "/home/OPERATOR",
+                "actor": "trusted transport actor",
+                "boot": "explicit measured UUID; omitted remains UNREVIEWED",
+                "namespace": "1-30 lowercase letters/digits/hyphens, beginning with a letter",
+                "late_phases": {name: list(keys) for name, keys in commands.LATE_PHASES.items()},
+                "evidence_slots": {
+                    "qualify-check": ["checker.stdout", "qualification.json"],
+                    "inventory": ["inventory.json"],
+                    "publish": ["published-sealed.json"],
+                    "mint": ["authorization-candidate.json"],
+                    "candidate-pins": ["candidate-pins.json", "owner-approval.json"],
+                },
+                "owner_approval": (
+                    "existing evidence/owner-approval.json plus independently approved SHA256"
+                ),
+                "cleanup_package": "evidence/cleanup-package",
+                "output": "fresh exclusive bindings file; no grant or owner authority is created",
+            },
             "phases": {
                 name: {
                     "checks": sorted(commands.COMMON_CHECKS | phase.checks),
@@ -288,6 +319,37 @@ def main():
                 for name, phase in commands.PHASES.items()
             },
         }
+    elif args.action in ("prepare-bindings", "prepare-late", "prepare-cleanup"):
+        commands.require(args.operator_revision == commands.operator_revision())
+        if args.action == "prepare-bindings":
+            commands.require(all(value is not None for value in (
+                args.installation, args.namespace, args.out,
+            )))
+            bindings = commands.prepare_bindings(
+                commands.parsed(commands.bounded(args.installation, 16384)),
+                args.namespace, args.boot,
+            )
+        else:
+            commands.require(args.bindings is not None and args.evidence is not None)
+            bindings = commands.Bindings.from_file(args.bindings)
+            if args.action == "prepare-late":
+                commands.require(args.phase is not None and args.out is not None)
+                bindings = commands.prepare_late(
+                    bindings, args.phase, args.evidence, args.owner_approval,
+                    args.owner_approval_sha256,
+                )
+        if args.action == "prepare-cleanup":
+            result = {
+                "phase": "withdraw-after",
+                "package_manifest": commands.build_package(
+                    "withdraw-after", args.bindings, args.evidence,
+                    args.evidence / "cleanup-package", args.operator_revision,
+                ),
+            }
+        else:
+            raw = json_bytes(bindings.as_dict())
+            retain(args.out, raw)
+            result = {"bindings_sha256": commands.sha(raw)}
     elif args.action == "compile":
         commands.require(
             all(
