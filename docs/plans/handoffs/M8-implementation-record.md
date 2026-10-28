@@ -13,6 +13,52 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Claude READ barrier refusals preserve finite observations (Refs #40)
+
+The generation-6 READ's checked metadata reported one callback entry, no
+completed callback and `claude_read_record_spacing`. The raw offending frame
+remains unknown. PR #320 repaired source-backed interleavings and passed its
+credential-free generated rehearsal; neither fact establishes that live cause
+or a successful READ. Its merged controller is `64da5bd`.
+
+Independent Fable and Astra decision reviews recommended improving the remaining
+failure distinction before another live attempt. Inspection confirmed that the
+callback barrier still used one spacing refusal for a queued unaccepted complete
+record and for observed EOF. This slice changes diagnostic classification only.
+It preserves every admission predicate, asynchronous reader/worker ownership,
+result withholding and refusal precedence. Existing system categories and the
+stream-end code are reused. Finite barrier codes identify control-request,
+result, user and unknown record categories without retaining a native type
+string, payload, phase history or new outcome field. A barrier control-request
+code does not claim its method is a second callback. An already queued offending
+record retains precedence over simultaneous EOF; an earlier specific validation
+or lifecycle refusal retains its own code. Historical spacing literals remain
+readable.
+
+The same exact closed detail travels through the existing provider and
+qualification boundary into the journal. The metadata reader explicitly maps
+the finite new codes; it does not accept arbitrary labels or import executor
+code to interpret retained facts. Tests exercise the real graph/journal/metadata
+path with private canaries, alongside transaction classification, EOF precedence,
+callback withholding and existing accepting paths. Selected diagnostic mutants
+must fail by assertion. Final evidence belongs to the delivery PR; no duplicated
+full local gate is required by this consequential evidence-classification scope.
+
+Review dispositions: adopt the reviewers' diagnostic-first recommendation.
+Reject Fable's five-field telemetry proposal because the existing refusal path
+and callback counters suffice. Its suggested mandatory finite monetary ceiling
+would change the owner's accepted cost posture and is not imposed. Its claim
+that all prepared source packages were unreviewed conflated reviewed source and
+offline entry proofs with still-unbound live boot, generation and attempt grants.
+Finite classification may still say unknown; it is an observation, not a claim
+to identify the native producer or measure backend requests or cost.
+
+No VM, credential, vendor binary or live model attempt is part of this slice.
+The old single-attempt window remains spent. Any later live attempt requires a
+new exact controller/scope and owner cost-exposure acceptance, followed by fresh
+host qualification and the existing mandatory withdrawal and park procedure.
+Frozen plans, launch artifacts, admission and egress policy remain unchanged.
+
 ## Claude command-list pushes are exact bounded framing (Refs #175)
 
 The [corrected bounded session](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6412033137)

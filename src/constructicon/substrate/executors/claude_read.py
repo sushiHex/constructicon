@@ -82,6 +82,10 @@ class ClaudeReadRefusalCode(StrEnum):
     STREAM_BOUND = "stream-bound"
     STREAM_END = "stream-end"
     SPACING = "record-spacing"
+    BARRIER_CONTROL_REQUEST = "barrier-control-request"
+    BARRIER_RESULT = "barrier-result"
+    BARRIER_USER = "barrier-user"
+    BARRIER_UNKNOWN = "barrier-unknown"
     UI = "ui-notification"
     MCP_ENVELOPE = "mcp-envelope"
     MCP_HANDSHAKE = "mcp-handshake"
@@ -175,6 +179,20 @@ def _unhandled(value: dict[str, object]) -> ClaudeReadRefusalCode:
             ClaudeReadRefusalCode.SYSTEM_BACKGROUND,
         ClaudeSystemRecordCategory.OTHER: ClaudeReadRefusalCode.SYSTEM_OTHER,
     }[system_record_category(value)]
+
+
+def _barrier_refusal(value: dict[str, object]) -> ClaudeReadRefusalCode:
+    """Label an already-refused frame, without judging its contents or method."""
+    kind = value.get("type")
+    if kind == "system":
+        return _unhandled(value)
+    if kind == "control_request":
+        return ClaudeReadRefusalCode.BARRIER_CONTROL_REQUEST
+    if kind == "result":
+        return ClaudeReadRefusalCode.BARRIER_RESULT
+    if kind == "user":
+        return ClaudeReadRefusalCode.BARRIER_USER
+    return ClaudeReadRefusalCode.BARRIER_UNKNOWN
 
 
 def _text(value: object, limit: int) -> bool:
@@ -486,8 +504,10 @@ class ClaudeReadTransaction:
             if (self._command_completed and self._state == "dispatched"
                     and self._calls_completed == 0):
                 raise _Refused(ClaudeReadRefusalCode.LIFECYCLE)
-            if self._records or self._eof:
-                raise _Refused(ClaudeReadRefusalCode.SPACING)
+            if self._records:
+                raise _Refused(_barrier_refusal(value))
+            if self._eof:
+                raise _Refused(ClaudeReadRefusalCode.STREAM_END)
             if not self._buffer:
                 return
             if self._pending is None:

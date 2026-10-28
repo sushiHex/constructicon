@@ -1352,6 +1352,85 @@ def test_unknown_refusal_detail_cannot_be_forwarded(value):
     assert claude_read.known_refusal_detail(value) is None
 
 
+@pytest.mark.parametrize("phase", ["before-worker", "during-worker"])
+@pytest.mark.parametrize("record,gate", [
+    ({"type": "control_request", "request": {"method": "PRIVATE-CANARY"}},
+     "barrier-control-request"),
+    ({"type": "result", "result": "PRIVATE-CANARY"}, "barrier-result"),
+    ({"type": "user", "message": "PRIVATE-CANARY"}, "barrier-user"),
+    ({"type": "system", "subtype": "status", "status": "PRIVATE-CANARY"}, "system-status"),
+    ({"type": "system", "subtype": "ui_panes", "panes": "PRIVATE-CANARY"}, "system-ui-panes"),
+    ({"type": "system", "subtype": "background_tasks_changed", "tasks": ["PRIVATE-CANARY"]},
+     "system-background"),
+    ({"type": "system", "subtype": "PRIVATE-CANARY"}, "system-other"),
+    ({"type": "PRIVATE-CANARY"}, "barrier-unknown"),
+    ({"type": ["PRIVATE-CANARY"]}, "barrier-unknown"),
+], ids=["control-request", "result", "user", "status", "ui-panes", "background",
+        "system-other", "unknown", "nonscalar-type"])
+async def test_barrier_refusal_classifies_received_record_without_private_values(
+    phase, record, gate,
+):
+    class BarrierPeer(Peer):
+        def emit(self, value):
+            super().emit(value)
+            if (phase == "before-worker" and value.get("type") == "control_request"
+                    and value["request"]["message"].get("method") == "tools/call"):
+                super().emit(record)
+
+    launcher = Launcher(BarrierPeer())
+    worker_started = worker_joined = False
+
+    async def worker(path, remaining):
+        nonlocal worker_started, worker_joined
+        worker_started = True
+        launcher.peer.emit(record)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            worker_joined = True
+
+    outcome, _ = await asyncio.wait_for(run(launcher, worker=worker), 1)
+    assert isinstance(outcome, ExecutorFailure) and outcome.error.kind == "exit"
+    assert outcome.error.detail == f"Claude READ refused [known_refusal={gate}]"
+    assert claude_read.known_refusal_detail(outcome.error.detail) == outcome.error.detail
+    assert worker_started == worker_joined == (phase == "during-worker")
+    assert launcher.joined and len(launcher.peer.users) == 1
+    assert launcher.peer.callback_replies == 0 and outcome.usage is None
+    assert "PRIVATE" not in outcome.model_dump_json()
+    assert "PRIVATE" not in b"".join(launcher.peer.writes).decode()
+    assert launcher.conversation._pending is None
+
+
+@pytest.mark.parametrize("record", [False, True], ids=["eof", "record-before-eof"])
+async def test_barrier_queued_record_precedes_eof_without_new_reads(record):
+    class ClosedPeer(Peer):
+        async def read(self, maximum=8192):
+            data = await super().read(maximum)
+            if not data and record:
+                # A complete queued frame and observed EOF coexist at this audit.
+                launcher.conversation._records.append(wire({"type": "result"}))
+            return data
+
+    launcher = Launcher(ClosedPeer())
+    worker_joined = False
+
+    async def worker(path, remaining):
+        nonlocal worker_joined
+        launcher.peer.closed = True
+        launcher.peer.ready.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            worker_joined = True
+
+    outcome, _ = await asyncio.wait_for(run(launcher, worker=worker), 1)
+    assert isinstance(outcome, ExecutorFailure) and outcome.error.kind == "exit"
+    gate = "barrier-result" if record else "stream-end"
+    assert outcome.error.detail == f"Claude READ refused [known_refusal={gate}]"
+    assert worker_joined and launcher.joined and launcher.conversation._pending is None
+    assert launcher.peer.callback_replies == 0 and outcome.usage is None
+
+
 @pytest.mark.parametrize("malformed", [False, True], ids=["rejected", "malformed"])
 async def test_rate_limit_rejection_is_distinct_from_malformed_metadata(malformed):
     class RatePeer(Peer):

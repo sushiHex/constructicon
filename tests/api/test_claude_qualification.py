@@ -173,7 +173,10 @@ async def test_zero_callback_is_not_a_read_proof(qualified):
     assert record["dispatch"] != "completed"
 
 
-@pytest.mark.parametrize("gate", ["system-init-model", "mcp-arguments"])
+@pytest.mark.parametrize("gate", [
+    "system-init-model", "mcp-arguments", "barrier-control-request",
+    "barrier-result", "barrier-user", "barrier-unknown",
+])
 async def test_closed_refusal_survives_real_graph_journal_and_metadata(
     qualified, tmp_path, monkeypatch, gate,
 ):
@@ -195,10 +198,19 @@ async def test_closed_refusal_survives_real_graph_journal_and_metadata(
             if message.get("method") == "tools/call":
                 message["params"]["arguments"]["path"] = "../PRIVATE-PATH-CANARY"
         original(self, value)
+        if (gate.startswith("barrier-") and value.get("type") == "control_response"
+                and "account" in value["response"].get("response", {})):
+            frame_type = gate.removeprefix("barrier-")
+            if frame_type == "control-request":
+                frame_type = "control_request"
+            if frame_type == "unknown":
+                frame_type = "PRIVATE-UNKNOWN-CANARY"
+            original(self, {"type": frame_type, "payload": "PRIVATE-BARRIER-CANARY"})
 
     monkeypatch.setattr(Peer, "emit", emit)
     assert await entry.qualify(a.executor) is RunStatus.FAILED
-    assert a.state.workers == [] and len(a.state.peer.users) == 1
+    assert a.state.workers == []
+    assert len(a.state.peer.users) == (0 if gate.startswith("barrier-") else 1)
     assert a.state.guards == a.state.locks == 0 and a.state.native_joined
     # Read the actual graph's attempt and SQLite, replacing only UID/mode primitives.
     uid = 123
