@@ -10153,3 +10153,11 @@ No live action occurred for this code delivery. Changed controller/metadata
 identities require reviewed installation, fresh qualification and a newly
 selected one-attempt scope. Full admitted READ is success; otherwise closed
 family/predicate/phase evidence determines the next decision.
+
+The first full CI inventory completed all 587 mutants: 586 were killed and one
+survived. Its system-barrier mutation still targeted a helper branch bypassed
+by the new contextual refusal route. This was reproduced locally, then retargeted
+to the actual unsupported-system guard with the same killing test. Its positive
+baseline passed and the retargeted mutant failed by assertion. Runtime and
+behavior-test blobs did not change. Final-head CI is rerun for the inventory
+correction; the earlier independent boundary review remains applicable.

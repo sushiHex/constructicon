@@ -2183,8 +2183,10 @@ READ_BARRIER_DIAGNOSTIC_TEST = (
     READ_TEST + "test_barrier_refusal_classifies_received_record_without_private_values"
 )
 READ_BARRIER_DIAGNOSTIC_MUTANTS = (
-    ("barrier system records retain the existing closed category", READ + "_barrier_refusal",
-     "return _unhandled(value)", "return ClaudeReadRefusalCode.BARRIER_UNKNOWN",
+    ("barrier system records retain the existing closed category",
+     READ + "ClaudeReadTransaction._unsupported",
+     "self._refused(_unhandled(value), value, predicate=predicate)",
+     "self._refused(ClaudeReadRefusalCode.BARRIER_UNKNOWN, value, predicate=predicate)",
      READ_BARRIER_DIAGNOSTIC_TEST + "[status-during-worker]"),
     ("barrier control request does not claim a validated method", READ + "_barrier_refusal",
      "return ClaudeReadRefusalCode.BARRIER_CONTROL_REQUEST",
