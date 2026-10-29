@@ -32,6 +32,7 @@ def source_snapshot() -> bytes:
         ["git", "-c", f"safe.directory={root.as_posix()}",
          "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
         cwd=root, stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=60,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     digest = hashlib.sha256()
     for name in sorted(set(listed.stdout.split(b"\0")) - {b""}):
@@ -196,6 +197,7 @@ def run(mutants) -> int:
                     [executable, inventory, str(index), "--baseline"],
                     cwd=directory, env=environment, stdin=subprocess.DEVNULL,
                     capture_output=True, text=True, timeout=60,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
                 passed = (
                     evidence_nodeids(baseline.stdout, "MUTATION_BASELINE_PASSED")
@@ -232,6 +234,7 @@ def run(mutants) -> int:
                 capture_output=True,
                 text=True,
                 timeout=60,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except subprocess.TimeoutExpired:
             elapsed = time.monotonic() - started

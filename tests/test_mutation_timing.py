@@ -52,7 +52,9 @@ def test_run_reports_elapsed_time_without_changing_nonproof_exit_status(
         [*command, str(index)] for index in range(4)
     ]
     assert all(
-        kwargs.keys() == {"capture_output", "text", "timeout", "cwd", "env", "stdin"}
+        kwargs.keys() == {
+            "capture_output", "text", "timeout", "cwd", "env", "stdin", "creationflags"
+        }
         and kwargs["stdin"] == subprocess.DEVNULL and kwargs["timeout"] == 60
         for _, kwargs in calls
     )
