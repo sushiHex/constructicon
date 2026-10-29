@@ -31,6 +31,15 @@ SESSION = "00000000-0000-4000-8000-000000000001"
 NATIVE_UUID = "00000000-0000-4000-8000-000000000002"
 
 
+def assert_refusal(outcome, code):
+    context = claude_read.parse_refusal_detail(outcome.error.detail)
+    assert context is not None
+    assert context.code.value == code
+    assert claude_read.known_refusal_detail(outcome.error.detail) == outcome.error.detail
+    assert len(outcome.error.detail.encode("utf-8")) <= 256
+    return context
+
+
 def wire(value):
     return json.dumps(value, separators=(",", ":")).encode() + b"\n"
 
@@ -51,6 +60,15 @@ def thinking_tokens(peer, **changes):
     return {"type": "system", "subtype": "thinking_tokens", "estimated_tokens": 37,
             "estimated_tokens_delta": 5, "uuid": NATIVE_UUID, "session_id": SESSION,
             "user_message_uuid": peer.users[0]["uuid"], **changes}
+
+
+def api_retry(**changes):
+    # Pinned U0 schema (B@208318800), api_error projection (B@224423176),
+    # ordinary Rk forwarder (B@233288149), not schema-only speculation.
+    return {"type": "system", "subtype": "api_retry", "attempt": 1,
+            "max_retries": 2, "retry_delay_ms": 1, "error_status": None,
+            "error": "server_error", "uuid": NATIVE_UUID, "session_id": SESSION,
+            **changes}
 
 
 def heartbeat(**changes):
@@ -344,7 +362,7 @@ async def test_thinking_progress_exact_shape_and_correlation_refuse(changes):
     outcome, calls = await run(launcher)
     assert isinstance(outcome, ExecutorFailure) and calls == []
     assert outcome.usage is None and launcher.peer.callback_replies == 0 and launcher.joined
-    assert outcome.error.detail == "Claude READ refused [known_refusal=system-other]"
+    assert_refusal(outcome, "thinking-tokens")
     assert "private-canary" not in outcome.model_dump_json()
 
 
@@ -517,7 +535,7 @@ async def test_assistant_during_worker_reuses_body_message_validation(changes):
 
     outcome, _ = await asyncio.wait_for(run(launcher, worker=worker), 1)
     assert isinstance(outcome, ExecutorFailure)
-    assert outcome.error.detail == "Claude READ refused [known_refusal=message]"
+    assert_refusal(outcome, "message")
     assert peer.callback_replies == 0 and joined and launcher.joined
     assert "private-canary" not in outcome.model_dump_json()
 
@@ -617,7 +635,7 @@ async def test_session_rate_events_during_worker_use_existing_validation(status)
         assert isinstance(outcome, ExecutorFailure) and not returned
         assert peer.callback_replies == 0 and outcome.usage is None
         code = "rate-limit" if status == "wrong-session" else "rate-limit-rejected"
-        assert outcome.error.detail == f"Claude READ refused [known_refusal={code}]"
+        assert_refusal(outcome, f"{code}")
     if status == "wrong-session":
         assert outcome.rate_limit is None
     else:
@@ -664,7 +682,7 @@ async def test_session_rate_events_remain_classified_after_result(position, stat
     assert len(calls) == launcher.peer.callback_replies == 1
     assert isinstance(outcome, ExecutorFailure if status == "rejected" else ExecutorSuccess)
     if status == "rejected":
-        assert outcome.error.detail == "Claude READ refused [known_refusal=rate-limit-rejected]"
+        assert_refusal(outcome, "rate-limit-rejected")
         assert outcome.raw_reply is None
     else:
         assert outcome.raw_reply == "task output"
@@ -959,7 +977,7 @@ async def test_completed_cannot_authorize_a_new_or_buffered_callback(position):
     launcher = Launcher(CompletionPeer())
     outcome, calls = await run(launcher)
     assert isinstance(outcome, ExecutorFailure)
-    assert outcome.error.detail == "Claude READ refused [known_refusal=command-lifecycle]"
+    assert_refusal(outcome, "command-lifecycle")
     assert calls == [] and launcher.peer.callback_replies == 0 and launcher.joined
 
 
@@ -984,7 +1002,8 @@ async def test_terminal_lifecycle_during_worker_cancels_and_joins(state, simulta
     assert isinstance(outcome, ExecutorFailure) and joined and launcher.joined
     code = (claude_read.ClaudeReadRefusalCode.LIFECYCLE if state == "completed"
             else claude_read.ClaudeReadRefusalCode.LIFECYCLE_TERMINATED)
-    assert outcome.error.detail == claude_read.refusal_detail(code)
+    context = assert_refusal(outcome, code.value)
+    assert context.predicate.value == ("guard" if state == "completed" else "explicit-negative")
     assert launcher.peer.callback_replies == 0
 
 
@@ -999,7 +1018,7 @@ async def test_negative_lifecycle_in_body_cannot_authorize_a_callback(state):
     launcher = Launcher(TerminatedPeer())
     outcome, calls = await run(launcher)
     assert isinstance(outcome, ExecutorFailure)
-    assert outcome.error.detail == "Claude READ refused [known_refusal=command-terminated]"
+    assert_refusal(outcome, "command-terminated")
     assert calls == [] and launcher.peer.callback_replies == 0 and launcher.joined
 
 
@@ -1017,7 +1036,7 @@ async def test_lifecycle_exact_shape_and_correlation_refuse_without_private_valu
     launcher = Launcher(InvalidPeer())
     outcome, calls = await run(launcher)
     assert isinstance(outcome, ExecutorFailure) and calls == []
-    assert outcome.error.detail == "Claude READ refused [known_refusal=command-lifecycle]"
+    assert_refusal(outcome, "command-lifecycle")
     assert "private-canary" not in repr(outcome) and launcher.joined
 
 
@@ -1054,7 +1073,7 @@ async def test_unhandled_record_categories_are_static_and_private(record, code):
 
     outcome, calls = await run(Launcher(UnknownPeer()))
     assert isinstance(outcome, ExecutorFailure) and calls == []
-    assert outcome.error.detail == f"Claude READ refused [known_refusal={code}]"
+    assert_refusal(outcome, f"{code}")
     assert "private-canary" not in repr(outcome)
 
 
@@ -1111,7 +1130,7 @@ async def test_mcp_call_metadata_must_be_an_object_before_worker(metadata):
     launcher = Launcher(MetadataPeer())
     outcome, calls = await run(launcher)
     assert isinstance(outcome, ExecutorFailure)
-    assert outcome.error.detail == "Claude READ refused [known_refusal=mcp-call]"
+    assert_refusal(outcome, "mcp-call")
     assert calls == [] and launcher.peer.callback_replies == 0
     assert launcher.joined and len(launcher.peer.users) == 1
     assert "PRIVATE" not in outcome.model_dump_json()
@@ -1135,7 +1154,7 @@ async def test_mcp_call_open_metadata_does_not_open_other_parameters(damage):
     launcher = Launcher(MetadataPeer())
     outcome, calls = await run(launcher)
     assert isinstance(outcome, ExecutorFailure)
-    assert outcome.error.detail == "Claude READ refused [known_refusal=mcp-call]"
+    assert_refusal(outcome, "mcp-call")
     assert calls == [] and launcher.peer.callback_replies == 0 and launcher.joined
 
 
@@ -1165,7 +1184,7 @@ async def test_normal_init_unknown_server_shape_refuses_before_worker(servers):
     outcome, calls = await run(launcher)
     assert isinstance(outcome, ExecutorFailure)
     assert outcome.error.kind == "exit"
-    assert outcome.error.detail == "Claude READ refused [known_refusal=system-init-server]"
+    assert_refusal(outcome, "system-init-server")
     assert launcher.joined and len(launcher.peer.users) == 1
     assert calls == [] and launcher.peer.callback_replies == 0
 
@@ -1185,7 +1204,7 @@ async def test_sdk_source_cannot_weaken_normal_init_identity_or_catalog(field, v
     outcome, calls = await run(launcher)
     assert isinstance(outcome, ExecutorFailure)
     gate = "session" if field == "session_id" else field
-    assert outcome.error.detail == f"Claude READ refused [known_refusal=system-init-{gate}]"
+    assert_refusal(outcome, f"system-init-{gate}")
     assert launcher.joined and len(launcher.peer.users) == 1 and calls == []
 
 
@@ -1274,7 +1293,7 @@ async def test_known_postintent_refusals_keep_distinct_closed_gates(gate):
     outcome, calls = await run(launcher)
     assert isinstance(outcome, ExecutorFailure)
     assert outcome.error.kind == "exit"
-    assert outcome.error.detail == f"Claude READ refused [known_refusal={gate}]"
+    assert_refusal(outcome, f"{gate}")
     assert launcher.joined and len(peer.users) == 1 and len(peer.handshake) == 3
     assert calls == [] and peer.callback_replies == 0
     assert "private" not in outcome.model_dump_json()
@@ -1301,7 +1320,7 @@ async def test_system_init_codes_follow_original_guard_order_without_values(gate
     launcher = Launcher(InitPeer())
     outcome, calls = await run(launcher)
     assert isinstance(outcome, ExecutorFailure)
-    assert outcome.error.detail == f"Claude READ refused [known_refusal=system-init-{gate}]"
+    assert_refusal(outcome, f"system-init-{gate}")
     assert calls == [] and len(launcher.peer.users) == 1 and launcher.joined
     assert "private" not in outcome.model_dump_json()
 
@@ -1339,9 +1358,10 @@ async def test_known_refusal_requires_exact_primary_cause_after_join(later):
     else:
         outcome, calls = await run(launcher)
         assert isinstance(outcome, ExecutorFailure) and calls == []
-        detail = ("Claude READ refused [known_refusal=system-init-model]"
-                  if later in ("direct", "wrapped") else "Claude READ refused")
-        assert outcome.error.detail == detail
+        if later in ("direct", "wrapped"):
+            assert_refusal(outcome, "system-init-model")
+        else:
+            assert outcome.error.detail == "Claude READ refused"
         assert outcome.error.kind == ("timeout" if later == "timeout" else "exit")
     assert launcher.joined and len(launcher.peer.users) == 1
 
@@ -1391,7 +1411,7 @@ async def test_barrier_refusal_classifies_received_record_without_private_values
 
     outcome, _ = await asyncio.wait_for(run(launcher, worker=worker), 1)
     assert isinstance(outcome, ExecutorFailure) and outcome.error.kind == "exit"
-    assert outcome.error.detail == f"Claude READ refused [known_refusal={gate}]"
+    assert_refusal(outcome, f"{gate}")
     assert claude_read.known_refusal_detail(outcome.error.detail) == outcome.error.detail
     assert worker_started == worker_joined == (phase == "during-worker")
     assert launcher.joined and len(launcher.peer.users) == 1
@@ -1426,7 +1446,7 @@ async def test_barrier_queued_record_precedes_eof_without_new_reads(record):
     outcome, _ = await asyncio.wait_for(run(launcher, worker=worker), 1)
     assert isinstance(outcome, ExecutorFailure) and outcome.error.kind == "exit"
     gate = "barrier-result" if record else "stream-end"
-    assert outcome.error.detail == f"Claude READ refused [known_refusal={gate}]"
+    assert_refusal(outcome, f"{gate}")
     assert worker_joined and launcher.joined and launcher.conversation._pending is None
     assert launcher.peer.callback_replies == 0 and outcome.usage is None
 
@@ -1447,7 +1467,7 @@ async def test_rate_limit_rejection_is_distinct_from_malformed_metadata(malforme
     outcome, calls = await run(launcher)
     assert isinstance(outcome, ExecutorFailure) and outcome.error.kind == "exit"
     gate = "rate-limit" if malformed else "rate-limit-rejected"
-    assert outcome.error.detail == f"Claude READ refused [known_refusal={gate}]"
+    assert_refusal(outcome, f"{gate}")
     assert calls == [] and launcher.joined and len(launcher.peer.users) == 1
     assert "PRIVATE" not in outcome.model_dump_json()
     if malformed:
@@ -2278,3 +2298,254 @@ async def test_unrecognized_terminal_schema_does_not_publish_usage(field, value)
     peer.emit = emit
     outcome, _ = await run(Launcher(peer))
     assert isinstance(outcome, ExecutorFailure) and outcome.usage is None
+
+
+@pytest.mark.parametrize("fragment", [1, 8192])
+@pytest.mark.parametrize("no_response", [False, True])
+async def test_source_api_retry_progress_reaches_one_callback_and_clean_ready(
+    fragment, no_response,
+):
+    class RetryPeer(Peer):
+        def emit(self, value):
+            if value.get("type") in ("assistant", "result"):
+                progress = api_retry()
+                if no_response:
+                    progress["no_response"] = {"waited_ms": 3, "retry_wait_ms": 5}
+                super().emit(progress)
+            if value.get("type") == "result":
+                value["result"] = "ready"
+            super().emit(value)
+
+    launcher = Launcher(RetryPeer(fragment=fragment))
+    remaining = []
+
+    async def worker(path, budget):
+        remaining.append(budget)
+        launcher.peer.emit(api_retry(error_status=529, error="overloaded"))
+        await asyncio.sleep(0)
+        launcher.peer.emit(api_retry(attempt=99, max_retries=100, retry_delay_ms=0))
+        return "file text"
+
+    outcome, _ = await run(launcher, worker=worker)
+    assert isinstance(outcome, ExecutorSuccess)
+    assert outcome.raw_reply == "ready" and len(remaining) == 1 and 0 < remaining[0] <= 5
+    assert len(launcher.peer.users) == launcher.peer.callback_replies == 1
+    assert launcher.joined and launcher.peer.closed
+    assert launcher.conversation._state == "drained" and launcher.conversation._pending is None
+    assert launcher.conversation._ui_records == 0
+    assert "api_retry" not in outcome.model_dump_json()
+    assert b"api_retry" not in b"".join(launcher.peer.writes)
+
+
+@pytest.mark.parametrize("changes", [
+    {"attempt": True}, {"max_retries": 1.0}, {"retry_delay_ms": None},
+    {"error_status": False}, {"error_status": "503"}, {"error": "PRIVATE-CANARY"},
+    {"error": []}, {"no_response": True}, {"no_response": None},
+    {"no_response": {}}, {"no_response": {"waited_ms": 1, "retry_wait_ms": True}},
+    {"no_response": {"waited_ms": 1, "retry_wait_ms": 2, "PRIVATE-CANARY": 3}},
+    {"uuid": "PRIVATE-CANARY"}, {"session_id": "PRIVATE-CANARY"},
+    {"PRIVATE-CANARY": "PRIVATE-CANARY"},
+])
+async def test_api_retry_exact_shape_refuses_before_worker(changes):
+    class InvalidPeer(Peer):
+        def emit(self, value):
+            if value.get("type") == "assistant":
+                super().emit(api_retry(**changes))
+            super().emit(value)
+
+    launcher = Launcher(InvalidPeer())
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure) and calls == []
+    context = assert_refusal(outcome, "api-retry")
+    assert context.family.value == "system-api-retry" and context.predicate.value == "shape"
+    assert context.phase.value == "body-before-callback"
+    assert context.terminal_result_accepted is False
+    assert "PRIVATE" not in outcome.model_dump_json()
+    assert launcher.joined and launcher.conversation._pending is None
+
+
+@pytest.mark.parametrize("omitted", ["attempt", "max_retries", "retry_delay_ms", "error_status",
+                                     "error", "uuid", "session_id"])
+async def test_api_retry_required_source_fields_cannot_be_omitted(omitted):
+    class MissingPeer(Peer):
+        def emit(self, value):
+            if value.get("type") == "assistant":
+                progress = api_retry()
+                del progress[omitted]
+                super().emit(progress)
+            super().emit(value)
+
+    outcome, calls = await run(Launcher(MissingPeer()))
+    assert isinstance(outcome, ExecutorFailure) and calls == []
+    assert assert_refusal(outcome, "api-retry").predicate.value == "shape"
+
+
+async def test_api_retry_wrong_session_is_correlation_refusal_without_worker():
+    class WrongSessionPeer(Peer):
+        def emit(self, value):
+            if value.get("type") == "assistant":
+                super().emit(api_retry(session_id=NATIVE_UUID))
+            super().emit(value)
+
+    outcome, calls = await run(Launcher(WrongSessionPeer()))
+    assert isinstance(outcome, ExecutorFailure) and calls == []
+    assert assert_refusal(outcome, "api-retry").predicate.value == "correlation"
+
+
+async def test_retry_progress_does_not_turn_terminal_error_into_success():
+    class RetryPeer(Peer):
+        def emit(self, value):
+            if value.get("type") == "result":
+                super().emit(api_retry(no_response={"waited_ms": 1, "retry_wait_ms": 2}))
+            super().emit(value)
+
+    launcher = Launcher(RetryPeer(defect="terminal-error"))
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure)
+    context = assert_refusal(outcome, "result")
+    assert context.phase.value == "body-after-callback" and not context.terminal_result_accepted
+    assert len(calls) == launcher.peer.callback_replies == 1
+    assert launcher.joined and launcher.conversation._pending is None
+
+
+@pytest.mark.parametrize("phase", ["startup", "body-before-callback", "body-after-callback",
+                                   "callback-barrier", "post-result", "drain"])
+@pytest.mark.parametrize("record,family,predicate", [
+    ({"type": "system", "subtype": "PRIVATE-CANARY"}, "system-unknown-subtype",
+     "unsupported-family"),
+    ({"type": "system"}, "system-missing-subtype", "shape"),
+    ({"type": "system", "subtype": ["PRIVATE-CANARY"]}, "system-invalid-subtype", "shape"),
+    ({"type": "system", "subtype": "informational", "prevent_continuation": True,
+      "content": "PRIVATE-CANARY"}, "system-informational", "unsupported-family"),
+    ({"type": "system", "subtype": "model_refusal_no_fallback", "content": "PRIVATE-CANARY"},
+     "system-model-refusal-no-fallback", "unsupported-family"),
+    ({"type": "system", "subtype": "notification", "message": "PRIVATE-CANARY"},
+     "system-notification", "unsupported-family"),
+])
+async def test_closed_system_context_binds_first_failure_across_receive_phases(
+    phase, record, family, predicate,
+):
+    class ContextPeer(Peer):
+        def emit(self, value):
+            before = ((phase == "startup" and not self.users
+                       and value.get("type") == "control_response")
+                      or (phase == "body-before-callback" and value.get("type") == "assistant")
+                      or (phase == "body-after-callback" and value.get("type") == "result")
+                      or (phase == "post-result" and self.post
+                          and value.get("type") == "control_response"))
+            if before:
+                super().emit(record)
+            super().emit(value)
+
+        async def close_stdin(self):
+            if phase == "drain":
+                super().emit(record)
+            await super().close_stdin()
+
+    launcher = Launcher(ContextPeer())
+    worker_joined = False
+
+    async def worker(path, remaining):
+        nonlocal worker_joined
+        if phase != "callback-barrier":
+            return "file text"
+        launcher.peer.emit(record)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            worker_joined = True
+            # Cleanup may observe later state. The primary refusal retains the
+            # actual receive phase and result predicate captured before this await.
+            launcher.conversation._terminal_result_accepted = True
+            launcher.conversation._phase = claude_read.ClaudeReadReceivePhase.DRAIN
+
+    outcome, _ = await asyncio.wait_for(run(launcher, worker=worker), 1)
+    assert isinstance(outcome, ExecutorFailure) and outcome.raw_reply is None
+    context = assert_refusal(outcome, "system-other")
+    assert context.family.value == family and context.predicate.value == predicate
+    assert context.phase.value == phase
+    assert context.terminal_result_accepted == (phase in ("post-result", "drain"))
+    assert worker_joined == (phase == "callback-barrier")
+    assert launcher.joined and launcher.conversation._pending is None
+    assert len(launcher.peer.users) <= 1 and launcher.peer.callback_replies <= 1
+    assert "PRIVATE" not in outcome.model_dump_json()
+    assert "PRIVATE" not in b"".join(launcher.peer.writes).decode()
+
+
+@pytest.mark.parametrize("phase", ["startup", "post-result", "drain"])
+async def test_source_api_retry_outside_active_turn_refuses_with_explicit_phase(phase):
+    class WrongPhasePeer(Peer):
+        def emit(self, value):
+            if ((phase == "startup" and not self.users
+                 and value.get("type") == "control_response")
+                    or (phase == "post-result" and self.post
+                        and value.get("type") == "control_response")):
+                super().emit(api_retry())
+            super().emit(value)
+
+        async def close_stdin(self):
+            if phase == "drain":
+                super().emit(api_retry())
+            await super().close_stdin()
+
+    launcher = Launcher(WrongPhasePeer())
+    outcome, _ = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure)
+    context = assert_refusal(outcome, "api-retry")
+    assert context.phase.value == phase and context.predicate.value == "phase"
+    assert context.terminal_result_accepted == (phase != "startup")
+    assert launcher.joined and launcher.conversation._pending is None
+
+
+def test_refusal_context_catalog_is_finite_exact_and_bounded():
+    from itertools import product
+
+    for code in claude_read.ClaudeReadRefusalCode:
+        assert claude_read.known_refusal_detail(claude_read.refusal_detail(code)) is not None
+    for code, family, phase, predicate in product(
+        claude_read.ClaudeReadRefusalCode, claude_read.ClaudeReadRefusalFamily,
+        claude_read.ClaudeReadReceivePhase, claude_read.ClaudeReadRefusalPredicate,
+    ):
+        context = claude_read.ClaudeReadRefusalContext(code, family, phase, predicate, False)
+        detail = claude_read.refusal_detail(code, context=context)
+        assert len(detail.encode("utf-8")) <= 256
+        assert claude_read.parse_refusal_detail(detail) == context
+    for detail in (
+        "Claude READ refused [known_refusal=api-retry; family=PRIVATE; phase=startup; "
+        "predicate=shape; terminal_result_accepted=false]",
+        "Claude READ refused [known_refusal=api-retry; family=system-api-retry; phase=PRIVATE; "
+        "predicate=shape; terminal_result_accepted=false]",
+        "Claude READ refused [known_refusal=api-retry; family=system-api-retry; phase=startup; "
+        "predicate=PRIVATE; terminal_result_accepted=false]",
+        "Claude READ refused [known_refusal=api-retry; family=system-api-retry; phase=startup; "
+        "predicate=shape; terminal_result_accepted=0]",
+    ):
+        assert claude_read.known_refusal_detail(detail) is None
+
+
+@pytest.mark.parametrize("record,family", [
+    ({"type": "system", "subtype": "model_refusal_no_fallback", "uuid": NATIVE_UUID,
+      "session_id": NATIVE_UUID, "content": "PRIVATE-CANARY"},
+     "system-model-refusal-no-fallback"),
+    ({"type": "system", "subtype": "informational", "prevent_continuation": True,
+      "uuid": [], "session_id": ["PRIVATE-CANARY"], "content": "PRIVATE-CANARY"},
+     "system-informational"),
+])
+async def test_claimed_system_negative_is_unsupported_without_validated_envelope(record, family):
+    class ClaimedNegativePeer(Peer):
+        def emit(self, value):
+            if value.get("type") == "result":
+                super().emit(record)
+            super().emit(value)
+
+    launcher = Launcher(ClaimedNegativePeer())
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure) and outcome.raw_reply is None
+    context = assert_refusal(outcome, "system-other")
+    assert context.family.value == family
+    assert context.predicate.value == "unsupported-family"
+    assert context.phase.value == "body-after-callback"
+    assert context.terminal_result_accepted is False
+    assert len(calls) == launcher.peer.callback_replies == 1
+    assert launcher.joined and launcher.conversation._pending is None
+    assert "PRIVATE" not in outcome.model_dump_json()

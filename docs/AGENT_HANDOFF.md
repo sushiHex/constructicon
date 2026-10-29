@@ -16,6 +16,32 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude READ retry progress and refusal context are separate from success
+
+Pinned ordinary stdio emits api_retry when an upstream request will retry.
+READ now validates that exact source shape during the active known session and
+discards its private progress fields. It creates no controller retry, callback,
+extra budget or terminal-success fact. Nullable status and the optional
+no-response object are valid; no guessed retry ceiling or exhaustion rule is
+introduced. Unsupported/safeguard and unknown families remain refused.
+
+Primary refusal context records only fixed family, receive-phase and predicate
+labels plus an affirmative terminal-result-accepted flag. It binds to the
+primary exception before cleanup awaits; cleanup/cancellation/timeout/custody
+failures stay generic. Historical flat details remain readable. The standalone
+reader and metadata entry carry the same closed vocabulary, with a 32 KiB bound
+justified by 64 maximal contextual events.
+
+The generation-7 live window completed one callback but failed overall with
+historical system-other; it was withdrawn and parked. That code did not identify
+a frame or phase. This source-backed compatibility repair does not identify
+that cause or establish live success. Native1 was the READ phase/lane exit,
+not an observed vendor exit. No live budget is renewed. Changed controller and
+source revisions need reviewed installation, fresh qualification and a newly
+selected bounded scope.
+
+---
+
 ## Claude READ preparation shares the accepting rehearsal path
 
 The operator CLI now prepares fresh session bindings from installation-only

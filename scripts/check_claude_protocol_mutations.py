@@ -1919,7 +1919,7 @@ MUTANTS += (
 
 SYSTEM_CATEGORY_MUTANTS = (
     ("rejected system subtype fallback is closed",
-     NATIVE_EVENTS + "system_record_category",
+     NATIVE_EVENTS + "read_system_record_category",
      "_SYSTEM_CATEGORIES.get(subtype, ClaudeSystemRecordCategory.OTHER)",
      "_SYSTEM_CATEGORIES.get(subtype, ClaudeSystemRecordCategory.STATUS)",
      MAINTENANCE_TEST + "test_rejected_system_category_is_closed_before_second_write"),
@@ -2070,7 +2070,7 @@ MUTANTS += SDK_SERVER_MUTANTS
 
 READ_REFUSAL_DIAGNOSTIC_MUTANTS = (
     ("READ unidentified primary faults cannot invent a known gate", READ + "_known_primary_refusal",
-     "return None", "return ClaudeReadRefusalCode.INIT_MODEL",
+     "return None", "return _Refused(ClaudeReadRefusalCode.INIT_MODEL)",
      READ_TEST + "test_known_refusal_requires_exact_primary_cause_after_join[cleanup]"),
     ("READ provider preserves the identified refusal across callback postconditions",
      "constructicon.substrate.executors.claude_provider:ClaudeOperatorHandle._run",
@@ -2083,7 +2083,8 @@ READ_REFUSAL_DIAGNOSTIC_MUTANTS = (
      "tests/api/test_claude_qualification.py::"
      "test_graph_never_journals_unrecognized_or_nonexit_detail[exit-PRIVATE-ACCOUNT-CANARY]"),
     ("READ metadata reason requires its exact source error class", EVIDENCE + "_journal",
-     'if failure["error_type"] == "ContractViolation"', "if True",
+     'REASONS.get(failure["error"], "other")\n                        if failure["error_type"] == "ContractViolation"',
+     'REASONS.get(failure["error"], "other") if True',
      EVIDENCE_TEST + "test_closed_refusal_projection_never_accepts_unknown_detail_or_wrong_class"),
 )
 MUTANTS += READ_REFUSAL_DIAGNOSTIC_MUTANTS
@@ -2116,7 +2117,7 @@ COMMAND_LIFECYCLE_MUTANTS = (
      READ_TEST + "test_negative_lifecycle_in_body_cannot_authorize_a_callback"),
     ("co-buffered completion cannot grant a worker",
      READ + "ClaudeReadTransaction._quiet",
-     'self._command_completed and self._state == "dispatched"\n                and self._calls_completed == 0',
+     'self._command_completed and self._state == "dispatched"\n                    and self._calls_completed == 0',
      "False",
      READ_TEST + "test_completed_cannot_authorize_a_new_or_buffered_callback[co-buffered]"),
     ("normal lifecycle records are consumed by the READ body",
@@ -2182,8 +2183,10 @@ READ_BARRIER_DIAGNOSTIC_TEST = (
     READ_TEST + "test_barrier_refusal_classifies_received_record_without_private_values"
 )
 READ_BARRIER_DIAGNOSTIC_MUTANTS = (
-    ("barrier system records retain the existing closed category", READ + "_barrier_refusal",
-     "return _unhandled(value)", "return ClaudeReadRefusalCode.BARRIER_UNKNOWN",
+    ("barrier system records retain the existing closed category",
+     READ + "ClaudeReadTransaction._unsupported",
+     "self._refused(_unhandled(value), value, predicate=predicate)",
+     "self._refused(ClaudeReadRefusalCode.BARRIER_UNKNOWN, value, predicate=predicate)",
      READ_BARRIER_DIAGNOSTIC_TEST + "[status-during-worker]"),
     ("barrier control request does not claim a validated method", READ + "_barrier_refusal",
      "return ClaudeReadRefusalCode.BARRIER_CONTROL_REQUEST",
@@ -2203,11 +2206,50 @@ READ_BARRIER_DIAGNOSTIC_MUTANTS = (
      "if self._records:", "if self._records and not self._eof:",
      READ_TEST + "test_barrier_queued_record_precedes_eof_without_new_reads[record-before-eof]"),
     ("barrier EOF retains the existing stream-end category", READ + "ClaudeReadTransaction._quiet",
-     "if self._eof:\n            raise _Refused(ClaudeReadRefusalCode.STREAM_END)",
-     "if self._eof:\n            raise _Refused(ClaudeReadRefusalCode.SPACING)",
+     "if self._eof:\n                raise self._refused(ClaudeReadRefusalCode.STREAM_END)",
+     "if self._eof:\n                raise self._refused(ClaudeReadRefusalCode.SPACING)",
      READ_TEST + "test_barrier_queued_record_precedes_eof_without_new_reads[eof]"),
 )
 MUTANTS += READ_BARRIER_DIAGNOSTIC_MUTANTS
+
+
+READ_RETRY_CONTEXT_MUTANTS = (
+    ("source retry progress is consumed rather than refused",
+     READ + "ClaudeReadTransaction._api_retry", "return True", "return False",
+     READ_TEST + "test_source_api_retry_progress_reaches_one_callback_and_clean_ready"),
+    ("retry integer progress cannot be a boolean",
+     READ + "ClaudeReadTransaction._api_retry",
+     'type(value.get(key)) is not int for key in',
+     'not isinstance(value.get(key), int) for key in',
+     READ_TEST + "test_api_retry_exact_shape_refuses_before_worker[changes0]"),
+    ("retry progress retains exact no-response shape",
+     READ + "ClaudeReadTransaction._api_retry",
+     'set(no_response) != {"waited_ms", "retry_wait_ms"}', "False",
+     READ_TEST + "test_api_retry_exact_shape_refuses_before_worker[changes11]"),
+    ("retry progress cannot cross session identity",
+     READ + "ClaudeReadTransaction._api_retry",
+     'value.get("session_id") != self._session', "False",
+     READ_TEST + "test_api_retry_wrong_session_is_correlation_refusal_without_worker"),
+    ("retry progress does not extend beyond the active turn",
+     READ + "ClaudeReadTransaction._api_retry",
+     'if self._state != "dispatched":', "if False:",
+     READ_TEST + "test_source_api_retry_outside_active_turn_refuses_with_explicit_phase"),
+    ("refusal context records accepted terminal result affirmatively",
+     READ + "ClaudeReadTransaction._refused",
+     'code, family, phase, predicate, self._terminal_result_accepted,',
+     'code, family, phase, predicate, False,',
+     READ_TEST + "test_closed_system_context_binds_first_failure_across_receive_phases"),
+    ("refusal phase belongs to the first failure rather than cleanup state",
+     READ + "run_read_transaction", "context=known_refusal.context)",
+     "context=replace(known_refusal.context, phase=conversation._phase))",
+     READ_TEST + "test_closed_system_context_binds_first_failure_across_receive_phases"),
+    ("metadata contextual refusal requires its exact error class",
+     EVIDENCE + "_journal",
+     'if failure["error_type"] == "ContractViolation" else None)',
+     'if True else None)',
+     EVIDENCE_TEST + "test_closed_refusal_projection_never_accepts_unknown_detail_or_wrong_class"),
+)
+MUTANTS += READ_RETRY_CONTEXT_MUTANTS
 
 
 if __name__ == "__main__":

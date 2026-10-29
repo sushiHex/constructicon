@@ -17,10 +17,34 @@ class ClaudeSystemRecordCategory(StrEnum):
     UI_PANES = "ui-panes"
     STATUS = "status"
     BACKGROUND_TASKS_CHANGED = "background-tasks-changed"
+    INIT = "init"
+    NOTIFICATION = "notification"
+    API_RETRY = "api-retry"
+    MODEL_REFUSAL_NO_FALLBACK = "model-refusal-no-fallback"
+    MODEL_REFUSAL_FALLBACK = "model-refusal-fallback"
+    MEMORY_RECALL = "memory-recall"
+    THINKING_TOKENS = "thinking-tokens"
+    COMPACT_BOUNDARY = "compact-boundary"
+    MODEL_FALLBACK = "model-fallback"
+    MODEL_CONSENT_FALLBACK = "model-consent-fallback"
+    INFORMATIONAL = "informational"
+    MISSING_SUBTYPE = "missing-subtype"
+    INVALID_SUBTYPE = "invalid-subtype"
     OTHER = "other"
 
 
 _SYSTEM_CATEGORIES = {
+    "init": ClaudeSystemRecordCategory.INIT,
+    "notification": ClaudeSystemRecordCategory.NOTIFICATION,
+    "api_retry": ClaudeSystemRecordCategory.API_RETRY,
+    "model_refusal_no_fallback": ClaudeSystemRecordCategory.MODEL_REFUSAL_NO_FALLBACK,
+    "model_refusal_fallback": ClaudeSystemRecordCategory.MODEL_REFUSAL_FALLBACK,
+    "memory_recall": ClaudeSystemRecordCategory.MEMORY_RECALL,
+    "thinking_tokens": ClaudeSystemRecordCategory.THINKING_TOKENS,
+    "compact_boundary": ClaudeSystemRecordCategory.COMPACT_BOUNDARY,
+    "model_fallback": ClaudeSystemRecordCategory.MODEL_FALLBACK,
+    "model_consent_fallback": ClaudeSystemRecordCategory.MODEL_CONSENT_FALLBACK,
+    "informational": ClaudeSystemRecordCategory.INFORMATIONAL,
     "ui_invalidate": ClaudeSystemRecordCategory.UI_INVALIDATE,
     "commands_changed": ClaudeSystemRecordCategory.COMMANDS_CHANGED,
     "ui_panes": ClaudeSystemRecordCategory.UI_PANES,
@@ -29,14 +53,28 @@ _SYSTEM_CATEGORIES = {
 }
 
 
-def system_record_category(value: object) -> ClaudeSystemRecordCategory:
+def read_system_record_category(value: object) -> ClaudeSystemRecordCategory:
     """Discard all values except exact, statically recognized system subtypes."""
     if type(value) is not dict or value.get("type") != "system":
         return ClaudeSystemRecordCategory.OTHER
+    if "subtype" not in value:
+        return ClaudeSystemRecordCategory.MISSING_SUBTYPE
     subtype = value.get("subtype")
     if type(subtype) is not str:
-        return ClaudeSystemRecordCategory.OTHER
+        return ClaudeSystemRecordCategory.INVALID_SUBTYPE
     return _SYSTEM_CATEGORIES.get(subtype, ClaudeSystemRecordCategory.OTHER)
+
+
+def system_record_category(value: object) -> ClaudeSystemRecordCategory:
+    """Preserve the existing maintenance projection's coarser closed catalog."""
+    category = read_system_record_category(value)
+    if category in (ClaudeSystemRecordCategory.UI_INVALIDATE,
+                    ClaudeSystemRecordCategory.COMMANDS_CHANGED,
+                    ClaudeSystemRecordCategory.UI_PANES,
+                    ClaudeSystemRecordCategory.STATUS,
+                    ClaudeSystemRecordCategory.BACKGROUND_TASKS_CHANGED):
+        return category
+    return ClaudeSystemRecordCategory.OTHER
 
 
 def exact_ui_invalidate(value: object) -> bool:

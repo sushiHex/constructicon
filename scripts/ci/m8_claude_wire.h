@@ -81,6 +81,16 @@ static void wire_thinking(const char *user_uuid, int tokens, int delta) {
            tokens, delta, user_uuid);
 }
 
+/* Pinned 2.1.296 U0 schema and ordinary engine/Rk forwarding: an upstream
+ * request will retry, not a terminal READ failure. This peer does not retry a
+ * request or wait; it emits source-shaped framing for the real consumer. */
+static void wire_retry(void) {
+    puts("{\"type\":\"system\",\"subtype\":\"api_retry\",\"attempt\":1,"
+         "\"max_retries\":2,\"retry_delay_ms\":1,\"error_status\":null,"
+         "\"error\":\"server_error\",\"no_response\":{\"waited_ms\":1,\"retry_wait_ms\":2},"
+         "\"uuid\":\"" WIRE_UUID "\",\"session_id\":\"" WIRE_SESSION "\"}");
+}
+
 static void wire_lifecycle(const char *user_uuid, const char *state) {
     printf("{\"type\":\"command_lifecycle\",\"command_uuid\":%s,\"state\":\"%s\","
            "\"uuid\":\"" WIRE_UUID "\",\"session_id\":\"" WIRE_SESSION "\"}\n",
@@ -241,6 +251,7 @@ static int claude_wire(int argc, char **argv) {
         wire_token("\"text\":", result, sizeof(result));
     } else strcpy(result, "\"zero-callback\"");
     WIRE_CHECK(strlen(result) < WIRE_RECORD_BYTES - 2048);
+    wire_retry();
     wire_thinking(user_uuid, 5, 2);
     wire_lifecycle(user_uuid, "completed");
     printf("{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,"

@@ -167,6 +167,10 @@ separate observations, not an atomic snapshot or journal-integrity attestation.
 
 Output contains only a closed bounded vocabulary, never raw exception text,
 model output, relay destinations, credentials, identities or private paths.
+Contextual refusals retain fixed family, receive-phase and predicate labels
+plus terminal-result acceptance separately from callback counts. Historical
+flat refusals stay readable. Up to 64 contextual events fit the shared 32 KiB
+metadata capture/validation bound; no arbitrary vendor subtype is exposed.
 Missing and incomplete facts remain null/partial. A valid record means that its
 observed shape and identity passed these checks, not that a run succeeded. Only
 an affirmative retained `not dispatched` outcome rules out dispatch; an intent
