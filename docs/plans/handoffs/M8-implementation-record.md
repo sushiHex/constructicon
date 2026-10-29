@@ -13,6 +13,37 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Canonical local owner-approval preparation (Refs #40)
+
+The generation-8 window installed and verified merged controller `1d50efe`,
+completed fresh qualification, and reached local owner-artifact preparation.
+A handwritten local emitter failed with a syntax error before creating the file
+or placing authority. No READ was dispatched. The precompiled generation-8
+withdrawal completed with checked readbacks; park, Off/idle and custody release
+completed. Candidate review covered grant/identity matching only; the full
+independent actual-task and 180-second drive-wait check was not completed.
+This is a stopped preparation window, not a model result.
+
+`claude_read_session.py prepare-owner-approval --controller COMMIT
+--owner-decision URL --out FILE --operator-revision REV` now writes the existing
+five-field review artifact using the shared procedure hash and acceptance
+constants. It validates the commit and owner-decision URL, checks the operator
+revision, writes a fresh file only and returns its SHA256. The actual CLI tests
+cover canonical output, invalid inputs and overwrite refusal; the existing
+credential-free accepting/abort Linux rehearsal now uses this same command.
+Focused portable CLI/session checks passed locally.
+Linux execution evidence belongs to the final-head CI lane, not a Windows skip.
+
+The supplied owner decision remains external. A file or its hash is not
+permission, and the command neither mints a candidate nor creates a grant or
+places authority. The existing approval schema, candidate/grant/window checks,
+accepted procedure and stop rules are unchanged. This is Code-tier local tooling
+with focused local checks and the full final-head CI gate; no new authority
+guard, mutation inventory, vendor run or duplicate full local gate is introduced.
+Operator and metadata source revisions change; installed controller `1d50efe`
+does not need replacement for this local preparation action. A stopped live
+window is not resumed by preparing these bytes.
+
 ## Claude READ barrier refusals preserve finite observations (Refs #40)
 
 The generation-6 READ's checked metadata reported one callback entry, no

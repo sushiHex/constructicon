@@ -16,6 +16,26 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude owner-approval preparation uses the operator CLI
+
+The shared READ CLI now writes the existing owner-approval review artifact from
+the canonical procedure hash and acceptance constants, an explicit controller
+commit and an external owner-decision reference. It returns the file hash and
+refuses invalid inputs or an existing output. The accepting/abort Linux rehearsal
+uses the same command. Creating the artifact or knowing its hash grants no
+permission; candidate checks, owner scope and authority placement stay unchanged.
+
+The preceding live window installed and verified controller `1d50efe`, qualified
+and withdrew generation 8, then parked and released custody. A local handwritten
+artifact emitter failed before file creation or authority placement. No READ
+was dispatched. Candidate review covered grant/identity matching only; the full
+independent actual-task and 180-second drive-wait check was not completed.
+That preparation error is not a vendor refusal or live success; the stopped
+window supplies no permission to resume. Operator source revisions change with
+this local tooling; the installed controller remains independently pinned.
+
+---
+
 ## Claude READ retry progress and refusal context are separate from success
 
 Pinned ordinary stdio emits api_retry when an upstream request will retry.

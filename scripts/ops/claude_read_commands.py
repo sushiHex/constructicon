@@ -406,6 +406,25 @@ LATE_PHASES = {
 }
 
 
+def prepare_owner_approval(controller, owner_decision):
+    """Prepare review bytes; a file or its hash is not owner permission."""
+    require(type(controller) is str and COMMIT.fullmatch(controller))
+    require(
+        type(owner_decision) is str
+        and re.fullmatch(
+            r"https://github.com/sushiHex/constructicon/issues/77#issuecomment-[0-9]+",
+            owner_decision,
+        )
+    )
+    return {
+        "schema": 1,
+        "owner_decision": owner_decision,
+        "procedure_sha256": DOC_SHA,
+        "source_c": controller,
+        "acceptance": dict(ACCEPTANCE),
+    }
+
+
 def prepare_bindings(installation, namespace, boot=None):
     """Project trusted installation facts into a new, unresolved local session.
 

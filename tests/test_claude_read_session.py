@@ -465,6 +465,46 @@ def _installation(record):
     }
 
 
+def test_prepare_owner_approval_real_cli_emits_canonical_bytes_and_refuses_overwrite(tmp_path):
+    controller = binding_record()["controller_commit"]
+    decision = "https://github.com/sushiHex/constructicon/issues/77#issuecomment-1"
+    output = tmp_path / "owner-approval.json"
+    args = ("prepare-owner-approval", "--controller", controller,
+            "--owner-decision", decision, "--out", output,
+            "--operator-revision", commands.operator_revision())
+    child = _prepare_cli(*args)
+    assert child.returncode == 0 and child.stderr == b""
+    raw = output.read_bytes()
+    assert raw == session.json_bytes({
+        "schema": 1, "owner_decision": decision, "procedure_sha256": commands.DOC_SHA,
+        "source_c": controller, "acceptance": commands.ACCEPTANCE,
+    })
+    assert json.loads(child.stdout) == {"owner_approval_sha256": commands.sha(raw)}
+    assert {p.name for p in tmp_path.iterdir()} == {"owner-approval.json"}
+    repeated = _prepare_cli(*args)
+    assert repeated.returncode != 0 and repeated.stdout == b""
+    assert output.read_bytes() == raw
+
+
+@pytest.mark.parametrize(("option", "value"), [
+    ("--controller", "a" * 39),
+    ("--controller", "UNREVIEWED"),
+    ("--owner-decision", "https://github.com/sushiHex/constructicon/issues/40#issuecomment-1"),
+    ("--owner-decision", "https://github.com/sushiHex/constructicon/issues/77#issuecomment-1\n"),
+    ("--operator-revision", "0" * 64),
+])
+def test_prepare_owner_approval_real_cli_refuses_invalid_input_before_writing(
+    tmp_path, option, value,
+):
+    output = tmp_path / "owner-approval.json"
+    args = ["prepare-owner-approval", "--controller", binding_record()["controller_commit"],
+            "--owner-decision", "https://github.com/sushiHex/constructicon/issues/77#issuecomment-1",
+            "--out", str(output), "--operator-revision", commands.operator_revision()]
+    args[args.index(option) + 1] = value
+    child = _prepare_cli(*args)
+    assert child.returncode != 0 and child.stdout == b"" and not output.exists()
+
+
 def test_prepare_bindings_real_cli_derives_fresh_paths_and_never_overwrites(tmp_path):
     old = binding_record()
     old["values"].update(R="/home/fixture/m8-claude-first-read-wrong",

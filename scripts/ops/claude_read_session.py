@@ -271,6 +271,7 @@ def main():
     parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("action", choices=(
         "describe", "prepare-bindings", "prepare-late", "prepare-cleanup",
+        "prepare-owner-approval",
         "compile", "check", "transport", "readback",
     ))
     parser.add_argument("--phase", choices=tuple(commands.PHASES))
@@ -282,7 +283,7 @@ def main():
         parser.add_argument("--" + name, type=Path)
     for name in (
         "manifest", "grant-sha256", "target", "alias", "part", "namespace", "boot",
-        "owner-approval-sha256",
+        "owner-approval-sha256", "controller", "owner-decision",
     ):
         parser.add_argument("--" + name)
     args = parser.parse_args()
@@ -308,6 +309,10 @@ def main():
                 "owner_approval": (
                     "existing evidence/owner-approval.json plus independently approved SHA256"
                 ),
+                "owner_approval_preparation": (
+                    "prepare-owner-approval --controller COMMIT --owner-decision URL --out FILE "
+                    "--operator-revision REV; file/hash is not permission"
+                ),
                 "cleanup_package": "evidence/cleanup-package",
                 "output": "fresh exclusive bindings file; no grant or owner authority is created",
             },
@@ -319,6 +324,12 @@ def main():
                 for name, phase in commands.PHASES.items()
             },
         }
+    elif args.action == "prepare-owner-approval":
+        commands.require(args.operator_revision == commands.operator_revision())
+        commands.require(args.out is not None)
+        raw = json_bytes(commands.prepare_owner_approval(args.controller, args.owner_decision))
+        retain(args.out, raw)
+        result = {"owner_approval_sha256": commands.sha(raw)}
     elif args.action in ("prepare-bindings", "prepare-late", "prepare-cleanup"):
         commands.require(args.operator_revision == commands.operator_revision())
         if args.action == "prepare-bindings":
