@@ -2549,3 +2549,177 @@ async def test_claimed_system_negative_is_unsupported_without_validated_envelope
     assert len(calls) == launcher.peer.callback_replies == 1
     assert launcher.joined and launcher.conversation._pending is None
     assert "PRIVATE" not in outcome.model_dump_json()
+
+
+def inert_sideband(kind="permission_check_status", **changes):
+    # Pinned schemas B@208364898 / B@208342936 and live producers
+    # B@218905919 / B@233017979; no permission or callback result is asserted.
+    fields = ({"tool_use_id": "private-tool-label", "status": "checking"}
+              if kind == "permission_check_status" else {"title": "private-title"})
+    return {"type": "system", "subtype": kind, "uuid": NATIVE_UUID,
+            "session_id": SESSION, **fields, **changes}
+
+
+@pytest.mark.parametrize("fragment", [1, 8192])
+async def test_source_sidebands_cross_every_receive_without_authority(fragment):
+    class SidebandPeer(Peer):
+        snapshot_seen = False
+
+        def emit(self, value):
+            # A title may precede init and the authoritative startup snapshot.
+            session = SESSION if self.snapshot_seen else NATIVE_UUID
+            super().emit(inert_sideband("session_title_changed", session_id=session))
+            super().emit(inert_sideband(session_id=session, agent_id="private-agent"))
+            super().emit(value)
+            if value.get("subtype") == "background_tasks_changed":
+                self.snapshot_seen = True
+
+        async def close_stdin(self):
+            self.emit(inert_sideband(status="done"))
+            await super().close_stdin()
+
+    launcher = Launcher(SidebandPeer(fragment=fragment))
+    observed = []
+
+    async def worker(path, remaining):
+        observed.append((path, remaining))
+        launcher.peer.emit(inert_sideband(status="done"))
+        await asyncio.sleep(0)
+        return "file text"
+
+    outcome, _ = await run(launcher, worker=worker)
+    assert isinstance(outcome, ExecutorSuccess), outcome
+    assert observed[0][0] == "README.md" and len(observed) == 1
+    assert launcher.conversation._startup_session == SESSION
+    assert launcher.conversation._session == SESSION
+    assert launcher.conversation._ui_records == 0
+    assert launcher.peer.callback_replies == len(launcher.peer.users) == 1
+    assert launcher.joined and launcher.peer.closed
+    assert "private" not in outcome.model_dump_json()
+    assert b"private" not in b"".join(launcher.peer.writes)
+
+
+@pytest.mark.parametrize("kind", ["permission_check_status", "session_title_changed"])
+@pytest.mark.parametrize("damage", ["extra", "wrong-type", "missing", "session"])
+async def test_source_sideband_shape_and_correlation_refuse(kind, damage):
+    class DamagedPeer(Peer):
+        def emit(self, value):
+            if value.get("subtype") == "init":
+                frame = inert_sideband(kind)
+                key = "status" if kind == "permission_check_status" else "title"
+                if damage == "extra":
+                    frame["unknown"] = "private"
+                elif damage == "wrong-type":
+                    frame[key] = False
+                elif damage == "missing":
+                    del frame[key]
+                else:
+                    frame["session_id"] = NATIVE_UUID
+                super().emit(frame)
+            super().emit(value)
+
+    launcher = Launcher(DamagedPeer())
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure)
+    context = assert_refusal(outcome, "system-other")
+    assert context.family.value == "system-" + kind.replace("_", "-")
+    assert context.predicate.value == ("correlation" if damage == "session" else "shape")
+    assert not calls and launcher.peer.callback_replies == 0 and launcher.joined
+    assert "private" not in outcome.model_dump_json()
+
+
+@pytest.mark.parametrize("kind", ["control_request_progress", "permission_denied", "hook_response",
+                                  "task_started", "mirror_error", "code_change_published"])
+async def test_diagnostic_catalog_is_not_sideband_admission(kind):
+    class RefusedPeer(Peer):
+        def emit(self, value):
+            if value.get("subtype") == "init":
+                super().emit(inert_sideband(kind))
+            super().emit(value)
+
+    launcher = Launcher(RefusedPeer())
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure)
+    context = assert_refusal(outcome, "system-other")
+    assert context.family.value == "system-" + kind.replace("_", "-")
+    assert context.predicate.value == "unsupported-family"
+    assert not calls and launcher.peer.callback_replies == 0 and launcher.joined
+
+
+@pytest.mark.parametrize("kind", ["permission_check_status", "session_title_changed"])
+async def test_sideband_cannot_replace_startup_background_snapshot(kind):
+    class MissingSnapshotPeer(Peer):
+        def emit(self, value):
+            if value.get("subtype") == "background_tasks_changed":
+                super().emit(inert_sideband(kind))
+                self.closed = True  # Deterministic EOF; no snapshot can arrive.
+                return
+            super().emit(value)
+
+    launcher = Launcher(MissingSnapshotPeer())
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure)
+    assert not calls and not launcher.peer.users and launcher.peer.callback_replies == 0
+    assert launcher.conversation._startup_session is None and launcher.joined
+
+
+def test_every_pinned_driver_family_reaches_the_closed_reader_context():
+    from scripts.ops import read_attempt_evidence
+
+    from constructicon.core.claude_read_observation import _SYSTEM_FAMILIES
+
+    async def worker(path, remaining):
+        raise AssertionError("diagnostic projection must not execute work")
+
+    transaction = claude_read.ClaudeReadTransaction(
+        TaskSpec(instruction="read"), selected_plan=ClaudePlan.PRO, model="model", effort="high",
+        worker=worker, input_limit=1000, output_limit=1000, deadline=1,
+    )
+    # Exercise the actual first-failure binder and public grammar for all labels,
+    # including the longest code/phase/predicate combination; no raw field survives.
+    transaction._phase = claude_read.ClaudeReadReceivePhase.BODY_AFTER_CALLBACK
+    transaction._calls_completed = 1
+    transaction._terminal_result_accepted = True
+    for subtype, family in _SYSTEM_FAMILIES.items():
+        refused = transaction._refused(
+            claude_read.ClaudeReadRefusalCode.BARRIER_CONTROL_REQUEST,
+            {"type": "system", "subtype": subtype, "private": "private-value"},
+            predicate=claude_read.ClaudeReadRefusalPredicate.UNSUPPORTED_FAMILY,
+        )
+        assert refused.context.family is family
+        detail = claude_read.refusal_detail(refused.code, context=refused.context)
+        assert len(detail.encode("utf-8")) <= 256 and "private" not in detail
+        assert claude_read.parse_refusal_detail(detail) == refused.context
+        parsed = read_attempt_evidence.refusal_context(detail)
+        assert parsed is not None
+        _, public = parsed
+        assert public["family"] == family.value
+        assert public["terminal_result_accepted"] is True
+
+
+@pytest.mark.parametrize("ending", ["eof", "negative", "cancel"])
+async def test_wait_progress_during_worker_never_hides_failure_or_cancellation(ending):
+    peer = Peer()
+    entered = asyncio.Event()
+
+    async def worker(path, remaining):
+        entered.set()
+        peer.emit(inert_sideband(status="done"))
+        if ending == "eof":
+            peer.closed = True
+            peer.ready.set()
+        elif ending == "negative":
+            peer.emit({"type": "system", "subtype": "permission_denied"})
+        await asyncio.Event().wait()
+
+    launcher = Launcher(peer)
+    pending = asyncio.create_task(run(launcher, worker=worker))
+    await entered.wait()
+    if ending == "cancel":
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+    else:
+        outcome, _ = await pending
+        assert isinstance(outcome, ExecutorFailure) and outcome.raw_reply is None
+    assert peer.callback_replies == 0 and launcher.joined

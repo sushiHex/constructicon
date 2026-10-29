@@ -579,3 +579,26 @@ async def test_post_exchange_resume_rechecks_closure_before_outcome_and_attempt_
         await execute(a, acquired)
     assert record(a)["dispatch"] == "possibly dispatched"
     await a.executor.close(acquired, "discard")
+
+
+def test_protocol_revision_covers_the_closed_observation_law():
+    import inspect
+
+    from constructicon.core import claude_read_observation
+    from constructicon.core.identity import digest
+    from constructicon.substrate.executors import (
+        claude_initialize,
+        claude_native_events,
+        claude_protocol,
+        claude_provider,
+        claude_read,
+        claude_startup,
+    )
+
+    expected = digest("claude-read-protocol", 2, {
+        module.__name__: inspect.getsource(module)
+        for module in (claude_protocol, claude_startup, claude_read,
+                       claude_initialize, claude_native_events, claude_read_observation)
+    })
+    assert claude_provider._protocol_revision() == expected
+    assert expected == claude_provider.PROTOCOL_REVISION

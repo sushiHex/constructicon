@@ -7,6 +7,8 @@ import pytest
 from constructicon.substrate.executors.claude_native_events import (
     exact_commands_changed,
     exact_inert_notification,
+    exact_permission_check_status,
+    exact_session_title_changed,
     exact_ui_invalidate,
 )
 from tests.substrate._claude_wire import commands_changed
@@ -126,3 +128,25 @@ def test_shared_notification_classifier_keeps_ui_and_unknown_discriminators_exac
     assert not exact_commands_changed(ui)
     assert not exact_inert_notification({**ui, "private-extension": "private-value"})
     assert not exact_inert_notification({**commands_changed(), "subtype": "private-other"})
+
+
+@pytest.mark.parametrize("kind,validator", [
+    ("permission_check_status", exact_permission_check_status),
+    ("session_title_changed", exact_session_title_changed),
+])
+def test_pinned_read_sideband_shapes_are_exact_without_invented_bounds(kind, validator):
+    fields = ({"tool_use_id": "", "status": "checking"}
+              if kind == "permission_check_status" else {"title": "x" * 1000})
+    value = {"type": "system", "subtype": kind, "uuid": "opaque", "session_id": "", **fields}
+    assert validator(value) is True
+    assert not exact_inert_notification(value)  # Maintenance admission is unchanged.
+    for key in value:
+        assert not validator({k: v for k, v in value.items() if k != key})
+        assert not validator({**value, key: False})
+        assert not validator({**value, key: StrSubclass(str(value[key]))})
+    assert not validator({**value, "extra": "private"})
+    assert not validator(DictSubclass(value))
+    if kind == "permission_check_status":
+        assert validator({**value, "status": "done", "agent_id": ""})
+        assert not validator({**value, "status": "allowed"})
+        assert not validator({**value, "agent_id": None})

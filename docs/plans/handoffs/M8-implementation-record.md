@@ -10192,3 +10192,196 @@ to the actual unsupported-system guard with the same killing test. Its positive
 baseline passed and the retargeted mutant failed by assertion. Runtime and
 behavior-test blobs did not change. Final-head CI is rerun for the inventory
 correction; the earlier independent boundary review remains applicable.
+
+## #40 / #77 — exact observational sidebands and closed system vocabulary
+
+### Measured live result and correction
+
+The generation-9 window retained installed controller `1d50efe` and operator
+source `0382fabe`. Its one READ failed: lane status 1, no timeout, exact failed
+result and affirmatively empty command stderr. Checked metadata was valid and
+nonpartial: callback_started 1, callback_completed 1, both binding checks true,
+relay closed, primary family system-unknown-subtype, phase body-after-callback,
+predicate unsupported-family, terminal_result_accepted false. This is consumer
+context, not vendor emission timing or an observed vendor-process exit. No raw
+frame/subtype was retained; no named subtype can be identified as its cause.
+Dispatch remains possibly dispatched; backend requests, tokens and cost remain
+unmeasured. Withdrawal checked, park and fresh Off/idle passed, and custody was
+released. That attempt is spent; this offline delivery grants no retry.
+
+The earlier Rk-only stdout inventory was incomplete. Pinned source has a second
+route: Qi (B@210011077) enqueues to qh; qh stamps uuid/session_id; FL
+(B@233566838) drains uRe directly to the writer. The actual stream-json/verbose
+flags enable this sideband route. Main output writes before OL's aggregation
+classification (B@233565280), whose 38-name exclusion set is not a stdout
+admission filter. Rk (B@233288149) also converts tool_host_result attachments.
+Thus its ordinary system switch cannot close the stdout vocabulary.
+
+### One receive law, two new admissions
+
+Only permission_check_status and session_title_changed are newly consumed.
+The synchronous _inert_sideband helper handles them beside existing exact UI
+notifications at control replies, required snapshots, handshake, active body,
+pending worker and terminal drain. The pinned permission schema (B@208364898)
+and producer (B@218905919) specify string tool_use_id, checking/done status,
+uuid/session_id and optional string agent_id. These are wait notices, never an
+allow decision. The title schema (B@208342936) and producer (B@233017979)
+specify string title plus uuid/session_id. Extra or malformed fields refuse.
+After authority establishes a session, foreign-session frames refuse. Before
+the authoritative background snapshot they seed no session. Neither family
+supplies request/callback correlation or changes startup, callback, terminal,
+deadline, stream accounting or refusal-latch authority. Missing snapshot plus
+EOF remains failure. Maintenance admission is unchanged.
+
+The L0 ClaudeReadRefusalFamily enum owns the complete audited vocabulary;
+its derived lookup recognizes exact literal subtype spellings only. Missing,
+invalid and unknown subtypes have fixed fallback labels. Catalog membership
+does not admit a frame: hooks, tasks, control_request_progress and negative or
+effect-bearing claims still refuse under the existing READ policy. No arbitrary
+vendor string or payload becomes public evidence. The standalone isolated
+reader carries a generated literal set, equality-tested against the canonical
+enum. The real _refused -> refusal_detail -> reader-parser path round-trips
+every audited family in-process within the existing bound; a separate raw
+-I -S -B subprocess proves the standalone vocabulary without controller imports.
+Both protocol and
+metadata source identities now close over the canonical L0 source.
+
+### Condensed pinned source inventory
+
+Static artifact: native Claude Code 2.1.296, 257,068,216 bytes, SHA-256
+`24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de`;
+paired SDK declarations SHA-256
+`fc2866dfe2c01468edb19b1d94f26156bfacecdf1e7f1452b276ed2f8cc0b08f`.
+All B offsets below are zero-based bytes in that native artifact. The audit
+accounts for 130 type-system occurrences: 120 adjacent constructors with 66
+literal labels, ten non-adjacent/variable cases resolving to 69 constructor
+labels, 64 native schemas and 28 SDK declarations, yielding 72 distinct labels.
+This is lexical/schema coverage, not proof that every path is reachable.
+Object spreads and external pass-through frames remain outside lexical closure;
+all unexpected input still refuses. No vendor executable ran for this audit.
+
+| Exact subtype | Constructor B offsets | Native schema B offset |
+| --- | --- | --- |
+| agents_killed | 220103146 | 208316366 |
+| api_error | 220103920 | 208331388 |
+| api_retry | 224423162, 233553210 | 208319012 |
+| away_summary | 220102759 | 208317776 |
+| background_tasks_changed | 224478835, 224483388 | 208339905 |
+| bridge_state | 233618371 | none found |
+| bridge_status | 220101423 | none found |
+| cloud_session_delta | 242811117 | 208391124 |
+| cloud_session_status | 220101647 | none found |
+| code_change_published | 214737965 | 208375155 |
+| commands_changed | 233648648 | 208358623 |
+| compact_boundary | 220103644, 223457025, 223462030, 224421462, 233291287, 237744516 | 208308778 |
+| control_request_progress | 213988467, 233668763 | 208319796 |
+| dev_intent | 229471564, 229473671 | 208381063 |
+| elicitation_complete | 233388841 | 208362637 |
+| feedback_draft_queued | 223915455 | 208341770 |
+| file_attachments_missing | 233280387 | 208388194 |
+| file_snapshot | 216417923 | 208326731 |
+| files_persisted | not found | 208333961 |
+| hook_progress | 216219580 | 208332702 |
+| hook_response | 216220453 | 208332859 |
+| hook_started | 216219458 | 208332579 |
+| informational | 213980014, 215769353, 220731198, 223450833, 225429912, 232879646, 233291556, 233598912, 233605151, 237743113, 237743446, 237743655, 237744153, 237752302 | 208313783 |
+| init | 222723584 | 208284494 |
+| init_milestone | 220911165 | none found |
+| instruction_size_warning | 233408727 | 208316623 |
+| local_command | 220103264, 223452686, 226453064 | none found |
+| local_command_output | not found | 208332355 |
+| memory_recall | 224388758 | 208361648 |
+| memory_saved | 220103016 | 208315971 |
+| mirror_error | 232352052 | 208318587 |
+| model_consent_fallback | 223458582, 223463998, 224230443 | 208325361 |
+| model_fallback | 223458348, 224258108, 224422719, 237751835 | 208324610 |
+| model_refusal_fallback | 218156407, 223457300, 224215770, 224250564, 224421705, 233411770, 237750905 | 208320477 |
+| model_refusal_no_fallback | 223457988, 224226420, 224244545, 224422359 | 208323740 |
+| notification | 210020498, 210071904, 218175394, 224162162, 224420836, 225501968 | 208359047 |
+| peer_message_hold | 233564508 | 208327363 |
+| per_turn_effort_changed | 218222233 | 208387340 |
+| permission_check_status | 218905919 | 208364898 |
+| permission_denied | 224417472, 232482779 | 208362855 |
+| permission_retry | 220101243 | 208314670 |
+| plugin_install | 233633444 | 208333090 |
+| post_turn_summary | 224148252 | 208312584 |
+| scheduled_task_fire | 220101824 | 208327117 |
+| session_metadata | 215553298 | 208313227 |
+| session_state_changed | 215551510, 215551616, 232557764 | 208342639 |
+| session_title_changed | 233017979 | 208342936 |
+| status | 224421043, 224421342, 224475595, 233169453, 233301715, 233595466 | 208311800 |
+| stop_hook_summary | 220102284 | 208315068 |
+| task_notification | 210011381 | 208335680 |
+| task_progress | 219818112 | 208359411 |
+| task_started | 213670110 | 208338128 |
+| task_summary | 215553208 | 208312897 |
+| task_updated | 213668232 | 208339389 |
+| thinking | not found | 208318042 |
+| thinking_tokens | 224420458, 239659308, 239659549 | 208360133 |
+| tool_host_result | 223462891 | none found |
+| turn_duration | 220102561 | 208330415 |
+| turn_handoff_available | 232513578 | 208345157 |
+| turn_preempted | 233172151 | 208385711 |
+| turn_starting | 232558340 | none found |
+| ui_focus | 233652220 | 208357798 |
+| ui_invalidate | 233648373, 233650357 | 208350327 |
+| ui_log | 233650572 | 208351691 |
+| ui_panes | 233650681 | 208356415 |
+| ui_scroll | 233652014 | 208356872 |
+| ui_status | 233628796 | 208353277 |
+| ui_toast | 233628613 | 208352451 |
+| upgrade_relay_marker | 246278217 | 208520994 |
+| vcs_state_changed | 214738644 | 208378654 |
+| worker_shutting_down | 213991956 | 208344165 |
+| workflow_launch_result | 228389183 | none found |
+
+files_persisted, local_command_output and thinking have declarations but no
+direct literal constructor found. workflow_launch_result includes a resolved
+variable constructor; local stdout reachability is not thereby established.
+Private source dumps and host locators are intentionally absent from this record.
+
+### Verification and review disposition
+
+Source-shaped fakes use native UUIDs and cover fragmented/combined sidebands
+at every receive, checking/done, optional agent_id, pre-snapshot foreign display
+session, exact-shape/session refusals, missing-snapshot EOF, pending-worker EOF,
+negative-frame and cancellation races. The focused transaction/core/native
+classifier/reader/metadata/protocol-identity run completed successfully (one
+platform-dependent skip). The compiled harmless C peer completed accepting
+READ models and both maintenance dialogue lengths, and maintained EOF refusal.
+Affirmative record assertions prove both new shapes actually appeared.
+
+The first compiled-peer check exposed an introduced fixture regression: enabling
+READ sidebands during the first three shared observations perturbed maintenance.
+Enablement now follows their EOF check, before READ registration; the corrected
+focused checks passed. Two retargeted mutation strings initially matched twice
+and errored: those were NOT PROVEN. Unique targets were substituted, then all
+17 selected new/affected mutants passed positive baselines and were killed by
+assertion on an unchanged snapshot. The subsequent C-fixture/test correction
+does not change the tested runtime, metadata or killing-test blobs. Inventory
+live-target resolution, changed Python Ruff checks and strict source mypy pass.
+Final-head CI owns the full gate and existing Linux physical/rehearsal lanes.
+No duplicate full local suite or live call was run.
+
+Earlier interrupted broad provider/native checks were stopped near the provider
+end and are not a pass. A previous reader batch hit an unchanged Windows WAL
+state-invalid test transient; its focused unchanged rerun passed, cause unknown.
+The later focused reader/metadata run passed; neither result explains away the
+earlier failure. Platform skips supply no physical Linux proof.
+
+A later Windows diagnostic imposed one 60-second limit across three provider
+cancellation/close cases: two passed, then collection stopped while the third
+was running. This is no per-test failure or deadlock proof. The unchanged base
+revision's single close case passed in 44.18 seconds; the slow aggregate has no
+established cause. An incidental extension of the pre-existing missing-EOF
+test's timeout was restored to its original .05 seconds and passed in isolation.
+No provider runtime change follows from this diagnostic.
+
+Prior independent boundary review approved the two-family, no-authority shape.
+Rejected: blanket catalog admission, treating wait done as permission/callback
+completion, and identifying generation 9's unknown frame by elimination. The
+new fixture correction preserves maintenance rather than widening its policy.
+Required final-head CI and PR review receipts belong in the PR. Controller and
+metadata identities change; installation, fresh qualification and any new
+one-attempt scope require their existing independent authority. Live admitted
+READ success and general production availability remain unproven.

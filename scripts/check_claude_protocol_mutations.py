@@ -1418,21 +1418,21 @@ READ_UI_MUTANTS = (
     ("READ counts each accepted UI record", READ + "ClaudeReadTransaction._ui",
      "self._ui_records += 1", "self._ui_records += 0",
      READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[ui-0]"),
-    ("READ consumes UI while a worker owns the callback", READ + "ClaudeReadTransaction._quiet",
-     "self._background(value) or self._ui(value)", "self._background(value)",
-     READ_TEST + "test_ui_during_worker_is_inert_without_weakening_pending_record_checks"),
+    ("READ consumes inert sidebands while a worker owns the callback", READ + "ClaudeReadTransaction._quiet",
+     "self._background(value) or self._inert_sideband(value)", "self._background(value)",
+     READ_TEST + "test_source_sidebands_cross_every_receive_without_authority[8192]"),
     ("READ consumes UI before a control response", READ + "ClaudeReadTransaction._control",
-     "self._ui(value) or self._background(value)", "self._background(value)",
+     "self._inert_sideband(value) or self._background(value)", "self._background(value)",
      READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[ui-0]"),
     ("READ consumes UI before a required control snapshot", READ + "ClaudeReadTransaction._control",
-     "self._ui(snapshot) or self._lifecycle(snapshot)", "self._lifecycle(snapshot)",
+     "self._inert_sideband(snapshot) or self._lifecycle(snapshot)", "self._lifecycle(snapshot)",
      READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[ui-0]"),
     ("READ consumes UI before dispatched body records", READ + "ClaudeReadTransaction._body",
-     "self._ui(value) or self._lifecycle(value) or self._thinking_tokens(value)",
-     "self._lifecycle(value) or self._thinking_tokens(value)",
+     "self._inert_sideband(value) or self._lifecycle(value)\n                or self._thinking_tokens(value)\n",
+     "self._lifecycle(value) or self._thinking_tokens(value)\n",
      READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[ui-0]"),
     ("READ consumes UI in the terminal tail", READ + "ClaudeReadTransaction._body",
-     "self._ui(value) or self._background(value)", "self._background(value)",
+     "self._inert_sideband(value) or self._background(value)", "self._background(value)",
      READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[ui-0]"),
 )
 MUTANTS += READ_UI_MUTANTS
@@ -2122,8 +2122,8 @@ COMMAND_LIFECYCLE_MUTANTS = (
      READ_TEST + "test_completed_cannot_authorize_a_new_or_buffered_callback[co-buffered]"),
     ("normal lifecycle records are consumed by the READ body",
      READ + "ClaudeReadTransaction._body",
-     "self._ui(value) or self._lifecycle(value) or self._thinking_tokens(value)",
-     "self._ui(value) or self._thinking_tokens(value)",
+     "self._inert_sideband(value) or self._lifecycle(value)\n                or self._thinking_tokens(value)\n",
+     "self._inert_sideband(value) or self._thinking_tokens(value)\n",
      READ_TEST + "test_native_queued_started_lifecycle_preserves_one_exact_read"),
 )
 MUTANTS += COMMAND_LIFECYCLE_MUTANTS
@@ -2250,6 +2250,45 @@ READ_RETRY_CONTEXT_MUTANTS = (
      EVIDENCE_TEST + "test_closed_refusal_projection_never_accepts_unknown_detail_or_wrong_class"),
 )
 MUTANTS += READ_RETRY_CONTEXT_MUTANTS
+
+
+READ_SIDEBAND_MUTANTS = (
+    ("standalone evidence accepts every closed driver family",
+     "scripts.ops.read_attempt_evidence:refusal_context",
+     'family not in REFUSAL_FAMILIES',
+     'family not in REFUSAL_FAMILIES - {"system-task-progress"}',
+     READ_TEST + "test_every_pinned_driver_family_reaches_the_closed_reader_context"),
+    ("advisory metadata cannot cross the established session",
+     READ + "ClaudeReadTransaction._inert_sideband",
+     'if session is not None and value["session_id"] != session:', 'if False:',
+     READ_TEST + "test_source_sideband_shape_and_correlation_refuse[session-permission_check_status]"),
+    ("pre-init advisory metadata never seeds startup authority",
+     READ + "ClaudeReadTransaction._inert_sideband",
+     'session = self._session or self._startup_session',
+     'self._startup_session = str(value["session_id"])\n'
+     '    session = self._session or self._startup_session',
+     READ_TEST + "test_source_sidebands_cross_every_receive_without_authority[8192]"),
+    ("diagnostic catalog membership never grants sideband admission",
+     READ + "ClaudeReadTransaction._inert_sideband", 'return False', 'return True',
+     READ_TEST + "test_diagnostic_catalog_is_not_sideband_admission[permission_denied]"),
+    ("permission wait metadata retains exact producer shape",
+     NATIVE_EVENTS + "exact_permission_check_status",
+     'set(value) in (required, required | {"agent_id"})', 'required <= set(value)',
+     READ_TEST + "test_source_sideband_shape_and_correlation_refuse[extra-permission_check_status]"),
+    ("title metadata retains exact producer shape",
+     NATIVE_EVENTS + "exact_session_title_changed",
+     'set(value) == {"type", "subtype", "title", "uuid", "session_id"}', 'True',
+     READ_TEST + "test_source_sideband_shape_and_correlation_refuse[extra-session_title_changed]"),
+    ("protocol identity closes over the observation vocabulary",
+     PROVIDER + "_protocol_revision", ', claude_read_observation)', ')',
+     PROVIDER_TEST + "test_protocol_revision_covers_the_closed_observation_law"),
+    ("metadata package identity closes over the observation vocabulary",
+     "scripts.ops.read_metadata_session:sources",
+     '        "src/constructicon/core/claude_read_observation.py",\n', '',
+     "tests/test_read_metadata_session.py::"
+     "test_accepts_historical_boot_and_expired_identity_distinct_from_current"),
+)
+MUTANTS += READ_SIDEBAND_MUTANTS
 
 
 if __name__ == "__main__":

@@ -17,6 +17,10 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Literal
 
+from constructicon.core.claude_read_observation import (
+    ClaudeReadRefusalFamily as ClaudeReadRefusalFamily,
+)
+from constructicon.core.claude_read_observation import read_system_observation_family
 from constructicon.core.executor import (
     ExecutorError,
     ExecutorFailure,
@@ -34,6 +38,8 @@ from constructicon.substrate.executors.claude_native import ClaudeNativeStoreMou
 from constructicon.substrate.executors.claude_native_events import (
     ClaudeSystemRecordCategory,
     exact_inert_notification,
+    exact_permission_check_status,
+    exact_session_title_changed,
     read_system_record_category,
     system_record_category,
 )
@@ -105,32 +111,6 @@ class ClaudeReadRefusalCode(StrEnum):
     RATE_LIMIT_REJECTED = "rate-limit-rejected"
     RESULT = "result"
     TAIL = "tail"
-
-
-class ClaudeReadRefusalFamily(StrEnum):
-    """Finite received-frame families; no private subtype is retained."""
-
-    UNPARSED = "unparsed"
-    OTHER_RECORD = "other-record"
-    SYSTEM_INIT = "system-init"
-    SYSTEM_NOTIFICATION = "system-notification"
-    SYSTEM_API_RETRY = "system-api-retry"
-    SYSTEM_MODEL_REFUSAL_NO_FALLBACK = "system-model-refusal-no-fallback"
-    SYSTEM_MODEL_REFUSAL_FALLBACK = "system-model-refusal-fallback"
-    SYSTEM_MEMORY_RECALL = "system-memory-recall"
-    SYSTEM_THINKING_TOKENS = "system-thinking-tokens"
-    SYSTEM_COMPACT_BOUNDARY = "system-compact-boundary"
-    SYSTEM_MODEL_FALLBACK = "system-model-fallback"
-    SYSTEM_MODEL_CONSENT_FALLBACK = "system-model-consent-fallback"
-    SYSTEM_INFORMATIONAL = "system-informational"
-    SYSTEM_STATUS = "system-status"
-    SYSTEM_UI_INVALIDATE = "system-ui-invalidate"
-    SYSTEM_COMMANDS_CHANGED = "system-commands-changed"
-    SYSTEM_UI_PANES = "system-ui-panes"
-    SYSTEM_BACKGROUND_TASKS_CHANGED = "system-background-tasks-changed"
-    SYSTEM_UNKNOWN_SUBTYPE = "system-unknown-subtype"
-    SYSTEM_MISSING_SUBTYPE = "system-missing-subtype"
-    SYSTEM_INVALID_SUBTYPE = "system-invalid-subtype"
 
 
 class ClaudeReadReceivePhase(StrEnum):
@@ -415,14 +395,8 @@ class ClaudeReadTransaction:
         self, code: ClaudeReadRefusalCode, value: dict[str, object] | None = None, *,
         predicate: ClaudeReadRefusalPredicate = ClaudeReadRefusalPredicate.GUARD,
     ) -> _Refused:
-        family = ClaudeReadRefusalFamily.UNPARSED
-        if value is not None:
-            family = ClaudeReadRefusalFamily.OTHER_RECORD
-            if value.get("type") == "system":
-                category = read_system_record_category(value)
-                label = ("unknown-subtype" if category is ClaudeSystemRecordCategory.OTHER
-                         else category.value)
-                family = ClaudeReadRefusalFamily(f"system-{label}")
+        family = (ClaudeReadRefusalFamily.UNPARSED if value is None
+                  else read_system_observation_family(value))
         phase = self._phase
         if phase in (ClaudeReadReceivePhase.BODY_BEFORE_CALLBACK,
                      ClaudeReadReceivePhase.BODY_AFTER_CALLBACK):
@@ -515,6 +489,23 @@ class ClaudeReadTransaction:
         if not exact_inert_notification(value) or self._ui_records >= UI_RECORDS:
             raise self._refused(ClaudeReadRefusalCode.UI, value)
         self._ui_records += 1
+        return True
+
+    def _inert_sideband(self, value: dict[str, object]) -> bool:
+        """Consume exact display/wait metadata without changing any authority."""
+        if self._ui(value):
+            return True
+        if (value.get("type") != "system" or value.get("subtype") not in
+                ("permission_check_status", "session_title_changed")):
+            return False
+        if not (exact_permission_check_status(value) or exact_session_title_changed(value)):
+            raise self._refused(ClaudeReadRefusalCode.SYSTEM_OTHER, value,
+                                predicate=ClaudeReadRefusalPredicate.SHAPE)
+        session = self._session or self._startup_session
+        # A pre-init title/wait frame is not the authoritative startup snapshot.
+        if session is not None and value["session_id"] != session:
+            raise self._refused(ClaudeReadRefusalCode.SYSTEM_OTHER, value,
+                                predicate=ClaudeReadRefusalPredicate.CORRELATION)
         return True
 
     def _lifecycle(self, value: dict[str, object]) -> bool:
@@ -672,7 +663,8 @@ class ClaudeReadTransaction:
                 self._audit()
                 while self._records:
                     value = self._parse(self._records[0])
-                    if not (self._background(value) or self._ui(value) or self._lifecycle(value)
+                    if not (self._background(value) or self._inert_sideband(value)
+                            or self._lifecycle(value)
                             or self._thinking_tokens(value) or self._api_retry(value)
                             or self._heartbeat(value)
                             or self._rate_limit_event(value)
@@ -729,7 +721,7 @@ class ClaudeReadTransaction:
             while True:
                 response = await self._next()
                 value = self._parse(response)
-                if (self._ui(value) or self._background(value) or self._lifecycle(value)
+                if (self._inert_sideband(value) or self._background(value) or self._lifecycle(value)
                         or self._thinking_tokens(value) or self._api_retry(value)
                         or self._rate_limit_event(value)):
                     continue
@@ -756,7 +748,7 @@ class ClaudeReadTransaction:
             if kind == "initialize" and (register or self._state == "terminal"):
                 while True:
                     snapshot = self._parse(await self._next())
-                    if (self._ui(snapshot) or self._lifecycle(snapshot)
+                    if (self._inert_sideband(snapshot) or self._lifecycle(snapshot)
                             or self._thinking_tokens(snapshot) or self._api_retry(snapshot)
                             or self._rate_limit_event(snapshot)):
                         continue
@@ -764,6 +756,9 @@ class ClaudeReadTransaction:
                         await self._mcp(snapshot, handshake=True)
                         continue
                     if register and self._startup_session is None:
+                        if (snapshot.get("type") != "system"
+                                or snapshot.get("subtype") != "background_tasks_changed"):
+                            raise self._unsupported(snapshot)
                         if not _uuid(snapshot.get("session_id")):
                             raise _Refused()
                         self._startup_session = str(snapshot["session_id"])
@@ -898,7 +893,8 @@ class ClaudeReadTransaction:
         await self._control("initialize", register=True)
         while self._handshake != 3:
             value = self._parse(await self._next())
-            if self._lifecycle(value) or self._thinking_tokens(value) or self._api_retry(value):
+            if (self._inert_sideband(value) or self._lifecycle(value)
+                    or self._thinking_tokens(value) or self._api_retry(value)):
                 continue
             if value.get("type") == "system":
                 raise self._unsupported(value)
@@ -912,7 +908,8 @@ class ClaudeReadTransaction:
                                  "parent_tool_use_id": None, "client_composed": True}), user=True)
         while True:
             value = self._parse(await self._next())
-            if (self._ui(value) or self._lifecycle(value) or self._thinking_tokens(value)
+            if (self._inert_sideband(value) or self._lifecycle(value)
+                    or self._thinking_tokens(value)
                     or self._api_retry(value)
                     or self._heartbeat(value)):
                 continue
@@ -994,7 +991,8 @@ class ClaudeReadTransaction:
         while not self._eof or self._records:
             if self._records:
                 value = self._parse(self._records.pop(0))
-                if not (self._ui(value) or self._background(value) or self._lifecycle(value)
+                if not (self._inert_sideband(value) or self._background(value)
+                        or self._lifecycle(value)
                         or self._thinking_tokens(value) or self._api_retry(value)
                         or self._rate_limit_event(value)):
                     raise (self._unsupported(value) if value.get("type") == "system"

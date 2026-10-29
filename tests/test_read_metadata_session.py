@@ -203,6 +203,9 @@ def test_accepts_historical_boot_and_expired_identity_distinct_from_current(tmp_
     assert pins["sources"].get("scripts/ops/read_attempt_evidence.py") == metadata.sha(
         (metadata.ROOT / "scripts/ops/read_attempt_evidence.py").read_bytes()
     )
+    assert pins["sources"].get("src/constructicon/core/claude_read_observation.py") == metadata.sha(
+        (metadata.ROOT / "src/constructicon/core/claude_read_observation.py").read_bytes()
+    )
     script = (package / "phase.sh").read_bytes()
     assert commands._fence("guard", "G1: private drift boundary").encode() in script
     assert b'} > "$PWD/drift-marker.stdout"\n' in script
@@ -375,6 +378,24 @@ def test_context_checked_and_historical_flat_observation_remains_valid(accepted)
         "terminal_result_accepted": accepted,
     }
     assert metadata.observation_checked(session.json_bytes(value)) == value
+
+
+def test_metadata_accepts_each_closed_family_and_rejects_unknown():
+    from constructicon.core.claude_read_observation import ClaudeReadRefusalFamily
+
+    value = observation()
+    event = value["journal"]["events"][0]
+    event["reason"] = "claude_read_system_other"
+    context = event["refusal_context"] = {
+        "family": "", "phase": "body-after-callback", "predicate": "unsupported-family",
+        "terminal_result_accepted": False,
+    }
+    for family in ClaudeReadRefusalFamily:
+        context["family"] = family.value
+        assert metadata.observation_checked(session.json_bytes(value)) == value
+    context["family"] = PRIVATE
+    with pytest.raises(commands.Refused):
+        metadata.observation_checked(session.json_bytes(value))
 
 
 @pytest.mark.parametrize("fault", ["extra", "private", "boolean", "wrong-kind", "wrong-reason"])

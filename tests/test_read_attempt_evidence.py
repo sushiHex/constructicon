@@ -177,6 +177,35 @@ def test_context_vocabulary_matches_driver():
     assert {v.value for v in ClaudeReadRefusalPredicate} == reader.REFUSAL_PREDICATES
 
 
+def test_isolated_reader_projects_every_closed_family_without_controller_imports():
+    program = """\
+import json, sys
+namespace = {'__name__': 'standalone_reader'}
+with open(sys.argv[1], encoding='utf-8') as source:
+    exec(compile(source.read(), sys.argv[1], 'exec'), namespace)
+result = {}
+for family in sorted(namespace['REFUSAL_FAMILIES']):
+    detail = ('Claude READ refused [known_refusal=system-other; family=' + family +
+              '; phase=body-after-callback; predicate=unsupported-family; '
+              'terminal_result_accepted=false]')
+    result[family] = namespace['refusal_context'](detail)
+result['private'] = namespace['refusal_context'](detail.replace(family, 'PRIVATE'))
+assert not any(name.startswith('constructicon') for name in sys.modules)
+print(json.dumps(result))
+"""
+    child = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", "-c", program, reader.__file__],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, check=True,
+    )
+    observed = json.loads(child.stdout)
+    assert observed.pop("private") is None
+    assert set(observed) == reader.REFUSAL_FAMILIES
+    for family, (reason, context) in observed.items():
+        assert reason == "claude_read_system_other"
+        assert context == {"family": family, "phase": "body-after-callback",
+                           "predicate": "unsupported-family", "terminal_result_accepted": False}
+
+
 @pytest.mark.parametrize("accepted", ["true", "false"])
 def test_context_projects_exact_detail_independently_of_callback_counts(files, accepted):
     detail = ("Claude READ refused [known_refusal=api-retry; family=system-api-retry; "
@@ -801,6 +830,7 @@ def test_maximum_closed_context_projection_fits_transport_bound(files):
               f"phase={max(reader.REFUSAL_PHASES, key=len)}; "
               f"predicate={max(reader.REFUSAL_PREDICATES, key=len)}; "
               "terminal_result_accepted=false]")
+    assert len(detail.encode()) <= 256
     payload = json.dumps({"error_type": "ContractViolation", "error": detail})
     with sqlite3.connect(files / "read.sqlite") as db:
         db.execute("UPDATE events SET payload=?", (payload,))

@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from constructicon.core import claude_read_observation
 from constructicon.core import qualification as qualification_law
 from constructicon.core.address import GitSha
 from constructicon.core.errors import ContractViolation
@@ -761,11 +762,16 @@ class ClaudeOperatorHandle:
             raise BaseExceptionGroup("Claude READ custody release failed", errors)
 
 
-PROTOCOL_REVISION = digest("claude-read-protocol", 2, {
-    module.__name__: inspect.getsource(module)
-    for module in (claude_protocol, claude_startup, claude_read,
-                   claude_initialize, claude_native_events)
-})
+def _protocol_revision() -> Digest:
+    """Bind the complete decoder and closed observation vocabulary."""
+    return digest("claude-read-protocol", 2, {
+        module.__name__: inspect.getsource(module)
+        for module in (claude_protocol, claude_startup, claude_read,
+                       claude_initialize, claude_native_events, claude_read_observation)
+    })
+
+
+PROTOCOL_REVISION = _protocol_revision()
 ADAPTER_REVISION = digest("claude-read-owned-adapter", 2, {
     module.__name__: inspect.getsource(module)
     for module in (sys.modules[__name__], claude_read_worker, claude_native,
