@@ -16,6 +16,29 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude READ observational sidebands and source inventory
+
+READ now consumes only the exact pinned permission-check wait and session-title
+frames through one synchronous receive helper. They establish no permission,
+session, callback, terminal or budget authority. Malformed frames refuse;
+once a session is established, foreign-session frames also refuse. Hooks,
+tasks, negative/effect claims and unknown families retain
+their existing refusals. One L0 diagnostic vocabulary covers all 72 audited
+constructor/schema labels; the isolated metadata reader is equality-checked,
+and both source identities bind that law. The living M8 record retains the
+pinned hashes/offset inventory, proof limits and focused verification.
+
+Generation 9 completed one callback but failed overall on an unknown system
+subtype after callback, with terminal acceptance false. The exact frame was
+not retained. Withdrawal, park, fresh Off/idle and custody release completed;
+the attempt remains spent. Earlier Rk-only inventory did not close stdout:
+Qi's separate sideband queue drains through FL under the actual output flags.
+No newly named family is identified as the historical cause. This slice used
+static source and credential-free fakes only; live READ success remains
+unproven and no new host/model attempt is selected.
+
+---
+
 ## Claude owner-approval preparation uses the operator CLI
 
 The shared READ CLI now writes the existing owner-approval review artifact from

@@ -110,6 +110,11 @@ async def test_compiled_fake_peer_completes_the_actual_bounded_read_protocol(wir
                if json.loads(line).get("subtype") == "api_retry"]
     assert len(retries) == 1 and retries[0]["error_status"] is None
     assert retries[0]["no_response"] == {"waited_ms": 1, "retry_wait_ms": 2}
+    records = [json.loads(line) for line in b"".join(native_records).splitlines()]
+    waits = [row for row in records if row.get("subtype") == "permission_check_status"]
+    titles = [row for row in records if row.get("subtype") == "session_title_changed"]
+    assert {row["status"] for row in waits} == {"checking", "done"}
+    assert titles and any(row["session_id"] != transaction._session for row in titles)
     assert transaction._state == "drained" and transaction._handshake == 3
     assert transaction._calls_completed == (0 if model == "fixture-zero" else 1)
     assert transaction._reply == {"fixture-read": SEED_CALC, "fixture-ready": "ready\n",

@@ -51,6 +51,7 @@ def sources():
         "scripts/ops/claude_read_session.py",
         "scripts/ops/claude_read_commands.py",
         "scripts/m8_procedure_package.py",
+        "src/constructicon/core/claude_read_observation.py",
         "src/constructicon/core/control.py",
         "src/constructicon/core/address.py",
         "src/constructicon/core/identity.py",

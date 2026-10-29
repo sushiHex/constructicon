@@ -91,6 +91,22 @@ static void wire_retry(void) {
          "\"uuid\":\"" WIRE_UUID "\",\"session_id\":\"" WIRE_SESSION "\"}");
 }
 
+/* Pinned q9e wait notices and aDo title push. Tool labels are display data,
+ * not JSON-RPC ids; title pushes may precede the authoritative init snapshot. */
+static void wire_permission_check(const char *status) {
+    printf("{\"type\":\"system\",\"subtype\":\"permission_check_status\","
+           "\"tool_use_id\":\"tool-use-id\",\"status\":\"%s\","
+           "\"uuid\":\"" WIRE_UUID "\",\"session_id\":\"" WIRE_SESSION "\"}\n", status);
+}
+
+static void wire_title(const char *session) {
+    printf("{\"type\":\"system\",\"subtype\":\"session_title_changed\","
+           "\"title\":\"scripted title\",\"uuid\":\"" WIRE_UUID "\","
+           "\"session_id\":\"%s\"}\n", session);
+}
+
+static int wire_read_sidebands = 0;
+
 static void wire_lifecycle(const char *user_uuid, const char *state) {
     printf("{\"type\":\"command_lifecycle\",\"command_uuid\":%s,\"state\":\"%s\","
            "\"uuid\":\"" WIRE_UUID "\",\"session_id\":\"" WIRE_SESSION "\"}\n",
@@ -103,6 +119,10 @@ static void wire_observation(const char *kind, const char *model, int background
     WIRE_CHECK(strstr(wire_frame, "\"type\":\"control_request\"") != NULL);
     WIRE_CHECK(strstr(wire_frame, kind) != NULL);
     wire_token("\"request_id\":", identifier, sizeof(identifier));
+    if (wire_read_sidebands) {
+        wire_title(WIRE_SESSION);
+        wire_permission_check("done");
+    }
     if (!strcmp(kind, "\"subtype\":\"initialize\"")) {
         wire_success(identifier,
             "{\"account\":{\"apiProvider\":\"firstParty\",\"subscriptionType\":\"Claude Pro\"},"
@@ -195,12 +215,16 @@ static int claude_wire(int argc, char **argv) {
     wire_observation("\"subtype\":\"get_settings\"", model, 0);
     wire_observation("\"subtype\":\"get_hooks_listing\"", model, 0);
     if (wire_input_closed()) return 0;
+    wire_read_sidebands = 1;
+    wire_title(WIRE_UUID); /* Pre-snapshot session is deliberately not authoritative. */
     wire_observation("\"subtype\":\"initialize\"", model, 0);
     WIRE_CHECK(strstr(wire_frame, "\"sdkMcpServers\":[\"constructicon_read\"]") != NULL);
     wire_mcp("outer-initialize", "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"initialize\","
              "\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},"
              "\"clientInfo\":{\"name\":\"claude-code\",\"version\":\"2.1.296\"}}}");
+    wire_title(WIRE_UUID);
     wire_background();
+    wire_permission_check("checking");
     wire_ack("\"request_id\":\"outer-initialize\"", "\"id\":7");
     wire_mcp("outer-notifications/initialized",
              "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");
@@ -246,11 +270,15 @@ static int claude_wire(int argc, char **argv) {
              "\"uuid\":\"00000000-0000-4000-8000-000000000004\"}");
         puts("{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed\","
              "\"isUsingOverage\":false},\"uuid\":\"" WIRE_UUID "\",\"session_id\":\"" WIRE_SESSION "\"}");
+        wire_permission_check("done");
+        wire_title(WIRE_SESSION);
         wire_ack("\"request_id\":\"outer-tools/call\"", "\"id\":19");
         WIRE_CHECK(strstr(wire_frame, "\"isError\":false") != NULL);
         wire_token("\"text\":", result, sizeof(result));
     } else strcpy(result, "\"zero-callback\"");
     WIRE_CHECK(strlen(result) < WIRE_RECORD_BYTES - 2048);
+    wire_permission_check("done");
+    wire_title(WIRE_SESSION);
     wire_retry();
     wire_thinking(user_uuid, 5, 2);
     wire_lifecycle(user_uuid, "completed");

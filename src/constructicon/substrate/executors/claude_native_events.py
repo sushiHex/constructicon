@@ -131,3 +131,23 @@ def exact_commands_changed(value: object) -> bool:
 def exact_inert_notification(value: object) -> bool:
     """One closed framing exception; validated metadata supplies no authority."""
     return exact_ui_invalidate(value) or exact_commands_changed(value)
+
+
+def exact_permission_check_status(value: object) -> bool:
+    """Pinned zF schema B@208364898 and q9e producer B@218905919."""
+    if type(value) is not dict:
+        return False
+    required = {"type", "subtype", "tool_use_id", "status", "uuid", "session_id"}
+    return (set(value) in (required, required | {"agent_id"})
+            and value.get("type") == "system"
+            and value.get("subtype") == "permission_check_status"
+            and all(type(field) is str for field in value.values())
+            and value.get("status") in ("checking", "done"))
+
+
+def exact_session_title_changed(value: object) -> bool:
+    """Pinned rF schema B@208342936 and aDo producer B@233017979."""
+    return (type(value) is dict
+            and set(value) == {"type", "subtype", "title", "uuid", "session_id"}
+            and value.get("type") == "system" and value.get("subtype") == "session_title_changed"
+            and all(type(field) is str for field in value.values()))
