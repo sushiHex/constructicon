@@ -2087,7 +2087,7 @@ async def test_missing_eof_is_timeout():
 
     peer.close_stdin = close
     launcher = Launcher(peer)
-    outcome, calls = await run(launcher)
+    outcome, calls = await run(launcher, timeout=.05)
     assert isinstance(outcome, ExecutorFailure) and outcome.error.kind == "timeout"
     assert launcher.joined and len(calls) == 1
 

@@ -10369,6 +10369,14 @@ state-invalid test transient; its focused unchanged rerun passed, cause unknown.
 The later focused reader/metadata run passed; neither result explains away the
 earlier failure. Platform skips supply no physical Linux proof.
 
+A later Windows diagnostic imposed one 60-second limit across three provider
+cancellation/close cases: two passed, then collection stopped while the third
+was running. This is no per-test failure or deadlock proof. The unchanged base
+revision's single close case passed in 44.18 seconds; the slow aggregate has no
+established cause. An incidental extension of the pre-existing missing-EOF
+test's timeout was restored to its original .05 seconds and passed in isolation.
+No provider runtime change follows from this diagnostic.
+
 Prior independent boundary review approved the two-family, no-authority shape.
 Rejected: blanket catalog admission, treating wait done as permission/callback
 completion, and identifying generation 9's unknown frame by elimination. The
