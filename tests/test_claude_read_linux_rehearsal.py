@@ -233,13 +233,14 @@ def test_generated_phases_carry_actual_receipts_through_withdrawal(
     evidence.mkdir()
     captures.mkdir()
     original_run = subprocess.run
-    # Synthetic authority is an explicit input to this disposable test only.
+    # A synthetic owner decision is an explicit input to this disposable test only.
     approval_path = evidence / "owner-approval.json"
-    _json(approval_path, {"schema": 1,
-                          "owner_decision": "https://github.com/sushiHex/constructicon/issues/77#issuecomment-1",
-                          "procedure_sha256": commands.DOC_SHA,
-                          "source_c": record["controller_commit"],
-                          "acceptance": commands.ACCEPTANCE})
+    prepared_approval = _cli(
+        "prepare-owner-approval", "--controller", record["controller_commit"],
+        "--owner-decision", "https://github.com/sushiHex/constructicon/issues/77#issuecomment-1",
+        "--out", str(approval_path), "--operator-revision", revision,
+    )
+    assert prepared_approval == {"owner_approval_sha256": commands.sha(approval_path.read_bytes())}
     operator_home = Path("/home/runner")
     assert os.getuid() == operator_home.stat().st_uid
 
