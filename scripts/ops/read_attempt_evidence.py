@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 
 ATTEMPT_BYTES, DB_BYTES, EVENT_BYTES, EVENT_LIMIT = 32768, 16 * 1024 * 1024, 8192, 64
+OUTPUT_BYTES = 32768
 EVENTS = frozenset(
     {
         "RunStarted",
@@ -83,7 +84,48 @@ REASONS = {
     "Claude READ refused [known_refusal=rate-limit-rejected]": "claude_read_rate_limit_rejected",
     "Claude READ refused [known_refusal=result]": "claude_read_result",
     "Claude READ refused [known_refusal=tail]": "claude_read_tail",
+    "Claude READ refused [known_refusal=api-retry]": "claude_read_api_retry",
+    "Claude READ refused [known_refusal=thinking-tokens]": "claude_read_thinking_tokens",
 }
+# Duplicated closed vocabulary: this reader runs standalone without controller imports.
+REFUSAL_FAMILIES = frozenset({
+    "unparsed", "other-record", "system-init", "system-notification", "system-api-retry",
+    "system-model-refusal-no-fallback", "system-model-refusal-fallback", "system-memory-recall",
+    "system-thinking-tokens", "system-compact-boundary", "system-model-fallback",
+    "system-model-consent-fallback", "system-informational", "system-status",
+    "system-ui-invalidate", "system-commands-changed", "system-ui-panes",
+    "system-background-tasks-changed", "system-unknown-subtype", "system-missing-subtype",
+    "system-invalid-subtype",
+})
+REFUSAL_PHASES = frozenset({
+    "startup", "body-before-callback", "body-after-callback", "callback-barrier",
+    "post-result", "drain",
+})
+REFUSAL_PREDICATES = frozenset({
+    "shape", "correlation", "phase", "explicit-negative", "unsupported-family", "guard",
+})
+REFUSAL_PATTERN = re.compile(
+    r"Claude READ refused \[known_refusal=([a-z-]+); family=([a-z-]+); "
+    r"phase=([a-z-]+); predicate=([a-z-]+); terminal_result_accepted=(true|false)\]"
+)
+
+
+def refusal_context(value):
+    """Return only exact closed context, never a partially parsed vendor value."""
+    if type(value) is not str:
+        return None
+    match = REFUSAL_PATTERN.fullmatch(value)
+    if match is None:
+        return None
+    code, family, phase, predicate, accepted = match.groups()
+    reason = REASONS.get(f"Claude READ refused [known_refusal={code}]")
+    if (reason is None or family not in REFUSAL_FAMILIES or phase not in REFUSAL_PHASES
+            or predicate not in REFUSAL_PREDICATES):
+        return None
+    return reason, {
+        "family": family, "phase": phase, "predicate": predicate,
+        "terminal_result_accepted": accepted == "true",
+    }
 PHASES = {"acquired", "intent", "outcome"}
 DISPATCH = {"completed", "not dispatched", "possibly dispatched"}
 STATUS = {"success", "partial", "failure"}
@@ -397,6 +439,10 @@ def _journal(root, uid, authorization, run, maximum):
                         else "other"
                     ),
                 )
+                context = (refusal_context(failure["error"])
+                           if failure["error_type"] == "ContractViolation" else None)
+                if context is not None:
+                    event["reason"], event["refusal_context"] = context
             events.append(event)
         # A closed WAL database may make read-only SQLite create private sidecars.
         # Guard newly present auxiliaries too; appearance alone is not invalidity.
@@ -450,7 +496,7 @@ def collect(run_root, expected_authorization_id, expected_run_id, max_epoch=1):
     _root(root, uid)
     after = root.lstat()
     require((directory.st_dev, directory.st_ino) == (after.st_dev, after.st_ino))
-    require(len(json.dumps(result).encode("utf-8")) <= 16384)
+    require(len(json.dumps(result).encode("utf-8")) <= OUTPUT_BYTES)
     return result
 
 

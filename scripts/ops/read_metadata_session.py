@@ -295,7 +295,7 @@ def transport(package, manifest, expected_revision, history, captures):
     for suffix, command in zip(("preflight", "mkdir", "copy"), argv[:3], strict=True):
         status, out, err = session.capture("metadata-" + suffix, captures, command, 120)
         require(commands.completed_zero(status) and out == err == b"")
-    status, _, _ = session.capture("metadata-native", captures, argv[3], 60, 16384)
+    status, _, _ = session.capture("metadata-native", captures, argv[3], 60, reader.OUTPUT_BYTES)
     return status
 
 
@@ -386,12 +386,29 @@ def observation_checked(raw):
         for event in journal["events"]:
             require(
                 type(event) is dict
-                and set(event) == {"kind", "error_type", "reason"}
+                and set(event) in ({"kind", "error_type", "reason"},
+                                   {"kind", "error_type", "reason", "refusal_context"})
                 and _closed(event["kind"], reader.EVENTS | {"other"})
                 and _closed(event["error_type"], reader.ERRORS | {"other"}, nullable=True)
                 and _closed(event["reason"], {*reader.REASONS.values(), "other"}, nullable=True)
             )
-    require(len(raw) <= 16384)
+            if "refusal_context" in event:
+                context = event["refusal_context"]
+                require(
+                    event["kind"] == "NodeFailed"
+                    and event["error_type"] == "ContractViolation"
+                    and event["reason"] in {
+                        reason for message, reason in reader.REASONS.items()
+                        if message.startswith("Claude READ refused [known_refusal=")
+                    }
+                    and type(context) is dict
+                    and set(context) == {"family", "phase", "predicate", "terminal_result_accepted"}
+                    and _closed(context["family"], reader.REFUSAL_FAMILIES)
+                    and _closed(context["phase"], reader.REFUSAL_PHASES)
+                    and _closed(context["predicate"], reader.REFUSAL_PREDICATES)
+                    and type(context["terminal_result_accepted"]) is bool
+                )
+    require(len(raw) <= reader.OUTPUT_BYTES)
     return value
 
 
@@ -418,7 +435,9 @@ def check(package, manifest, expected_revision, history, captures):
         and status["timed_out"] is False
         and bounded(captures / "metadata-native.stderr", 4096, empty=True) == b""
     )
-    observation = observation_checked(bounded(captures / "metadata-native.stdout", 16384))
+    observation = observation_checked(
+        bounded(captures / "metadata-native.stdout", reader.OUTPUT_BYTES)
+    )
     invalid = any(observation[k]["state"] == "invalid" for k in ("attempt", "journal"))
     require((status["returncode"] == 1) == invalid)
     return {"collection_checked": not invalid, "observation": observation}

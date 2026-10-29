@@ -13,7 +13,7 @@ import math
 import secrets
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Literal
 
@@ -34,6 +34,7 @@ from constructicon.substrate.executors.claude_native import ClaudeNativeStoreMou
 from constructicon.substrate.executors.claude_native_events import (
     ClaudeSystemRecordCategory,
     exact_inert_notification,
+    read_system_record_category,
     system_record_category,
 )
 from constructicon.substrate.executors.claude_protocol import (
@@ -77,6 +78,8 @@ class ClaudeReadRefusalCode(StrEnum):
     SYSTEM_UI_PANES = "system-ui-panes"
     SYSTEM_BACKGROUND = "system-background"
     SYSTEM_OTHER = "system-other"
+    API_RETRY = "api-retry"
+    THINKING_TOKENS = "thinking-tokens"
     LIFECYCLE = "command-lifecycle"
     LIFECYCLE_TERMINATED = "command-terminated"
     STREAM_BOUND = "stream-bound"
@@ -104,34 +107,125 @@ class ClaudeReadRefusalCode(StrEnum):
     TAIL = "tail"
 
 
-def refusal_detail(code: ClaudeReadRefusalCode) -> str:
+class ClaudeReadRefusalFamily(StrEnum):
+    """Finite received-frame families; no private subtype is retained."""
+
+    UNPARSED = "unparsed"
+    OTHER_RECORD = "other-record"
+    SYSTEM_INIT = "system-init"
+    SYSTEM_NOTIFICATION = "system-notification"
+    SYSTEM_API_RETRY = "system-api-retry"
+    SYSTEM_MODEL_REFUSAL_NO_FALLBACK = "system-model-refusal-no-fallback"
+    SYSTEM_MODEL_REFUSAL_FALLBACK = "system-model-refusal-fallback"
+    SYSTEM_MEMORY_RECALL = "system-memory-recall"
+    SYSTEM_THINKING_TOKENS = "system-thinking-tokens"
+    SYSTEM_COMPACT_BOUNDARY = "system-compact-boundary"
+    SYSTEM_MODEL_FALLBACK = "system-model-fallback"
+    SYSTEM_MODEL_CONSENT_FALLBACK = "system-model-consent-fallback"
+    SYSTEM_INFORMATIONAL = "system-informational"
+    SYSTEM_STATUS = "system-status"
+    SYSTEM_UI_INVALIDATE = "system-ui-invalidate"
+    SYSTEM_COMMANDS_CHANGED = "system-commands-changed"
+    SYSTEM_UI_PANES = "system-ui-panes"
+    SYSTEM_BACKGROUND_TASKS_CHANGED = "system-background-tasks-changed"
+    SYSTEM_UNKNOWN_SUBTYPE = "system-unknown-subtype"
+    SYSTEM_MISSING_SUBTYPE = "system-missing-subtype"
+    SYSTEM_INVALID_SUBTYPE = "system-invalid-subtype"
+
+
+class ClaudeReadReceivePhase(StrEnum):
+    STARTUP = "startup"
+    BODY_BEFORE_CALLBACK = "body-before-callback"
+    BODY_AFTER_CALLBACK = "body-after-callback"
+    CALLBACK_BARRIER = "callback-barrier"
+    POST_RESULT = "post-result"
+    DRAIN = "drain"
+
+
+class ClaudeReadRefusalPredicate(StrEnum):
+    SHAPE = "shape"
+    CORRELATION = "correlation"
+    PHASE = "phase"
+    EXPLICIT_NEGATIVE = "explicit-negative"
+    UNSUPPORTED_FAMILY = "unsupported-family"
+    GUARD = "guard"
+
+
+@dataclass(frozen=True)
+class ClaudeReadRefusalContext:
+    code: ClaudeReadRefusalCode
+    family: ClaudeReadRefusalFamily
+    phase: ClaudeReadReceivePhase
+    predicate: ClaudeReadRefusalPredicate
+    terminal_result_accepted: bool
+
+
+def refusal_detail(
+    code: ClaudeReadRefusalCode, *, context: ClaudeReadRefusalContext | None = None,
+) -> str:
     if type(code) is not ClaudeReadRefusalCode:
         raise ValueError("invalid Claude READ refusal code")
-    return f"Claude READ refused [known_refusal={code.value}]"
+    if context is None:
+        return f"Claude READ refused [known_refusal={code.value}]"
+    if (type(context) is not ClaudeReadRefusalContext or context.code is not code
+            or type(context.family) is not ClaudeReadRefusalFamily
+            or type(context.phase) is not ClaudeReadReceivePhase
+            or type(context.predicate) is not ClaudeReadRefusalPredicate
+            or type(context.terminal_result_accepted) is not bool):
+        raise ValueError("invalid Claude READ refusal context")
+    accepted = "true" if context.terminal_result_accepted else "false"
+    return (f"Claude READ refused [known_refusal={code.value}; family={context.family.value}; "
+            f"phase={context.phase.value}; predicate={context.predicate.value}; "
+            f"terminal_result_accepted={accepted}]")
+
+
+def parse_refusal_detail(value: object) -> ClaudeReadRefusalContext | None:
+    """Parse only the exact closed public grammar, never arbitrary native text."""
+    if (type(value) is not str or len(value) > 256
+            or not value.startswith("Claude READ refused [known_refusal=")):
+        return None
+    try:
+        fields = (value.removeprefix("Claude READ refused [known_refusal=")
+                  .removesuffix("]").split("; "))
+        if len(fields) != 5:
+            return None
+        code = ClaudeReadRefusalCode(fields[0])
+        family = ClaudeReadRefusalFamily(fields[1].removeprefix("family="))
+        phase = ClaudeReadReceivePhase(fields[2].removeprefix("phase="))
+        predicate = ClaudeReadRefusalPredicate(fields[3].removeprefix("predicate="))
+        if fields[4] not in ("terminal_result_accepted=true", "terminal_result_accepted=false"):
+            return None
+        context = ClaudeReadRefusalContext(code, family, phase, predicate,
+                                          fields[4] == "terminal_result_accepted=true")
+        return context if refusal_detail(code, context=context) == value else None
+    except ValueError:
+        return None
 
 
 def known_refusal_detail(value: object) -> str | None:
-    """The provider/API may forward only an exact member of this closed catalog."""
-    if type(value) is str and value in {refusal_detail(code) for code in ClaudeReadRefusalCode}:
+    """The provider/API may forward only exact closed contexts or legacy codes."""
+    if type(value) is str and (value in {refusal_detail(code) for code in ClaudeReadRefusalCode}
+                              or parse_refusal_detail(value) is not None):
         return value
     return None
 
 
 class _Refused(Exception):
-    """Private static refusal; no wire value is included."""
+    """Private static refusal; context binds this failure before any cleanup await."""
 
-    def __init__(self, code: ClaudeReadRefusalCode | None = None) -> None:
+    def __init__(self, code: ClaudeReadRefusalCode | None = None, *,
+                 context: ClaudeReadRefusalContext | None = None) -> None:
         super().__init__()
-        self.code = code
+        self.code, self.context = code, context
 
 
-def _known_primary_refusal(error: BaseException) -> ClaudeReadRefusalCode | None:
+def _known_primary_refusal(error: BaseException) -> _Refused | None:
     # A cleanup group, arbitrary cause chain or cancellation cannot prove a gate.
     if (type(error) is ProcessExchangeError and error.result.timed_out is False
             and type(error.__cause__) is _Refused):
         error = error.__cause__
     if type(error) is _Refused and type(error.code) is ClaudeReadRefusalCode:
-        return error.code
+        return error
     return None
 
 
@@ -178,7 +272,7 @@ def _unhandled(value: dict[str, object]) -> ClaudeReadRefusalCode:
         ClaudeSystemRecordCategory.BACKGROUND_TASKS_CHANGED:
             ClaudeReadRefusalCode.SYSTEM_BACKGROUND,
         ClaudeSystemRecordCategory.OTHER: ClaudeReadRefusalCode.SYSTEM_OTHER,
-    }[system_record_category(value)]
+    }.get(system_record_category(value), ClaudeReadRefusalCode.SYSTEM_OTHER)
 
 
 def _barrier_refusal(value: dict[str, object]) -> ClaudeReadRefusalCode:
@@ -314,6 +408,44 @@ class ClaudeReadTransaction:
         self._reply: str | None = None
         self._rate_limit: RateLimitInfo | None = None
         self._usage: Usage | None = None
+        self._phase = ClaudeReadReceivePhase.STARTUP
+        self._terminal_result_accepted = False
+
+    def _refused(
+        self, code: ClaudeReadRefusalCode, value: dict[str, object] | None = None, *,
+        predicate: ClaudeReadRefusalPredicate = ClaudeReadRefusalPredicate.GUARD,
+    ) -> _Refused:
+        family = ClaudeReadRefusalFamily.UNPARSED
+        if value is not None:
+            family = ClaudeReadRefusalFamily.OTHER_RECORD
+            if value.get("type") == "system":
+                category = read_system_record_category(value)
+                label = ("unknown-subtype" if category is ClaudeSystemRecordCategory.OTHER
+                         else category.value)
+                family = ClaudeReadRefusalFamily(f"system-{label}")
+        phase = self._phase
+        if phase in (ClaudeReadReceivePhase.BODY_BEFORE_CALLBACK,
+                     ClaudeReadReceivePhase.BODY_AFTER_CALLBACK):
+            phase = (ClaudeReadReceivePhase.BODY_AFTER_CALLBACK if self._calls_completed
+                     else ClaudeReadReceivePhase.BODY_BEFORE_CALLBACK)
+        return _Refused(code, context=ClaudeReadRefusalContext(
+            code, family, phase, predicate, self._terminal_result_accepted,
+        ))
+
+    def _parse(self, raw: bytes) -> dict[str, object]:
+        try:
+            return _parse(raw)
+        except _Refused as error:
+            assert error.code is not None
+            raise self._refused(error.code, predicate=ClaudeReadRefusalPredicate.SHAPE) from None
+
+    def _unsupported(self, value: dict[str, object]) -> _Refused:
+        category = read_system_record_category(value)
+        predicate = ClaudeReadRefusalPredicate.UNSUPPORTED_FAMILY
+        if category in (ClaudeSystemRecordCategory.MISSING_SUBTYPE,
+                        ClaudeSystemRecordCategory.INVALID_SUBTYPE):
+            predicate = ClaudeReadRefusalPredicate.SHAPE
+        return self._refused(_unhandled(value), value, predicate=predicate)
 
     def _check(self) -> None:
         if self._check_control is not None:
@@ -330,21 +462,21 @@ class ClaudeReadTransaction:
 
     def _receive(self, chunk: bytes) -> None:
         if type(chunk) is not bytes or len(chunk) > 8192:
-            raise _Refused(ClaudeReadRefusalCode.STREAM_BOUND)
+            raise self._refused(ClaudeReadRefusalCode.STREAM_BOUND)
         self._output_bytes += len(chunk)
         if self._output_bytes > self._output_limit:
-            raise _Refused(ClaudeReadRefusalCode.STREAM_BOUND)
+            raise self._refused(ClaudeReadRefusalCode.STREAM_BOUND)
         if not chunk:
             self._eof = True
             return
         self._buffer.extend(chunk)
         while (newline := self._buffer.find(b"\n")) >= 0:
             if newline + 1 > RECORD_BYTES:
-                raise _Refused(ClaudeReadRefusalCode.STREAM_BOUND)
+                raise self._refused(ClaudeReadRefusalCode.STREAM_BOUND)
             self._records.append(bytes(self._buffer[:newline + 1]))
             del self._buffer[:newline + 1]
         if len(self._buffer) >= RECORD_BYTES:
-            raise _Refused(ClaudeReadRefusalCode.STREAM_BOUND)
+            raise self._refused(ClaudeReadRefusalCode.STREAM_BOUND)
         self._start_read()
 
     def _audit(self) -> None:
@@ -364,7 +496,7 @@ class ClaudeReadTransaction:
         self._audit()
         while not self._records:
             if self._eof or self._pending is None:
-                raise _Refused(ClaudeReadRefusalCode.STREAM_END)
+                raise self._refused(ClaudeReadRefusalCode.STREAM_END)
             await self._wait_read()
         return self._records.pop(0)
 
@@ -381,7 +513,7 @@ class ClaudeReadTransaction:
                 or value.get("subtype") not in ("ui_invalidate", "commands_changed")):
             return False
         if not exact_inert_notification(value) or self._ui_records >= UI_RECORDS:
-            raise _Refused(ClaudeReadRefusalCode.UI)
+            raise self._refused(ClaudeReadRefusalCode.UI, value)
         self._ui_records += 1
         return True
 
@@ -398,12 +530,13 @@ class ClaudeReadTransaction:
                 or type(state) is not str
                 or state not in ("queued", "started", "completed", "cancelled", "discarded",
                                  "refused")):
-            raise _Refused(ClaudeReadRefusalCode.LIFECYCLE)
+            raise self._refused(ClaudeReadRefusalCode.LIFECYCLE, value)
         if state in ("cancelled", "discarded", "refused"):
-            raise _Refused(ClaudeReadRefusalCode.LIFECYCLE_TERMINATED)
+            raise self._refused(ClaudeReadRefusalCode.LIFECYCLE_TERMINATED, value,
+                                predicate=ClaudeReadRefusalPredicate.EXPLICIT_NEGATIVE)
         if state == "completed":
             if self._calls != self._calls_completed:
-                raise _Refused(ClaudeReadRefusalCode.LIFECYCLE)
+                raise self._refused(ClaudeReadRefusalCode.LIFECYCLE, value)
             self._command_completed = True
         return True
 
@@ -415,15 +548,54 @@ class ClaudeReadTransaction:
         # Pinned producer emits turn progress independently of partial messages.
         # These signed integer estimates are private, never authoritative usage.
         if (set(value) not in (required, required | {"user_message_uuid"})
-                or self._state not in ("dispatched", "terminal", "checked")
                 or type(value.get("estimated_tokens")) is not int
                 or type(value.get("estimated_tokens_delta")) is not int
-                or not _uuid(value.get("uuid"))
-                or not _uuid(value.get("session_id"))
-                or value.get("session_id") != (self._session or self._startup_session)
+                or not _uuid(value.get("uuid")) or not _uuid(value.get("session_id"))):
+            raise self._refused(ClaudeReadRefusalCode.THINKING_TOKENS, value,
+                                predicate=ClaudeReadRefusalPredicate.SHAPE)
+        if self._state not in ("dispatched", "terminal", "checked"):
+            raise self._refused(ClaudeReadRefusalCode.THINKING_TOKENS, value,
+                                predicate=ClaudeReadRefusalPredicate.PHASE)
+        if (value.get("session_id") != (self._session or self._startup_session)
                 or ("user_message_uuid" in value
                     and value["user_message_uuid"] != self._user_uuid)):
-            raise _Refused(ClaudeReadRefusalCode.SYSTEM_OTHER)
+            raise self._refused(ClaudeReadRefusalCode.THINKING_TOKENS, value,
+                                predicate=ClaudeReadRefusalPredicate.CORRELATION)
+        return True
+
+    def _api_retry(self, value: dict[str, object]) -> bool:
+        if value.get("type") != "system" or value.get("subtype") != "api_retry":
+            return False
+        # Pinned U0 schema + api_error projection + ordinary Rk forwarding.
+        # Retry counters, status and no-response waits are private progress;
+        # they do not create another dispatch, budget or terminal evidence.
+        required = {"type", "subtype", "attempt", "max_retries", "retry_delay_ms",
+                    "error_status", "error", "uuid", "session_id"}
+        errors = {"authentication_failed", "oauth_org_not_allowed", "account_on_hold",
+                  "verification_required", "billing_error", "rate_limit", "overloaded",
+                  "invalid_request", "model_not_found", "server_error", "unknown",
+                  "max_output_tokens", "cloud_credential_error"}
+        no_response = value.get("no_response")
+        if (set(value) not in (required, required | {"no_response"})
+                or any(type(value.get(key)) is not int for key in
+                       ("attempt", "max_retries", "retry_delay_ms"))
+                or (value.get("error_status") is not None
+                    and type(value.get("error_status")) is not int)
+                or type(value.get("error")) is not str or value.get("error") not in errors
+                or not _uuid(value.get("uuid")) or not _uuid(value.get("session_id"))
+                or ("no_response" in value
+                    and (type(no_response) is not dict
+                         or set(no_response) != {"waited_ms", "retry_wait_ms"}
+                         or any(type(no_response[key]) is not int
+                                for key in ("waited_ms", "retry_wait_ms"))))):
+            raise self._refused(ClaudeReadRefusalCode.API_RETRY, value,
+                                predicate=ClaudeReadRefusalPredicate.SHAPE)
+        if self._state != "dispatched":
+            raise self._refused(ClaudeReadRefusalCode.API_RETRY, value,
+                                predicate=ClaudeReadRefusalPredicate.PHASE)
+        if self._session is None or value.get("session_id") != self._session:
+            raise self._refused(ClaudeReadRefusalCode.API_RETRY, value,
+                                predicate=ClaudeReadRefusalPredicate.CORRELATION)
         return True
 
     def _heartbeat(self, value: dict[str, object]) -> bool:
@@ -441,7 +613,7 @@ class ClaudeReadTransaction:
                 or not _text(value.get("parent_tool_use_id"), RECORD_BYTES)
                 or type(value.get("elapsed_time_seconds")) is not int
                 or value.get("heartbeat") is not True):
-            raise _Refused(ClaudeReadRefusalCode.UNHANDLED)
+            raise self._refused(ClaudeReadRefusalCode.UNHANDLED, value)
         return True
 
     def _rate_limit_event(self, value: dict[str, object]) -> bool:
@@ -452,16 +624,17 @@ class ClaudeReadTransaction:
                 or self._session is None or value.get("session_id") != self._session
                 or not _uuid(value.get("uuid")) or type(info) is not dict
                 or info.get("status") not in ("allowed", "allowed_warning", "rejected")):
-            raise _Refused(ClaudeReadRefusalCode.RATE_LIMIT)
+            raise self._refused(ClaudeReadRefusalCode.RATE_LIMIT, value)
         overage = info.get("isUsingOverage")
         if "isUsingOverage" in info and type(overage) is not bool:
-            raise _Refused(ClaudeReadRefusalCode.RATE_LIMIT)
+            raise self._refused(ClaudeReadRefusalCode.RATE_LIMIT, value)
         self._rate_limit = RateLimitInfo(
             is_using_overage=overage if type(overage) is bool else None,
             detail={"status": info["status"]},
         )
         if info["status"] == "rejected":
-            raise _Refused(ClaudeReadRefusalCode.RATE_LIMIT_REJECTED)
+            raise self._refused(ClaudeReadRefusalCode.RATE_LIMIT_REJECTED, value,
+                                predicate=ClaudeReadRefusalPredicate.EXPLICIT_NEGATIVE)
         return True
 
     def _message(self, value: dict[str, object]) -> bool:
@@ -471,54 +644,64 @@ class ClaudeReadTransaction:
                 or not _uuid(value.get("uuid"))
                 or value.get("parent_tool_use_id") is not None
                 or type(value.get("message")) is not dict):
-            raise _Refused(ClaudeReadRefusalCode.MESSAGE)
+            raise self._refused(ClaudeReadRefusalCode.MESSAGE, value)
         message = value["message"]
         assert isinstance(message, dict)
         if (message.get("role") != value["type"] or "error" in value
                 or "aborted" in value or "agent_id" in value
                 or value.get("user_message_uuid", self._user_uuid) != self._user_uuid
                 or value.get("user_message_uuids", [self._user_uuid]) != [self._user_uuid]):
-            raise _Refused(ClaudeReadRefusalCode.MESSAGE)
+            raise self._refused(ClaudeReadRefusalCode.MESSAGE, value)
         if value["type"] == "user":
             content = message.get("content")
             if (self._calls_completed != 1 or type(content) is not list or not content
                     or any(type(block) is not dict or block.get("type") != "tool_result"
                            for block in content)):
-                raise _Refused(ClaudeReadRefusalCode.MESSAGE)
+                raise self._refused(ClaudeReadRefusalCode.MESSAGE, value)
         return True
 
     async def _quiet(self) -> None:
-        # Classify received frames before granting work or releasing its result.
-        # A partial record is not a record type: finish only that observed frame.
-        while True:
-            self._audit()
-            while self._records:
-                value = _parse(self._records[0])
-                if not (self._background(value) or self._ui(value) or self._lifecycle(value)
-                        or self._thinking_tokens(value) or self._heartbeat(value)
-                        or self._rate_limit_event(value)
-                        or (self._state == "dispatched" and value.get("type") == "assistant"
-                            and self._message(value))):
-                    break
-                self._records.pop(0)
-            if (self._command_completed and self._state == "dispatched"
-                    and self._calls_completed == 0):
-                raise _Refused(ClaudeReadRefusalCode.LIFECYCLE)
-            if self._records:
-                raise _Refused(_barrier_refusal(value))
-            if self._eof:
-                raise _Refused(ClaudeReadRefusalCode.STREAM_END)
-            if not self._buffer:
-                return
-            if self._pending is None:
-                raise _Refused(ClaudeReadRefusalCode.STREAM_END)
-            await self._wait_read()
+        previous_phase = self._phase
+        self._phase = (ClaudeReadReceivePhase.STARTUP if self._state == "startup" else
+                       ClaudeReadReceivePhase.POST_RESULT if self._terminal_result_accepted else
+                       ClaudeReadReceivePhase.CALLBACK_BARRIER)
+        try:
+            # Classify received frames before granting work or releasing its result.
+            # A partial record is not a record type: finish only that observed frame.
+            while True:
+                self._audit()
+                while self._records:
+                    value = self._parse(self._records[0])
+                    if not (self._background(value) or self._ui(value) or self._lifecycle(value)
+                            or self._thinking_tokens(value) or self._api_retry(value)
+                            or self._heartbeat(value)
+                            or self._rate_limit_event(value)
+                            or (self._state == "dispatched" and value.get("type") == "assistant"
+                                and self._message(value))):
+                        break
+                    self._records.pop(0)
+                if (self._command_completed and self._state == "dispatched"
+                        and self._calls_completed == 0):
+                    raise self._refused(ClaudeReadRefusalCode.LIFECYCLE)
+                if self._records:
+                    raise (self._unsupported(value) if value.get("type") == "system"
+                           else self._refused(_barrier_refusal(value), value))
+                if self._eof:
+                    raise self._refused(ClaudeReadRefusalCode.STREAM_END)
+                if not self._buffer:
+                    return
+                if self._pending is None:
+                    raise self._refused(ClaudeReadRefusalCode.STREAM_END)
+                await self._wait_read()
+
+        finally:
+            self._phase = previous_phase
 
     async def _write(self, raw: bytes, *, user: bool = False) -> None:
         self._check()
         self._input_bytes += len(raw)  # Spent before delivery, including uncertain writes.
         if self._input_bytes > self._input_limit or len(raw) > RECORD_BYTES:
-            raise _Refused(ClaudeReadRefusalCode.STREAM_BOUND)
+            raise self._refused(ClaudeReadRefusalCode.STREAM_BOUND)
         assert self._io is not None
         if user and self._before_user is not None:
             self._before_user()
@@ -526,59 +709,70 @@ class ClaudeReadTransaction:
         self._audit()
 
     async def _control(self, kind: str, *, register: bool = False) -> None:
-        await self._quiet()
-        identifier = secrets.token_hex(16)
-        if kind == "initialize":
-            raw = initialize_request(identifier)
-            if register:
-                value = json.loads(raw)
-                value["request"]["sdkMcpServers"] = [SERVER]
-                raw = _wire(value)
-        elif kind == "get_settings":
-            raw = settings_request(identifier)
-        else:
-            raw = hooks_request(identifier)
-        await self._write(raw)
-        while True:
-            response = await self._next()
-            value = _parse(response)
-            if (self._ui(value) or self._background(value) or self._lifecycle(value)
-                    or self._thinking_tokens(value) or self._rate_limit_event(value)):
-                continue
-            if register and value.get("type") == "control_request":
-                await self._mcp(value, handshake=True)
-                continue
+        previous_phase = self._phase
+        self._phase = (ClaudeReadReceivePhase.POST_RESULT if self._terminal_result_accepted
+                       else ClaudeReadReceivePhase.STARTUP)
+        try:
+            await self._quiet()
+            identifier = secrets.token_hex(16)
             if kind == "initialize":
-                observation = observe_initialize(response, expected_request_id=identifier,
-                                                 selected_plan=self._plan)
-                self.initialize_observation = observation
-                verdict = observation.verdict
-                if verdict is not ClaudeInitializeVerdict.MODE_MATCH:
-                    raise _InitializeRefused()
+                raw = initialize_request(identifier)
+                if register:
+                    value = json.loads(raw)
+                    value["request"]["sdkMcpServers"] = [SERVER]
+                    raw = _wire(value)
             elif kind == "get_settings":
-                if judge_settings(response, expected_request_id=identifier, model=self._model,
-                                  effort=self._effort) is not ClaudeStartupVerdict.MATCH:
-                    raise _Refused()
-            elif (judge_hooks(response, expected_request_id=identifier)
-                  is not ClaudeStartupVerdict.MATCH):
-                raise _Refused()
-            break
-        if kind == "initialize" and (register or self._state == "terminal"):
+                raw = settings_request(identifier)
+            else:
+                raw = hooks_request(identifier)
+            await self._write(raw)
             while True:
-                snapshot = _parse(await self._next())
-                if (self._ui(snapshot) or self._lifecycle(snapshot)
-                        or self._thinking_tokens(snapshot) or self._rate_limit_event(snapshot)):
+                response = await self._next()
+                value = self._parse(response)
+                if (self._ui(value) or self._background(value) or self._lifecycle(value)
+                        or self._thinking_tokens(value) or self._api_retry(value)
+                        or self._rate_limit_event(value)):
                     continue
-                if register and snapshot.get("type") == "control_request":
-                    await self._mcp(snapshot, handshake=True)
+                if register and value.get("type") == "control_request":
+                    await self._mcp(value, handshake=True)
                     continue
-                if register and self._startup_session is None:
-                    if not _uuid(snapshot.get("session_id")):
+                if value.get("type") == "system":
+                    raise self._unsupported(value)
+                if kind == "initialize":
+                    observation = observe_initialize(response, expected_request_id=identifier,
+                                                     selected_plan=self._plan)
+                    self.initialize_observation = observation
+                    verdict = observation.verdict
+                    if verdict is not ClaudeInitializeVerdict.MODE_MATCH:
+                        raise _InitializeRefused()
+                elif kind == "get_settings":
+                    if judge_settings(response, expected_request_id=identifier, model=self._model,
+                                      effort=self._effort) is not ClaudeStartupVerdict.MATCH:
                         raise _Refused()
-                    self._startup_session = str(snapshot["session_id"])
-                if not self._background(snapshot):
+                elif (judge_hooks(response, expected_request_id=identifier)
+                      is not ClaudeStartupVerdict.MATCH):
                     raise _Refused()
                 break
+            if kind == "initialize" and (register or self._state == "terminal"):
+                while True:
+                    snapshot = self._parse(await self._next())
+                    if (self._ui(snapshot) or self._lifecycle(snapshot)
+                            or self._thinking_tokens(snapshot) or self._api_retry(snapshot)
+                            or self._rate_limit_event(snapshot)):
+                        continue
+                    if register and snapshot.get("type") == "control_request":
+                        await self._mcp(snapshot, handshake=True)
+                        continue
+                    if register and self._startup_session is None:
+                        if not _uuid(snapshot.get("session_id")):
+                            raise _Refused()
+                        self._startup_session = str(snapshot["session_id"])
+                    if not self._background(snapshot):
+                        raise self._unsupported(snapshot)
+                    break
+
+        finally:
+            self._phase = previous_phase
 
     async def _observations(self) -> None:
         for kind in ("initialize", "get_settings", "get_hooks_listing"):
@@ -586,87 +780,87 @@ class ClaudeReadTransaction:
 
     async def _mcp(self, value: dict[str, object], *, handshake: bool = False) -> None:
         if set(value) != {"type", "request_id", "request"}:
-            raise _Refused(ClaudeReadRefusalCode.MCP_ENVELOPE)
+            raise self._refused(ClaudeReadRefusalCode.MCP_ENVELOPE, value)
         outer, request = value["request_id"], value["request"]
         if (not _text(outer, 128) or not outer or outer in self._outer_ids
                 or type(request) is not dict
                 or set(request) != {"subtype", "server_name", "message"}
                 or request.get("subtype") != "mcp_message" or request.get("server_name") != SERVER):
-            raise _Refused(ClaudeReadRefusalCode.MCP_ENVELOPE)
+            raise self._refused(ClaudeReadRefusalCode.MCP_ENVELOPE, value)
         assert isinstance(outer, str)
         self._outer_ids.add(outer)
         message = request["message"]
         if type(message) is not dict or message.get("jsonrpc") != "2.0":
-            raise _Refused(ClaudeReadRefusalCode.MCP_ENVELOPE)
+            raise self._refused(ClaudeReadRefusalCode.MCP_ENVELOPE, value)
         method, identifier = message.get("method"), message.get("id")
         notification = method == "notifications/initialized"
         if not set(message) <= {"jsonrpc", "id", "method", "params"}:
-            raise _Refused(ClaudeReadRefusalCode.MCP_ENVELOPE)
+            raise self._refused(ClaudeReadRefusalCode.MCP_ENVELOPE, value)
         if notification:
             if "id" in message or message.get("params", {}) != {}:
-                raise _Refused(ClaudeReadRefusalCode.MCP_ENVELOPE)
+                raise self._refused(ClaudeReadRefusalCode.MCP_ENVELOPE, value)
             identifier = 0  # Pinned SDK synthetic acknowledgement for native notification.
         else:
             if type(identifier) not in (int, str) or not _text(str(identifier), 128):
-                raise _Refused(ClaudeReadRefusalCode.MCP_ENVELOPE)
+                raise self._refused(ClaudeReadRefusalCode.MCP_ENVELOPE, value)
             assert isinstance(identifier, (int, str))
             key = (type(identifier), identifier)
             if key in self._rpc_ids:
-                raise _Refused(ClaudeReadRefusalCode.MCP_ENVELOPE)
+                raise self._refused(ClaudeReadRefusalCode.MCP_ENVELOPE, value)
             self._rpc_ids.add(key)
         result: dict[str, object]
         if handshake:
             expected = ("initialize", "notifications/initialized", "tools/list")
             if self._handshake >= 3 or method != expected[self._handshake]:
-                raise _Refused(ClaudeReadRefusalCode.MCP_HANDSHAKE)
+                raise self._refused(ClaudeReadRefusalCode.MCP_HANDSHAKE, value)
             if method == "initialize":
                 params = message.get("params")
                 if (type(params) is not dict
                         or set(params) != {"protocolVersion", "capabilities", "clientInfo"}
                         or params.get("protocolVersion") != "2025-11-25"
                         or params.get("capabilities") != {}):
-                    raise _Refused(ClaudeReadRefusalCode.MCP_HANDSHAKE)
+                    raise self._refused(ClaudeReadRefusalCode.MCP_HANDSHAKE, value)
                 client = params["clientInfo"]
                 if (type(client) is not dict or client.get("name") != "claude-code"
                         or client.get("version") != "2.1.296"
                         or not set(client) <= {"name", "version", "title", "description",
                                               "websiteUrl"}
                         or any(not _text(item, 1024) for item in client.values())):
-                    raise _Refused(ClaudeReadRefusalCode.MCP_HANDSHAKE)
+                    raise self._refused(ClaudeReadRefusalCode.MCP_HANDSHAKE, value)
                 result = {"protocolVersion": "2025-11-25", "capabilities": {"tools": {}},
                           "serverInfo": {"name": SERVER, "version": "1"}}
             elif notification:
                 result = {}
             else:
                 if message.get("params", {}) != {}:
-                    raise _Refused(ClaudeReadRefusalCode.MCP_HANDSHAKE)
+                    raise self._refused(ClaudeReadRefusalCode.MCP_HANDSHAKE, value)
                 result = {"tools": [READ_TOOL]}
             self._handshake += 1
         else:
             if self._command_completed:
-                raise _Refused(ClaudeReadRefusalCode.LIFECYCLE)
+                raise self._refused(ClaudeReadRefusalCode.LIFECYCLE, value)
             if (self._state != "dispatched" or self._session is None
                     or method != "tools/call" or self._calls >= CALL_LIMIT):
-                raise _Refused(ClaudeReadRefusalCode.MCP_CALL)
+                raise self._refused(ClaudeReadRefusalCode.MCP_CALL, value)
             params = message.get("params")
             # Native MCP metadata is open JSON, discarded under the existing record budget.
             if (type(params) is not dict
                     or set(params) not in ({"name", "arguments"}, {"name", "arguments", "_meta"})
                     or ("_meta" in params and type(params["_meta"]) is not dict)
                     or params.get("name") != "read_file"):
-                raise _Refused(ClaudeReadRefusalCode.MCP_CALL)
+                raise self._refused(ClaudeReadRefusalCode.MCP_CALL, value)
             arguments = params["arguments"]
             if type(arguments) is not dict or set(arguments) != {"path"}:
-                raise _Refused(ClaudeReadRefusalCode.MCP_ARGUMENTS)
+                raise self._refused(ClaudeReadRefusalCode.MCP_ARGUMENTS, value)
             path = arguments["path"]
             if not validate_read_path(path):
-                raise _Refused(ClaudeReadRefusalCode.MCP_ARGUMENTS)
+                raise self._refused(ClaudeReadRefusalCode.MCP_ARGUMENTS, value)
             assert isinstance(path, str)
             await self._quiet()  # Classify buffered frames before worker authority.
             self._calls += 1  # ID and admitted start are spent before the worker's first await.
             text = await self._read_worker(path)
             if not _text(text, TEXT_BYTES):
-                raise _Refused(ClaudeReadRefusalCode.MCP_CALL)
+                raise self._refused(ClaudeReadRefusalCode.MCP_CALL, value)
             result = {"content": [{"type": "text", "text": text}], "isError": False}
         await self._write(_wire({"type": "control_response", "response": {
             "subtype": "success", "request_id": outer,
@@ -703,19 +897,23 @@ class ClaudeReadTransaction:
         await self._observations()
         await self._control("initialize", register=True)
         while self._handshake != 3:
-            value = _parse(await self._next())
-            if self._lifecycle(value) or self._thinking_tokens(value):
+            value = self._parse(await self._next())
+            if self._lifecycle(value) or self._thinking_tokens(value) or self._api_retry(value):
                 continue
+            if value.get("type") == "system":
+                raise self._unsupported(value)
             await self._mcp(value, handshake=True)
         await self._quiet()
         self._state = "ready"
         self._state = "dispatched"
+        self._phase = ClaudeReadReceivePhase.BODY_BEFORE_CALLBACK
         await self._write(_wire({"type": "user", "uuid": self._user_uuid,
                                  "message": {"role": "user", "content": self._task.instruction},
                                  "parent_tool_use_id": None, "client_composed": True}), user=True)
         while True:
-            value = _parse(await self._next())
+            value = self._parse(await self._next())
             if (self._ui(value) or self._lifecycle(value) or self._thinking_tokens(value)
+                    or self._api_retry(value)
                     or self._heartbeat(value)):
                 continue
             if value.get("type") == "control_request":
@@ -723,18 +921,18 @@ class ClaudeReadTransaction:
             elif value.get("type") == "system" and value.get("subtype") == "init":
                 # Same ordered, short-circuit guards; no rejected value is retained.
                 if self._session is not None:
-                    raise _Refused(ClaudeReadRefusalCode.INIT_ORDER)
+                    raise self._refused(ClaudeReadRefusalCode.INIT_ORDER, value)
                 if (not _uuid(value.get("session_id"))
                         or value.get("session_id") != self._startup_session):
-                    raise _Refused(ClaudeReadRefusalCode.INIT_SESSION)
+                    raise self._refused(ClaudeReadRefusalCode.INIT_SESSION, value)
                 if not _uuid(value.get("uuid")):
-                    raise _Refused(ClaudeReadRefusalCode.INIT_UUID)
+                    raise self._refused(ClaudeReadRefusalCode.INIT_UUID, value)
                 if value.get("model") != self._model:
-                    raise _Refused(ClaudeReadRefusalCode.INIT_MODEL)
+                    raise self._refused(ClaudeReadRefusalCode.INIT_MODEL, value)
                 if value.get("tools") != ["mcp__constructicon_read__read_file"]:
-                    raise _Refused(ClaudeReadRefusalCode.INIT_TOOLS)
+                    raise self._refused(ClaudeReadRefusalCode.INIT_TOOLS, value)
                 if not _registered_sdk_server(value.get("mcp_servers")):
-                    raise _Refused(ClaudeReadRefusalCode.INIT_SERVER)
+                    raise self._refused(ClaudeReadRefusalCode.INIT_SERVER, value)
                 self._session = str(value["session_id"])
             elif self._message(value) or self._rate_limit_event(value):
                 pass
@@ -770,7 +968,7 @@ class ClaudeReadTransaction:
                         or not _uuid(value.get("uuid"))
                         or value.get("user_message_uuid") != self._user_uuid
                         or value.get("user_message_uuids", [self._user_uuid]) != [self._user_uuid]):
-                    raise _Refused(ClaudeReadRefusalCode.RESULT)
+                    raise self._refused(ClaudeReadRefusalCode.RESULT, value)
                 terminal_usage = value["usage"]
                 assert isinstance(terminal_usage, dict)
                 # These emitted counts cover this turn's main loop, not all
@@ -779,30 +977,34 @@ class ClaudeReadTransaction:
                                     output_tokens=terminal_usage["output_tokens"])
                 if (not _text(value.get("result"), TEXT_BYTES)
                         or value.get("is_error") is not False):
-                    raise _Refused(ClaudeReadRefusalCode.RESULT)
+                    raise self._refused(ClaudeReadRefusalCode.RESULT, value)
+                self._terminal_result_accepted = True
                 self._reply = str(value["result"])
                 break
             else:
-                raise _Refused(_unhandled(value))
+                raise self._unsupported(value)
         self._state = "terminal"
         await self._observations()
         await self._quiet()
         self._state = "checked"
         assert self._io is not None
+        self._phase = ClaudeReadReceivePhase.DRAIN
         await self._io.close_stdin()
         self._audit()
         while not self._eof or self._records:
             if self._records:
-                value = _parse(self._records.pop(0))
+                value = self._parse(self._records.pop(0))
                 if not (self._ui(value) or self._background(value) or self._lifecycle(value)
-                        or self._thinking_tokens(value) or self._rate_limit_event(value)):
-                    raise _Refused(ClaudeReadRefusalCode.TAIL)
+                        or self._thinking_tokens(value) or self._api_retry(value)
+                        or self._rate_limit_event(value)):
+                    raise (self._unsupported(value) if value.get("type") == "system"
+                           else self._refused(ClaudeReadRefusalCode.TAIL, value))
             elif self._pending is not None:
                 await self._wait_read()
             else:
-                raise _Refused(ClaudeReadRefusalCode.TAIL)
+                raise self._refused(ClaudeReadRefusalCode.TAIL)
         if self._buffer:
-            raise _Refused(ClaudeReadRefusalCode.TAIL)
+            raise self._refused(ClaudeReadRefusalCode.TAIL)
         self._check()
         self._state = "drained"
 
@@ -848,7 +1050,7 @@ async def run_read_transaction(
     success = False
     timed_out = False
     initialization_refused = False
-    known_refusal: ClaudeReadRefusalCode | None = None
+    known_refusal: _Refused | None = None
     diagnostic_custody_current = True
     loop = asyncio.get_running_loop()
     started_at = loop.time()
@@ -927,7 +1129,9 @@ async def run_read_transaction(
                                                    conversation.initialize_observation,
                                                ) if initialization_refused
                                                and diagnostic_custody_current and not timed_out
-                                               else refusal_detail(known_refusal)
+                                               else refusal_detail(known_refusal.code,
+                                                                   context=known_refusal.context)
                                                if known_refusal is not None
+                                               and known_refusal.code is not None
                                                and diagnostic_custody_current and not timed_out
                                                else "Claude READ refused")))

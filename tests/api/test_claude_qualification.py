@@ -175,7 +175,7 @@ async def test_zero_callback_is_not_a_read_proof(qualified):
 
 @pytest.mark.parametrize("gate", [
     "system-init-model", "mcp-arguments", "barrier-control-request",
-    "barrier-result", "barrier-user", "barrier-unknown",
+    "barrier-result", "barrier-user", "barrier-unknown", "post-result",
 ])
 async def test_closed_refusal_survives_real_graph_journal_and_metadata(
     qualified, tmp_path, monkeypatch, gate,
@@ -198,6 +198,8 @@ async def test_closed_refusal_survives_real_graph_journal_and_metadata(
             if message.get("method") == "tools/call":
                 message["params"]["arguments"]["path"] = "../PRIVATE-PATH-CANARY"
         original(self, value)
+        if gate == "post-result" and value.get("type") == "result":
+            original(self, {"type": "system", "subtype": "PRIVATE-SUBTYPE-CANARY"})
         if (gate.startswith("barrier-") and value.get("type") == "control_response"
                 and "account" in value["response"].get("response", {})):
             frame_type = gate.removeprefix("barrier-")
@@ -209,7 +211,7 @@ async def test_closed_refusal_survives_real_graph_journal_and_metadata(
 
     monkeypatch.setattr(Peer, "emit", emit)
     assert await entry.qualify(a.executor) is RunStatus.FAILED
-    assert a.state.workers == []
+    assert len(a.state.workers) == (1 if gate == "post-result" else 0)
     assert len(a.state.peer.users) == (0 if gate.startswith("barrier-") else 1)
     assert a.state.guards == a.state.locks == 0 and a.state.native_joined
     # Read the actual graph's attempt and SQLite, replacing only UID/mode primitives.
@@ -233,10 +235,26 @@ async def test_closed_refusal_survives_real_graph_journal_and_metadata(
     )
     assert projected["attempt"]["state"] == projected["journal"]["state"] == "valid"
     assert (projected["attempt"]["callback_started"]
-            == projected["attempt"]["callback_completed"] == 0)
+            == projected["attempt"]["callback_completed"] == (1 if gate == "post-result" else 0))
     failures = [event for event in projected["journal"]["events"] if event["kind"] == "NodeFailed"]
-    assert failures == [{"kind": "NodeFailed", "error_type": "ContractViolation",
-                         "reason": "claude_read_" + gate.replace("-", "_")}]
+    assert len(failures) == 1
+    failure = failures[0]
+    assert {key: failure[key] for key in ("kind", "error_type", "reason")} == {
+        "kind": "NodeFailed", "error_type": "ContractViolation",
+        "reason": ("claude_read_system_other" if gate == "post-result"
+                   else "claude_read_" + gate.replace("-", "_")),
+    }
+    context = failure["refusal_context"]
+    assert set(context) == {"family", "phase", "predicate", "terminal_result_accepted"}
+    assert context["terminal_result_accepted"] is (gate == "post-result")
+    if gate == "system-init-model":
+        assert context == {"family": "system-init", "phase": "body-before-callback",
+                           "predicate": "guard", "terminal_result_accepted": False}
+    if gate == "post-result":
+        assert context == {"family": "system-unknown-subtype", "phase": "post-result",
+                           "predicate": "unsupported-family", "terminal_result_accepted": True}
+    from scripts.ops import read_metadata_session as metadata
+    assert metadata.observation_checked(json.dumps(projected).encode()) == projected
     published = json.dumps(projected)
     assert "PRIVATE" not in published and str(tmp_path) not in published
     assert (authorization.authorization_id not in published
@@ -246,6 +264,10 @@ async def test_closed_refusal_survives_real_graph_journal_and_metadata(
 @pytest.mark.parametrize("kind,detail", [
     ("exit", "PRIVATE-ACCOUNT-CANARY"),
     ("exit", "Claude READ refused [known_refusal=PRIVATE-CANARY]"),
+    ("exit", "Claude READ refused [known_refusal=api-retry; family=system-api-retry; "
+             "phase=drain; predicate=phase; terminal_result_accepted=false; private=PRIVATE]"),
+    ("exit", "Claude READ refused [known_refusal=api-retry; family=PRIVATE-CANARY; "
+             "phase=drain; predicate=phase; terminal_result_accepted=false]"),
     ("timeout", "Claude READ refused [known_refusal=system-init-model]"),
 ])
 async def test_graph_never_journals_unrecognized_or_nonexit_detail(

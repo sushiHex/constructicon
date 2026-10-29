@@ -357,8 +357,45 @@ def test_closed_observation_does_not_publish_injected_private_values(fault):
         value["journal"]["events"][0]["reason"] = [PRIVATE]
     else:
         with pytest.raises(commands.Refused):
-            metadata.observation_checked(b" " * 16385 + session.json_bytes(value))
+            metadata.observation_checked(b" " * (metadata.reader.OUTPUT_BYTES + 1)
+                                         + session.json_bytes(value))
         return
+    with pytest.raises(commands.Refused):
+        metadata.observation_checked(session.json_bytes(value))
+
+
+@pytest.mark.parametrize("accepted", [True, False])
+def test_context_checked_and_historical_flat_observation_remains_valid(accepted):
+    value = observation()
+    assert metadata.observation_checked(session.json_bytes(value)) == value
+    event = value["journal"]["events"][0]
+    event["reason"] = "claude_read_api_retry"
+    event["refusal_context"] = {
+        "family": "system-api-retry", "phase": "drain", "predicate": "phase",
+        "terminal_result_accepted": accepted,
+    }
+    assert metadata.observation_checked(session.json_bytes(value)) == value
+
+
+@pytest.mark.parametrize("fault", ["extra", "private", "boolean", "wrong-kind", "wrong-reason"])
+def test_context_checked_rejects_open_or_inconsistent_values(fault):
+    value = observation()
+    event = value["journal"]["events"][0]
+    event["reason"] = "claude_read_api_retry"
+    context = event["refusal_context"] = {
+        "family": "system-api-retry", "phase": "drain", "predicate": "phase",
+        "terminal_result_accepted": False,
+    }
+    if fault == "extra":
+        context["extra"] = PRIVATE
+    elif fault == "private":
+        context["family"] = PRIVATE
+    elif fault == "boolean":
+        context["terminal_result_accepted"] = 1
+    elif fault == "wrong-kind":
+        event["kind"] = "RunFailed"
+    else:
+        event["reason"] = "read_contract_refused"
     with pytest.raises(commands.Refused):
         metadata.observation_checked(session.json_bytes(value))
 

@@ -165,9 +165,56 @@ def test_standalone_projector_catalog_matches_closed_driver_codes():
                for message, reason in emitted.items())
 
 
+def test_context_vocabulary_matches_driver():
+    from constructicon.substrate.executors.claude_read import (
+        ClaudeReadReceivePhase,
+        ClaudeReadRefusalFamily,
+        ClaudeReadRefusalPredicate,
+    )
+
+    assert {v.value for v in ClaudeReadRefusalFamily} == reader.REFUSAL_FAMILIES
+    assert {v.value for v in ClaudeReadReceivePhase} == reader.REFUSAL_PHASES
+    assert {v.value for v in ClaudeReadRefusalPredicate} == reader.REFUSAL_PREDICATES
+
+
+@pytest.mark.parametrize("accepted", ["true", "false"])
+def test_context_projects_exact_detail_independently_of_callback_counts(files, accepted):
+    detail = ("Claude READ refused [known_refusal=api-retry; family=system-api-retry; "
+              "phase=post-result; predicate=phase; terminal_result_accepted=" + accepted + "]")
+    with sqlite3.connect(files / "read.sqlite") as db:
+        db.execute("UPDATE events SET payload=?", (
+            json.dumps({"error_type": "ContractViolation", "error": detail}),
+        ))
+    result = collect(files)
+    assert result["attempt"]["callback_started"] == result["attempt"]["callback_completed"] == 1
+    assert result["journal"]["events"][0] == {
+        "kind": "NodeFailed", "error_type": "ContractViolation", "reason": "claude_read_api_retry",
+        "refusal_context": {"family": "system-api-retry", "phase": "post-result",
+                            "predicate": "phase", "terminal_result_accepted": accepted == "true"},
+    }
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda s: s + " extra", lambda s: s.replace("family=system-api-retry", "family=PRIVATE"),
+    lambda s: s.replace("predicate=phase", "predicate=phase; private=PRIVATE"),
+    lambda s: s.replace("terminal_result_accepted=false", "terminal_result_accepted=False"),
+])
+def test_context_rejects_malformed_or_private_detail(files, mutation):
+    detail = mutation("Claude READ refused [known_refusal=api-retry; family=system-api-retry; "
+                      "phase=drain; predicate=phase; terminal_result_accepted=false]")
+    with sqlite3.connect(files / "read.sqlite") as db:
+        db.execute("UPDATE events SET payload=?", (
+            json.dumps({"error_type": "ContractViolation", "error": detail}),
+        ))
+    event = collect(files)["journal"]["events"][0]
+    assert event == {"kind": "NodeFailed", "error_type": "ContractViolation", "reason": "other"}
+
+
 @pytest.mark.parametrize("error_type,message", [
     ("ContractViolation", "Claude READ refused [known_refusal=private-account]"),
     ("ValueError", "Claude READ refused [known_refusal=system-init-model]"),
+    ("ValueError", "Claude READ refused [known_refusal=api-retry; family=system-api-retry; "
+                   "phase=drain; predicate=phase; terminal_result_accepted=true]"),
     ("ContractViolation", PRIVATE),
 ])
 def test_closed_refusal_projection_never_accepts_unknown_detail_or_wrong_class(
@@ -660,6 +707,13 @@ def test_event_limit_binds_and_private_strings_are_closed(files):
         db.execute(
             "INSERT INTO events VALUES(?,?,?,?,?,?)", (PRIVATE, 0, PRIVATE, None, PRIVATE, PRIVATE)
         )
+        db.execute(
+            "UPDATE events SET payload=? WHERE seq>=2",
+            (json.dumps({"error_type": "ContractViolation", "error":
+                "Claude READ refused [known_refusal=api-retry; "
+                "family=system-model-refusal-no-fallback; phase=body-before-callback; "
+                "predicate=unsupported-family; terminal_result_accepted=false]"}),),
+        )
     result = collect(files)
     assert result["journal"]["state"] == "valid" and result["journal"]["partial"] is True
     assert result["journal"]["event_count"] == reader.EVENT_LIMIT
@@ -693,6 +747,7 @@ def test_event_limit_binds_and_private_strings_are_closed(files):
         "kind",
         "error_type",
         "reason",
+        "refusal_context", "family", "predicate", "terminal_result_accepted",
     }
     allowed_strings = (
         reader.PHASES
@@ -702,6 +757,9 @@ def test_event_limit_binds_and_private_strings_are_closed(files):
         | reader.EVENTS
         | reader.ERRORS
         | reader.WORKERS
+        | reader.REFUSAL_FAMILIES
+        | reader.REFUSAL_PHASES
+        | reader.REFUSAL_PREDICATES
         | set(reader.REASONS.values())
         | {"valid", "invalid", "missing", "other"}
     )
@@ -721,12 +779,42 @@ def test_event_limit_binds_and_private_strings_are_closed(files):
             assert value is None or type(value) in (bool, int)
 
     walk(result)
-    assert len(json.dumps(result).encode()) <= 16384
+    assert len(json.dumps(result).encode()) <= reader.OUTPUT_BYTES
     record["callbacks"]["admitted_started"] = 9
     record["callbacks"]["admitted_completed"] = 9
     record["callbacks"]["worker_results"] = ["success"] * 9
     write(files / "read-attempt.json", record)
     assert collect(files)["attempt"]["state"] == "invalid"
+
+
+def test_maximum_closed_context_projection_fits_transport_bound(files):
+    from scripts.ops import read_metadata_session as metadata
+
+    code_literal = max(
+        (message for message in reader.REASONS
+         if message.startswith("Claude READ refused [known_refusal=")),
+        key=lambda message: len(reader.REASONS[message]),
+    )
+    code = code_literal.removeprefix("Claude READ refused [known_refusal=").removesuffix("]")
+    detail = (f"Claude READ refused [known_refusal={code}; "
+              f"family={max(reader.REFUSAL_FAMILIES, key=len)}; "
+              f"phase={max(reader.REFUSAL_PHASES, key=len)}; "
+              f"predicate={max(reader.REFUSAL_PREDICATES, key=len)}; "
+              "terminal_result_accepted=false]")
+    payload = json.dumps({"error_type": "ContractViolation", "error": detail})
+    with sqlite3.connect(files / "read.sqlite") as db:
+        db.execute("UPDATE events SET payload=?", (payload,))
+        db.executemany("INSERT INTO events VALUES(?,?,?,?,?,?)", [
+            (RUN, n, "NodeFailed", None, payload, "fixture")
+            for n in range(1, reader.EVENT_LIMIT)
+        ])
+    result = collect(files)
+    raw = json.dumps(result).encode()
+    assert result["journal"]["event_count"] == reader.EVENT_LIMIT
+    assert not result["journal"]["partial"]
+    assert all("refusal_context" in event for event in result["journal"]["events"])
+    assert 16384 < len(raw) <= reader.OUTPUT_BYTES
+    assert metadata.observation_checked(raw) == result
 
 
 @pytest.mark.parametrize(

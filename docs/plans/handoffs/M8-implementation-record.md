@@ -10047,3 +10047,109 @@ Its documentation clarification is included: old receipts retain their recorded
 revision but cannot satisfy a new operator revision's gates. Accepting and
 abort-after-activation native generated-chain behavior remains a final-head
 Linux CI obligation, not a Windows proof. No duplicate full local suite ran.
+
+## #40 — bounded retry progress and action-complete refusal context
+
+Generation 7 completed one recorded callback but failed overall with
+claude_read_system_other. Valid/nonpartial metadata and binding checks did not
+identify the received frame or terminal-result acceptance. Withdrawal, park and
+fresh Off/idle checks passed; custody was released and the attempt spent.
+Retained evidence cannot recover its raw cause. Fable and Astra both redlined
+another diagnostic-only installation: correct a source-proven ordinary-path
+gap and make remaining refusals actionable together.
+
+### Pinned producer inventory and compatibility decision
+
+Static inspection used native 2.1.296 SHA-256
+24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de
+(257,068,216 bytes), and paired SDK declaration SHA-256
+fc2866dfe2c01468edb19b1d94f26156bfacecdf1e7f1452b276ed2f8cc0b08f.
+Zero-based native offsets are provenance, not a historical observation.
+Ordinary Rk forwarding is at B@233288149; verbose output is B@233585200.
+No vendor binary ran for this slice.
+
+| Ordinary source family | READ treatment |
+| --- | --- |
+| init, thinking_tokens | Existing exact phase/correlation checks; malformed known thinking progress has its own reason. |
+| api_retry | New exact active-turn progress handling; no callback, dispatch, deadline or stream-budget change. |
+| status and existing UI/background notifications | Existing posture-specific validators, limits and refusals; maintenance retains its legacy coarse projection. |
+| notification, informational, memory_recall, compact_boundary | Fixed diagnostic family, still unsupported. A name or unchecked boolean proves neither harmlessness nor a validated negative. |
+| model_refusal_fallback, model_refusal_no_fallback, model_fallback, model_consent_fallback | Fixed diagnostic family and refusal; no fallback/model change admitted. |
+| Unknown/missing/invalid subtype | Distinct fixed labels, never a native string or payload. |
+
+The engine projects api_error at B@224423176 into api_retry. U0 at B@208318800
+defines integer attempt/max_retries/retry_delay_ms, integer-or-null error_status,
+closed SDKAssistantMessageError, optional no_response with integer waited_ms
+and retry_wait_ms, UUID and session. SDK declarations line 3717 supplies all
+thirteen error literals. The event means the request will retry, not that the
+turn failed. Wrapper B@233456600 adds user correlation to thinking/status,
+not api_retry; no invented user-correlation field is accepted for retry progress.
+
+The handler requires dispatched state and the established session. Existing
+receive/output/deadline bounds remain. Source integers, null status and
+no_response are not reinterpreted through guessed HTTP sets, retry ceilings or
+exhaustion rules. Startup, post-result and drain retry progress refuse with
+their actual phase. Terminal error still fails.
+
+Turn-duration/stop-hook schemas alone do not prove ordinary forwarding, so
+neither was admitted. Tool-use-summary is top-level, not a direct explanation
+of historical system-other. This compatibility gap does not identify generation
+7's actual frame.
+
+### Evidence and review decisions
+
+A frozen primary-exception context carries closed family, actual receive phase,
+first failing predicate category and terminal-result-accepted boolean through
+the existing error-detail/provider/NodeFailed path. Callback settlement cannot
+substitute for terminal acceptance. Capture precedes cleanup awaits; cleanup
+groups, cancellation, timeout, unrelated exceptions or lost custody cannot
+publish a guessed primary observation. Flat refusal strings remain supported.
+No runtime outcome model, scheduler or workflow was added.
+
+The standalone reader validates the exact same closed vocabulary. Unknown
+strings, extra fields and private payloads become generic. Sixty-four maximal
+contextual events exceed the old 16 KiB metadata limit but fit 32 KiB; capture
+and validation share that finite bound. This closed projection-size change is
+not permission for raw native capture. Maximum-event and over-bound tests bind.
+
+Independent Astra review found one introduced telemetry defect: unsupported
+model/informational frames were labelled explicit-negative without envelope
+validation. They now retain unsupported-family (missing/invalid subtype =>
+shape). Explicit-negative is reserved for already validated lifecycle termination
+and rejected rate-limit guards. Malformed/foreign-envelope regressions pin the
+fix. The reviewer rechecked it with no outstanding source blocker.
+
+Rejected review suggestions: truncated unknown subtype publication,
+no_response-as-exhaustion, guessed HTTP/retry bounds, native-phase-exit-as-vendor-
+exit/EPIPE inference, and repeating every unit case through the entire Linux
+sequence. Historical exact causes remain unrecoverable from retained evidence.
+
+### Focused verification
+
+Source-shaped retry tests cover before/during/after callback, fragmentation,
+successful ready output, terminal failure, exact shapes, correlation and
+forbidden placement. Context cases cover startup, pre/post-callback body,
+barrier, post-result observation and drain; cleanup deliberately changes later
+phase/terminal state to prove first-failure binding. Public-field walkers and
+genuine graph/journal/metadata tests reject private/malformed context and read
+old records. The compiled harmless peer now emits retry progress with nullable
+status/no_response; its portable test proves the record was emitted and consumed.
+
+Driver/legacy-maintenance focused checks passed 427 tests; the narrow review
+fix passed 48 affected cases. Reader/metadata and real graph integration passed,
+with one platform-dependent reader skip. Five portable compiled-peer tests
+passed. Thirteen selected new/retargeted mutants passed positive baselines and
+were assertion-killed with unchanged source. Changed modules passed Ruff and
+strict mypy. Final-head CI owns the full gate and four Linux lanes, including
+the existing accepting/abort generated chain; no duplicate full local gate ran.
+
+A compatibility sweep caught the shared category projection regression and an
+unchanged timing-sensitive deadline test. The category regression was fixed;
+the timing test passed unchanged on one focused diagnostic rerun. An already
+running provider/maintenance check passed 615 tests before the final narrow
+telemetry fix; that result is not relabelled as final-head evidence.
+
+No live action occurred for this code delivery. Changed controller/metadata
+identities require reviewed installation, fresh qualification and a newly
+selected one-attempt scope. Full admitted READ is success; otherwise closed
+family/predicate/phase evidence determines the next decision.

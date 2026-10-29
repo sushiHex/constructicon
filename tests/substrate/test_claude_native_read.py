@@ -71,7 +71,7 @@ async def test_compiled_fake_peer_completes_the_actual_bounded_read_protocol(wir
         *command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    calls = []
+    calls, native_records = [], []
 
     async def worker(path, remaining):
         calls.append((path, remaining))
@@ -79,7 +79,9 @@ async def test_compiled_fake_peer_completes_the_actual_bounded_read_protocol(wir
 
     class Channel:
         async def read(self, maximum=8192):
-            return await child.stdout.read(maximum)
+            raw = await child.stdout.read(maximum)
+            native_records.append(raw)
+            return raw
 
         async def write(self, data):
             child.stdin.write(data)
@@ -103,6 +105,11 @@ async def test_compiled_fake_peer_completes_the_actual_bounded_read_protocol(wir
         if child.returncode is None:
             child.kill()
         await child.wait()
+    # Prove the successful compiled dialogue actually exercised retry framing.
+    retries = [json.loads(line) for line in b"".join(native_records).splitlines()
+               if json.loads(line).get("subtype") == "api_retry"]
+    assert len(retries) == 1 and retries[0]["error_status"] is None
+    assert retries[0]["no_response"] == {"waited_ms": 1, "retry_wait_ms": 2}
     assert transaction._state == "drained" and transaction._handshake == 3
     assert transaction._calls_completed == (0 if model == "fixture-zero" else 1)
     assert transaction._reply == {"fixture-read": SEED_CALC, "fixture-ready": "ready\n",
