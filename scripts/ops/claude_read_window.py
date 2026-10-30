@@ -213,9 +213,21 @@ class ReadWindow:
             commands.require(bindings_path is not None)
             manifest = commands.build_package(phase, bindings_path, self.evidence,
                                               package, self.revision)
+        pins, bindings = commands.package_checked(package, manifest, self.revision)
+        checks = sorted(commands.COMMON_CHECKS | commands.PHASES[phase].checks)
         return {
             "phase": phase, "package": str(package), "manifest": manifest,
-            "checks": sorted(commands.COMMON_CHECKS | commands.PHASES[phase].checks),
+            "checks": checks,
+            # Preparation describes a release; every judgment remains unaffirmed.
+            "grant_template": {
+                "schema_version": 1, "phase": phase, "package_manifest": manifest,
+                "operator_revision": self.revision,
+                "controller_commit": bindings.controller_commit,
+                "bindings_sha256": pins["bindings_sha256"],
+                "boot": bindings.values["EXPECTED_BOOT"],
+                "target_sha256": commands.sha((self.target + "\0" + self.alias).encode()),
+                "checks": dict.fromkeys(checks, False),
+            },
         }
 
     def advance(self, grant, grant_sha256, *, cleanup=False, external=None):
@@ -226,6 +238,10 @@ class ReadWindow:
         # Verify an independently supplied release before spending the phase claim.
         session.grant_checked(grant, grant_sha256, manifest, self.revision, pins, bindings,
                               self.target, self.alias)
+        session.retain(directory / "claim.json", session.json_bytes({
+            "phase": phase, "manifest": manifest, "grant_sha256": grant_sha256,
+            "dispatch": "uncertain_until_checked",
+        }))
         captures = directory / "captures"
         captures.mkdir(mode=0o700)
         sequence = session.transport_commands(package, manifest, bindings,
@@ -238,10 +254,6 @@ class ReadWindow:
             bindings, phase, part, manifest, self.target, self.alias,
         ), 45) for part in commands.PHASES[phase].outputs]
         boundary = ExternalBoundary(operations, captures, external)
-        session.retain(directory / "claim.json", session.json_bytes({
-            "phase": phase, "manifest": manifest, "grant_sha256": grant_sha256,
-            "dispatch": "uncertain_until_checked",
-        }))
         status = session.one_phase(package, manifest, self.revision, self.evidence,
                                    grant, captures, self.target, self.alias, grant_sha256,
                                    run=boundary)

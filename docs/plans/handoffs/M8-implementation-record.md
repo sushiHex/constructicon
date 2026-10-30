@@ -17,12 +17,15 @@ subscription route; see the dated section at the end of this record.
 
 Outcome: operator composition now uses `scripts/ops/claude_read_window.py`
 rather than a private phase loop. `create` pins the initial inputs; `prepare`
-returns one canonical package and its required checks; `advance` consumes an
+returns one canonical package and a bound grant template with every check false;
+`advance` consumes an
 independently supplied phase grant, retains a claim before transport, collects
 the declared bounded readbacks, checks the receipts and derives the next
 bindings. It never creates a grant or automatically dispatches a successor.
 The same next-binding derivation validates the retained prefix, so a local
 progress file is not its own evidence. Operator revision covers the new entry.
+An unchanged grant template refuses. Only the releaser affirms checks against
+evidence and independently supplies the reviewed grant's digest.
 
 The execution boundary admits only the exact commands and timeouts declared
 by the selected phase. It records issued/completed/uncertain external

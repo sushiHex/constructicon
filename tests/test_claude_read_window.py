@@ -97,18 +97,10 @@ def new_window(tmp_path, record=None):
 
 
 def release(request, path):
-    pins, bindings = commands.package_checked(Path(request["package"]), request["manifest"],
-                                               commands.operator_revision())
     # Deliberately synthetic independent approval, scoped to this test only.
-    write(path, {
-        "schema_version": 1, "phase": request["phase"],
-        "package_manifest": request["manifest"],
-        "operator_revision": commands.operator_revision(),
-        "controller_commit": bindings.controller_commit,
-        "bindings_sha256": pins["bindings_sha256"], "boot": bindings.values["EXPECTED_BOOT"],
-        "target_sha256": commands.sha((TARGET + "\0" + ALIAS).encode()),
-        "checks": dict.fromkeys(request["checks"], True),
-    })
+    template = request["grant_template"]
+    assert template["checks"] == dict.fromkeys(request["checks"], False)
+    write(path, {**template, "checks": dict.fromkeys(template["checks"], True)})
     return commands.sha(path.read_bytes())
 
 
@@ -149,6 +141,25 @@ def test_actual_cli_checked_receipt_releases_exactly_one_successor(tmp_path):
     request = active.prepare_next()
     assert request["phase"] == "d2-preserve"
     grant = tmp_path / "grant.json"
+    pins, bindings = commands.package_checked(Path(request["package"]), request["manifest"],
+                                               commands.operator_revision())
+    assert request["grant_template"] == {
+        "schema_version": 1, "phase": request["phase"],
+        "package_manifest": request["manifest"],
+        "operator_revision": commands.operator_revision(),
+        "controller_commit": bindings.controller_commit,
+        "bindings_sha256": pins["bindings_sha256"], "boot": bindings.values["EXPECTED_BOOT"],
+        "target_sha256": commands.sha((TARGET + "\0" + ALIAS).encode()),
+        "checks": dict.fromkeys(request["checks"], False),
+    }
+    write(grant, request["grant_template"])
+    unchanged, unissued = fake_cli(
+        tmp_path, responses(request), "advance", "--work", active.work,
+        "--grant", grant, "--grant-sha256", commands.sha(grant.read_bytes()),
+    )
+    assert unchanged.returncode == 1 and unissued["substituted"] == 0
+    assert not (active.work / "d2-preserve/claim.json").exists()
+    assert not (active.work / "d2-preserve/captures").exists()
     digest = release(request, grant)
     result, observed = fake_cli(tmp_path, responses(request), "advance", "--work", active.work,
                                 "--grant", grant, "--grant-sha256", digest)
@@ -198,6 +209,45 @@ def test_release_digest_checked_before_claim_or_external_call(tmp_path):
     with pytest.raises(commands.Refused):
         active.advance(grant, "0" * 64, external=lambda *_args, **_kwargs: pytest.fail("called"))
     assert not (active.work / "d2-preserve/claim.json").exists()
+
+
+@pytest.mark.parametrize("cleanup", [False, True])
+def test_capture_creation_failure_retains_stopped_claim_and_cleanup_intent(
+    tmp_path, monkeypatch, cleanup,
+):
+    record = binding_record()
+    record["values"].update(FLOOR="5", GENERATION="6")
+    active = new_window(tmp_path, record)
+    if cleanup:
+        commands.build_package("withdraw-after", active.work / "initial-bindings.json",
+                               active.evidence, active.evidence / "cleanup-package",
+                               active.revision)
+        activation = active.work / "activate"
+        activation.mkdir()
+        write(activation / "claim.json", {"dispatch": "uncertain_until_checked"})
+    request = active.prepare_next(cleanup=cleanup)
+    grant = tmp_path / "grant.json"
+    digest = release(request, grant)
+    original_mkdir = Path.mkdir
+
+    def fail_captures(path, *args, **kwargs):
+        if path == active.work / request["phase"] / "captures":
+            raise OSError("synthetic capture creation interruption")
+        return original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", fail_captures)
+    with pytest.raises(OSError, match="synthetic capture creation"):
+        active.advance(grant, digest, cleanup=cleanup,
+                       external=lambda *_args, **_kwargs: pytest.fail("external call issued"))
+    claim = json.loads((active.work / request["phase"] / "claim.json").read_bytes())
+    assert claim == {"phase": request["phase"], "manifest": request["manifest"],
+                     "grant_sha256": digest, "dispatch": "uncertain_until_checked"}
+    assert not (active.work / request["phase"] / "checked.json").exists()
+    with pytest.raises(commands.Refused):
+        active.prepare_next(cleanup=cleanup)
+    if cleanup:
+        assert (active.work / "activate/claim.json").is_file()
+        assert (active.evidence / "cleanup-package/MANIFEST.sha256").is_file()
 
 
 def test_timeout_retains_uncertain_dispatch_and_no_successor(tmp_path):

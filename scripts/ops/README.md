@@ -35,9 +35,12 @@ python -I -B scripts/ops/claude_read_window.py advance \
   --grant-sha256 REVIEWED_PHASE_GRANT_SHA256 < /dev/null
 ```
 
-`prepare` returns the exact package, manifest and required checks. Review the
-complete evidence before supplying the next grant. `advance` spends an exclusive
-phase claim before transport; failed or interrupted phases cannot be retried.
+`prepare` returns the exact package, manifest, required checks and a complete
+`grant_template` with every check false. Save that template privately and affirm
+only checks supported by the reviewed evidence; an unchanged template is refused.
+The independently selected digest of that reviewed grant releases the phase.
+Preparation supplies neither approval nor a grant digest. `advance` spends an
+exclusive phase claim before transport; failed or interrupted phases cannot be retried.
 The claim records possible dispatch, not successful completion. A checked result
 requires every declared external operation and canonical receipt to complete.
 Existing source, boot, custody, drift, scope and cost decisions remain prerequisites.
@@ -47,20 +50,37 @@ the already prepared withdrawal package, with its own reviewed grant. This path
 remains available after a later refusal; it never recompiles recovery from damaged
 later evidence. An uncertain withdrawal requires the existing recovery procedure.
 No local success marker proves remote process termination or host idleness.
+An expired candidate blocks further ordinary phases when the retained prefix is
+rechecked; the explicit cleanup route remains available.
 
 The window executes only its phase's exact declared SSH/SCP operations. Unknown
 commands, altered interpreter/transport arguments and repeated operations refuse;
 there is no fixture environment switch that falls back to native execution.
 Credential-free CLI tests substitute the external boundary under a process-spawn
 denial hook and retain affirmative substitution records. This test guard is not
-a production containment boundary. The Linux rehearsal uses the same composition
-against its disposable foundation.
+a production containment boundary. The Linux rehearsal invokes the shared Python
+composition against its disposable foundation. CLI process tests use synthetic
+responses; they do not establish physical guest behavior.
 
 VM custody, start, address discovery, park and final idle observation remain the
 existing separately reviewed host operations. They are deliberately outside this
 entry and cannot be invoked through its external boundary. Do not wrap those
 operations into an untested private sequencer. This tooling supplies no permission
 to resume a stopped window, change controller/runtime pins or make another READ.
+
+The complete operator order remains:
+
+1. Select the reviewed source and bounded owner scope; use the existing host
+   helpers for custody, usage, start, address and measured boot.
+2. Run `prepare-bindings` with that boot, prepare the owner-decision artifact,
+   and `create` the fresh window. Preparation is not host qualification.
+3. `prepare`, inspect the complete records and grant template, then `advance`
+   exactly once for each explicitly released phase. Stop on unexpected output.
+4. Discharge withdrawal using the precompiled cleanup package. Collect bounded
+   failure metadata only under its existing separate procedure and evidence
+   prerequisites; the window does not silently launch a diagnostic action.
+5. Use the reviewed host helpers to park, affirm the resulting usage state,
+   and release custody only when the required cleanup evidence permits it.
 
 The `pre-reload-inventory` phase is **mutating maintenance**, not a read-only
 listing: it durably withdraws the active binding and performs the existing
