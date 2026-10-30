@@ -163,7 +163,11 @@ def run(mutants) -> int:
                 raise RuntimeError("mutation must compile exactly one matching function")
             prepared = codes[0]
         evidence = Evidence()
-        status = int(pytest.main(["-q", "--tb=short", test], plugins=[evidence]))
+        # No cache provider: deliberate mutant failures must never reach the
+        # ordinary run's lastfailed record, nor may its state steer selection.
+        status = int(pytest.main(
+            ["-q", "--tb=short", "-p", "no:cacheprovider", test], plugins=[evidence],
+        ))
         assertions = evidence.assertions & evidence.failed_calls
         if evidence.collection is not None:
             print("MUTATION_COLLECTION", json.dumps(evidence.collection))
