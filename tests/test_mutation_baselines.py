@@ -157,6 +157,25 @@ def test_mutation_children_leave_the_ordinary_failure_cache_untouched(tmp_path):
     assert sorted(path.name for path in cache.parent.iterdir()) == ["lastfailed"]
 
 
+def test_a_closure_bearing_target_is_diagnosed_before_pytest(tmp_path):
+    """Zero-argument super() needs a __class__ cell a recompiled body lacks (#290)."""
+
+    entry = ("guard", "subject:Child.value", "return super().value()",
+             "return super().value() + 1", "test_subject.py")
+    result = inventory(
+        tmp_path, "import subject\ndef test_value():\n    assert subject.Child().value() == 1\n",
+        [entry],
+        subject_source="class Base:\n    def value(self):\n        return 1\n"
+        "class Child(Base):\n    def value(self):\n        return super().value()\n",
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "BASELINE PASSED" in result.stdout
+    assert "MUTATION_UNSUPPORTED subject:Child.value free variables" in result.stdout
+    assert "guard: NOT PROVEN" in result.stdout
+    assert "KILLED" not in result.stdout
+    assert "INTERNALERROR" not in result.stdout + result.stderr
+
+
 def test_all_collection_hooks_return_before_mutation_activation(tmp_path):
     (tmp_path / "conftest.py").write_text(
         "import pytest, subject\nsubject.collection_events = []\n"
