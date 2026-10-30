@@ -380,6 +380,37 @@ def test_context_checked_and_historical_flat_observation_remains_valid(accepted)
     assert metadata.observation_checked(session.json_bytes(value)) == value
 
 
+@pytest.mark.parametrize("fault", [None, "verdict", "reason", "token_source", "api_key_source",
+                                  "extra", "incoherent", "kind", "class", "tag", "missing"])
+def test_initialize_observation_is_closed_coherent_and_bound_to_failure(fault):
+    value = observation()
+    event = value["journal"]["events"][0]
+    event["reason"] = metadata.reader.INITIALIZE_REASON
+    fields = event["initialize_observation"] = {
+        "verdict": "mode-mismatch", "reason": "credential-source-present",
+        "token_source": "none", "api_key_source": "unknown",
+    }
+    if fault in fields:
+        fields[fault] = PRIVATE
+    elif fault == "extra":
+        fields["private"] = PRIVATE
+    elif fault == "incoherent":
+        fields["verdict"] = "initialize-error"
+    elif fault == "kind":
+        event["kind"] = "RunFailed"
+    elif fault == "class":
+        event["error_type"] = "ValueError"
+    elif fault == "tag":
+        event["reason"] = "read_contract_refused"
+    elif fault == "missing":
+        del event["initialize_observation"]
+    if fault is None:
+        assert metadata.observation_checked(session.json_bytes(value)) == value
+    else:
+        with pytest.raises(commands.Refused):
+            metadata.observation_checked(session.json_bytes(value))
+
+
 def test_metadata_accepts_each_closed_family_and_rejects_unknown():
     from constructicon.core.claude_read_observation import ClaudeReadRefusalFamily
 

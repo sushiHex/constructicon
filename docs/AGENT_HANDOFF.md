@@ -16,6 +16,28 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude READ preserves finite startup refusals
+
+Generation 11 passed fresh raw-source qualification and actual candidate checks,
+then its single READ failed before dispatch with zero callbacks and a generic
+refusal. Withdrawal, park, fresh Off/idle and custody release completed. That
+result does not identify its cause or reproduce generation 10's after-callback
+summary failure; it is not live READ success.
+
+Fake-peer reproduction showed that the driver's finite initialize observation
+was discarded by the provider's closed-detail filter. Exact enum/coherence
+parsing and canonical reconstruction now preserve it through provider, API and
+the isolated metadata projection. Settings, hooks, startup snapshot-session and
+native-store guard refusals also have fixed codes. No acceptance or dispatch
+predicate changes and no native field value is published.
+
+Unknown launch/exchange exceptions and ambiguous timeout, cancellation, cleanup
+or custody failures remain unknown. The diagnostic correction is not proof of
+the historical cause. No new live attempt or installation follows from it;
+changed source requires the existing installation and fresh qualification law.
+
+---
+
 ## Claude READ consumes the pinned classifier's complete sideband path
 
 The generation-10 attempt completed a callback but refused the positively

@@ -1443,6 +1443,7 @@ async def test_initialization_refusal_retains_only_finite_source_tags_before_use
     )
     assert len(outcome.error.detail.encode()) <= 256
     assert "private" not in outcome.error.detail
+    assert claude_read.known_refusal_detail(outcome.error.detail) == outcome.error.detail
     assert launcher.joined and not calls and not launcher.peer.users
     assert len(launcher.peer.writes) == 1
 
@@ -1480,6 +1481,44 @@ async def test_non_initialization_refusal_keeps_generic_detail():
     assert isinstance(outcome, ExecutorFailure)
     assert outcome.error.detail == "Claude READ refused"
     assert launcher.conversation.initialize_observation.verdict.value == "mode-match"
+
+
+@pytest.mark.parametrize("gate,post", [
+    ("settings", False), ("settings", True), ("hooks", False), ("hooks", True),
+    ("startup-snapshot-session", False),
+])
+async def test_named_observation_guard_keeps_actual_phase_and_no_private_values(gate, post):
+    peer = Peer()
+    original = peer.emit
+
+    def emit(value):
+        if value.get("type") == "control_response" and peer.post is post:
+            body = value["response"].get("response", {})
+            if gate == "settings" and "applied" in body:
+                body["applied"]["model"] = "PRIVATE-MODEL"
+            if gate == "hooks" and "hooks" in body:
+                body["hooks"] = ["PRIVATE-HOOK"]
+        if (gate == "startup-snapshot-session" and value.get("type") == "system"
+                and value.get("subtype") == "background_tasks_changed"):
+            value["session_id"] = "PRIVATE-SESSION"
+        original(value)
+
+    peer.emit = emit
+    launcher = Launcher(peer)
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure) and launcher.joined
+    assert claude_read.known_refusal_detail(outcome.error.detail) == outcome.error.detail
+    if gate == "startup-snapshot-session":
+        assert outcome.error.detail == (
+            "Claude READ refused [known_refusal=startup-snapshot-session]")
+    else:
+        context = assert_refusal(outcome, gate)
+        assert context.family.value == "other-record"
+        assert context.phase.value == ("post-result" if post else "startup")
+        assert context.predicate.value == "guard"
+        assert context.terminal_result_accepted is post
+    assert len(calls) == len(peer.users) == int(post)
+    assert "PRIVATE" not in outcome.model_dump_json()
 
 
 @pytest.mark.parametrize("gate", ["system-init-model", "mcp-arguments"])
@@ -1770,11 +1809,15 @@ async def test_native_read_binding_is_checked_before_dispatch_and_after_join(def
     assert isinstance(outcome, ExecutorSuccess if defect is None else ExecutorFailure)
     if defect in {"guard", "model", "effort", "command"}:
         assert checked == [] and not launcher.peer.users
+        assert outcome.error.detail == "Claude READ refused [known_refusal=native-store-recipe]"
     elif defect == "initial-absent":
         assert checked == [False] and not launcher.peer.users
+        assert outcome.error.detail == "Claude READ refused [known_refusal=native-store-binding]"
     else:
         assert checked == [False, False, True] and launcher.joined
         assert len(launcher.peer.users) == 1
+        if defect is not None:
+            assert outcome.error.detail == "Claude READ refused"
 
 
 @pytest.mark.parametrize("sequence", ["same", "spawn-changed", "spawn-absent",

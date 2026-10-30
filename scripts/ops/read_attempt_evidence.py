@@ -48,6 +48,11 @@ ERRORS = frozenset(
 )
 # Exact source literals: api/claude_qualification.py:75; executors/linux.py:816.
 REASONS = {
+    "Claude READ refused [known_refusal=settings]": "claude_read_settings",
+    "Claude READ refused [known_refusal=hooks]": "claude_read_hooks",
+    "Claude READ refused [known_refusal=startup-snapshot-session]": "claude_read_startup_snapshot_session",
+    "Claude READ refused [known_refusal=native-store-recipe]": "claude_read_native_store_recipe",
+    "Claude READ refused [known_refusal=native-store-binding]": "claude_read_native_store_binding",
     "Claude qualification did not complete its fixed READ": "read_contract_refused",
     "the physical Linux launch probe contradicts containment": "probe_contradiction",
     "Claude READ refused [known_refusal=record]": "claude_read_record",
@@ -87,6 +92,70 @@ REASONS = {
     "Claude READ refused [known_refusal=api-retry]": "claude_read_api_retry",
     "Claude READ refused [known_refusal=thinking-tokens]": "claude_read_thinking_tokens",
 }
+
+# Standalone projection of claude_protocol's closed initialization observation.
+# Equality/coherence are checked exhaustively against that source law in tests.
+INITIALIZE_REASON = "claude_read_initialize"
+INITIALIZE_VERDICTS = frozenset({
+    "record-invalid", "record-too-large", "response-invalid", "request-mismatch",
+    "initialize-error", "initialize-busy", "mode-mismatch",
+})
+INITIALIZE_REASONS = frozenset({
+    "account-shape", "unsupported-account-field", "credential-source-present",
+    "account-value-type", "provider-mismatch", "ambiguous-api", "subscription-mismatch",
+})
+INITIALIZE_TOKENS = frozenset({
+    "absent", "null", "non-string", "unknown", "none", "auth-token-env", "oauth-token-env",
+    "oauth-token-fd", "ccr-oauth-file", "api-key-helper", "claude-ai",
+})
+INITIALIZE_API_KEYS = frozenset({
+    "absent", "null", "non-string", "unknown", "anthropic-api-key", "api-key-helper",
+    "login-managed-key",
+})
+
+
+def initialize_fields_valid(value):
+    if (type(value) is not dict
+            or set(value) != {"verdict", "reason", "token_source", "api_key_source"}):
+        return False
+    verdict, reason, token, api_key = (value[key] for key in
+                                     ("verdict", "reason", "token_source", "api_key_source"))
+    if (type(verdict) is not str or verdict not in INITIALIZE_VERDICTS
+            or any(item is not None and (type(item) is not str or item not in allowed)
+                   for item, allowed in ((reason, INITIALIZE_REASONS),
+                                         (token, INITIALIZE_TOKENS),
+                                         (api_key, INITIALIZE_API_KEYS)))):
+        return False
+    if verdict != "mode-mismatch":
+        return reason is None and token is None and api_key is None
+    if reason == "account-shape":
+        return token is None and api_key is None
+    if reason is None or token is None or api_key is None:
+        return False
+    absent = token == "absent" and api_key == "absent"
+    if reason == "credential-source-present":
+        return not absent
+    return reason == "unsupported-account-field" or absent
+
+
+def initialize_observation(value):
+    prefix = "Claude READ refused [initialize observed: verdict="
+    if type(value) is not str or len(value) > 256 or not value.startswith(prefix):
+        return None
+    fields = value.removeprefix(prefix).removesuffix("]").split("; ")
+    if len(fields) != 4:
+        return None
+    verdict, reason, token, api_key = fields
+    observed = dict(verdict=verdict, reason=reason.removeprefix("reason="),
+                    token_source=token.removeprefix("token_source="),
+                    api_key_source=api_key.removeprefix("api_key_source="))
+    observed = {key: None if item == "unobserved" else item for key, item in observed.items()}
+    if not initialize_fields_valid(observed):
+        return None
+    canonical = (prefix + verdict + "; reason=" + (observed["reason"] or "unobserved")
+                 + "; token_source=" + (observed["token_source"] or "unobserved")
+                 + "; api_key_source=" + (observed["api_key_source"] or "unobserved") + "]")
+    return observed if canonical == value else None
 # Generated from core/claude_read_observation.py: standalone -I -S -B cannot import core.
 REFUSAL_FAMILIES = frozenset({
     "other-record",
@@ -513,6 +582,11 @@ def _journal(root, uid, authorization, run, maximum):
                            if failure["error_type"] == "ContractViolation" else None)
                 if context is not None:
                     event["reason"], event["refusal_context"] = context
+                initialized = (initialize_observation(failure["error"])
+                               if failure["error_type"] == "ContractViolation" else None)
+                if initialized is not None:
+                    event["reason"] = INITIALIZE_REASON
+                    event["initialize_observation"] = initialized
             events.append(event)
         # A closed WAL database may make read-only SQLite create private sidecars.
         # Guard newly present auxiliaries too; appearance alone is not invalidity.

@@ -176,6 +176,7 @@ async def test_zero_callback_is_not_a_read_proof(qualified):
 @pytest.mark.parametrize("gate", [
     "system-init-model", "mcp-arguments", "barrier-control-request",
     "barrier-result", "barrier-user", "barrier-unknown", "post-result",
+    "initialize", "settings", "hooks", "startup-snapshot-session", "settings-post", "hooks-post",
 ])
 async def test_closed_refusal_survives_real_graph_journal_and_metadata(
     qualified, tmp_path, monkeypatch, gate,
@@ -189,6 +190,18 @@ async def test_closed_refusal_survives_real_graph_journal_and_metadata(
     original = Peer.emit
 
     def emit(self, value):
+        if value.get("type") == "control_response":
+            body = value["response"].get("response", {})
+            if gate == "initialize" and "account" in body:
+                body["account"].update(tokenSource="none", apiKeySource="PRIVATE-SOURCE-CANARY")
+            if ((gate == "settings" or (gate == "settings-post" and self.post))
+                    and "applied" in body):
+                body["applied"]["model"] = "PRIVATE-MODEL-CANARY"
+            if (gate == "hooks" or (gate == "hooks-post" and self.post)) and "hooks" in body:
+                body["hooks"] = ["PRIVATE-HOOK-CANARY"]
+        if (gate == "startup-snapshot-session" and value.get("type") == "system"
+                and value.get("subtype") == "background_tasks_changed"):
+            value["session_id"] = "PRIVATE-SESSION-CANARY"
         if (gate == "system-init-model" and value.get("type") == "system"
                 and value.get("subtype") == "init"):
             value["model"] = "PRIVATE-MODEL-CANARY"
@@ -211,8 +224,11 @@ async def test_closed_refusal_survives_real_graph_journal_and_metadata(
 
     monkeypatch.setattr(Peer, "emit", emit)
     assert await entry.qualify(a.executor) is RunStatus.FAILED
-    assert len(a.state.workers) == (1 if gate == "post-result" else 0)
-    assert len(a.state.peer.users) == (0 if gate.startswith("barrier-") else 1)
+    completed = gate in {"post-result", "settings-post", "hooks-post"}
+    assert len(a.state.workers) == int(completed)
+    before_user = (gate.startswith(("barrier-", "startup-"))
+                   or gate in {"initialize", "settings", "hooks"})
+    assert len(a.state.peer.users) == (0 if before_user else 1)
     assert a.state.guards == a.state.locks == 0 and a.state.native_joined
     # Read the actual graph's attempt and SQLite, replacing only UID/mode primitives.
     uid = 123
@@ -235,24 +251,42 @@ async def test_closed_refusal_survives_real_graph_journal_and_metadata(
     )
     assert projected["attempt"]["state"] == projected["journal"]["state"] == "valid"
     assert (projected["attempt"]["callback_started"]
-            == projected["attempt"]["callback_completed"] == (1 if gate == "post-result" else 0))
+            == projected["attempt"]["callback_completed"] == int(completed))
     failures = [event for event in projected["journal"]["events"] if event["kind"] == "NodeFailed"]
     assert len(failures) == 1
     failure = failures[0]
     assert {key: failure[key] for key in ("kind", "error_type", "reason")} == {
         "kind": "NodeFailed", "error_type": "ContractViolation",
-        "reason": ("claude_read_system_other" if gate == "post-result"
-                   else "claude_read_" + gate.replace("-", "_")),
+        "reason": ("claude_read_initialize" if gate == "initialize"
+                   else "claude_read_system_other" if gate == "post-result"
+                   else "claude_read_" + gate.removesuffix("-post").replace("-", "_")),
     }
-    context = failure["refusal_context"]
-    assert set(context) == {"family", "phase", "predicate", "terminal_result_accepted"}
-    assert context["terminal_result_accepted"] is (gate == "post-result")
+    if gate == "initialize":
+        assert failure["initialize_observation"] == {
+            "verdict": "mode-mismatch", "reason": "credential-source-present",
+            "token_source": "none", "api_key_source": "unknown",
+        }
+    elif gate.startswith("startup-"):
+        assert set(failure) == {"kind", "error_type", "reason"}
+    else:
+        context = failure["refusal_context"]
+        assert set(context) == {"family", "phase", "predicate", "terminal_result_accepted"}
+        assert context["terminal_result_accepted"] is completed
+    if gate in {"settings", "hooks", "settings-post", "hooks-post"}:
+        assert context == {"family": "other-record",
+                           "phase": "post-result" if completed else "startup",
+                           "predicate": "guard", "terminal_result_accepted": completed}
     if gate == "system-init-model":
         assert context == {"family": "system-init", "phase": "body-before-callback",
                            "predicate": "guard", "terminal_result_accepted": False}
     if gate == "post-result":
         assert context == {"family": "system-unknown-subtype", "phase": "post-result",
                            "predicate": "unsupported-family", "terminal_result_accepted": True}
+    if before_user:
+        assert projected["attempt"]["dispatch"] == "not dispatched"
+        assert projected["attempt"]["initial_binding_checked"] is True
+        assert projected["attempt"]["terminal_binding_checked"] is True
+        assert projected["attempt"]["relay_closed"] is True
     from scripts.ops import read_metadata_session as metadata
     assert metadata.observation_checked(json.dumps(projected).encode()) == projected
     published = json.dumps(projected)
@@ -269,6 +303,15 @@ async def test_closed_refusal_survives_real_graph_journal_and_metadata(
     ("exit", "Claude READ refused [known_refusal=api-retry; family=PRIVATE-CANARY; "
              "phase=drain; predicate=phase; terminal_result_accepted=false]"),
     ("timeout", "Claude READ refused [known_refusal=system-init-model]"),
+    ("exit", "Claude READ refused [initialize observed: verdict=PRIVATE-CANARY; "
+             "reason=credential-source-present; token_source=none; api_key_source=unknown]"),
+    ("exit", "Claude READ refused [initialize observed: verdict=mode-mismatch; "
+             "reason=PRIVATE-CANARY; token_source=none; api_key_source=unknown]"),
+    ("exit", "Claude READ refused [initialize observed: verdict=mode-mismatch; "
+             "reason=credential-source-present; token_source=PRIVATE-CANARY; "
+             "api_key_source=unknown]"),
+    ("exit", "Claude READ refused [initialize observed: verdict=mode-mismatch; "
+             "reason=credential-source-present; token_source=none; api_key_source=PRIVATE-CANARY]"),
 ])
 async def test_graph_never_journals_unrecognized_or_nonexit_detail(
     qualified, monkeypatch, kind, detail,

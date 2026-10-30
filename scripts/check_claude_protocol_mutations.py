@@ -2245,8 +2245,9 @@ READ_RETRY_CONTEXT_MUTANTS = (
      READ_TEST + "test_closed_system_context_binds_first_failure_across_receive_phases"),
     ("metadata contextual refusal requires its exact error class",
      EVIDENCE + "_journal",
-     'if failure["error_type"] == "ContractViolation" else None)',
-     'if True else None)',
+     'refusal_context(failure["error"])\n'
+     '                           if failure["error_type"] == "ContractViolation" else None)',
+     'refusal_context(failure["error"]) if True else None)',
      EVIDENCE_TEST + "test_closed_refusal_projection_never_accepts_unknown_detail_or_wrong_class"),
 )
 MUTANTS += READ_RETRY_CONTEXT_MUTANTS
@@ -2326,6 +2327,50 @@ READ_CLASSIFIER_MUTANTS = (
      READ_TEST + "test_classifier_sidebands_preserve_complete_read_and_delayed_idle_clear[8192]"),
 )
 MUTANTS += READ_CLASSIFIER_MUTANTS
+
+
+READ_STARTUP_REFUSAL_MUTANTS = (
+    ("initialize observation survives both public forwarding whitelists",
+     READ + "known_refusal_detail", 'parse_initialization_detail(value) is not None', 'False',
+     "tests/api/test_claude_qualification.py::"
+     "test_closed_refusal_survives_real_graph_journal_and_metadata[initialize]"),
+    ("initialize diagnostic requires canonical field labels",
+     READ + "parse_initialization_detail",
+     'return observation if _initialization_detail(observation) == value else None',
+     'return observation',
+     EVIDENCE_TEST + "test_initialize_diagnostic_rejects_private_noncanonical_or_incoherent_text"),
+    ("settings guard retains its distinct phase-neutral refusal",
+     READ + "ClaudeReadTransaction._control", 'ClaudeReadRefusalCode.SETTINGS, value',
+     'ClaudeReadRefusalCode.HOOKS, value',
+     READ_TEST + "test_named_observation_guard_keeps_actual_phase_and_no_private_values[settings-False]"),
+    ("hooks guard retains its distinct phase-neutral refusal",
+     READ + "ClaudeReadTransaction._control", 'ClaudeReadRefusalCode.HOOKS, value',
+     'ClaudeReadRefusalCode.SETTINGS, value',
+     READ_TEST + "test_named_observation_guard_keeps_actual_phase_and_no_private_values[hooks-False]"),
+    ("registration snapshot names only its failed session guard",
+     READ + "ClaudeReadTransaction._control", '_Refused(ClaudeReadRefusalCode.STARTUP_SNAPSHOT_SESSION)',
+     '_Refused()',
+     READ_TEST + "test_named_observation_guard_keeps_actual_phase_and_no_private_values[startup-snapshot-session-False]"),
+    ("native pre-spawn recipe mismatch retains its exact guard",
+     READ + "run_read_transaction", '_Refused(ClaudeReadRefusalCode.NATIVE_STORE_RECIPE)', '_Refused()',
+     READ_TEST + "test_native_read_binding_is_checked_before_dispatch_and_after_join[command]"),
+    ("native initial binding type failure retains its exact guard",
+     READ + "run_read_transaction", '_Refused(ClaudeReadRefusalCode.NATIVE_STORE_BINDING)', '_Refused()',
+     READ_TEST + "test_native_read_binding_is_checked_before_dispatch_and_after_join[initial-absent]"),
+    ("isolated initialize fields retain the original coherence law",
+     EVIDENCE + "initialize_fields_valid", 'return reason is None and token is None and api_key is None',
+     'return True',
+     EVIDENCE_TEST + "test_initialize_projection_equals_the_existing_coherence_law_exhaustively"),
+    ("isolated initialize diagnostic requires canonical reconstruction",
+     EVIDENCE + "initialize_observation", 'return observed if canonical == value else None',
+     'return observed',
+     EVIDENCE_TEST + "test_initialize_diagnostic_rejects_private_noncanonical_or_incoherent_text"),
+    ("checked initialize projection refuses private or incoherent fields",
+     METADATA + "observation_checked",
+     'and reader.initialize_fields_valid(event["initialize_observation"])', 'and True',
+     METADATA_TEST + "test_initialize_observation_is_closed_coherent_and_bound_to_failure"),
+)
+MUTANTS += READ_STARTUP_REFUSAL_MUTANTS
 
 
 MUTANTS += (

@@ -165,6 +165,100 @@ def test_standalone_projector_catalog_matches_closed_driver_codes():
                for message, reason in emitted.items())
 
 
+def test_initialize_projection_equals_the_existing_coherence_law_exhaustively():
+    from itertools import product
+
+    from constructicon.substrate.executors import claude_protocol as protocol
+    from constructicon.substrate.executors import claude_read as driver
+
+    assert {v.value for v in protocol.ClaudeInitializeVerdict
+            if v.value != "mode-match"} == reader.INITIALIZE_VERDICTS
+    assert {v.value for v in protocol.ClaudeModeMismatchReason} == reader.INITIALIZE_REASONS
+    assert {v.value for v in protocol.ClaudeTokenSourceCategory} == reader.INITIALIZE_TOKENS
+    assert {v.value for v in protocol.ClaudeApiKeySourceCategory} == reader.INITIALIZE_API_KEYS
+    for verdict, reason, token, api_key in product(
+        [*protocol.ClaudeInitializeVerdict], [None, *protocol.ClaudeModeMismatchReason],
+        [None, *protocol.ClaudeTokenSourceCategory], [None, *protocol.ClaudeApiKeySourceCategory],
+    ):
+        fields = dict(verdict=verdict.value, reason=None if reason is None else reason.value,
+                      token_source=None if token is None else token.value,
+                      api_key_source=None if api_key is None else api_key.value)
+        valid = (verdict is not protocol.ClaudeInitializeVerdict.MODE_MATCH
+                 and protocol.initialize_diagnostics_valid(verdict, reason, token, api_key))
+        assert reader.initialize_fields_valid(fields) is valid
+        if valid:
+            observation = protocol.ClaudeInitializeObservation(verdict, reason, token, api_key)
+            detail = driver._initialization_detail(observation)
+            assert driver.parse_initialization_detail(detail) == observation
+            assert driver.known_refusal_detail(detail) == detail
+            assert reader.initialize_observation(detail) == fields
+            assert len(detail.encode()) <= 256
+
+
+INITIALIZE_DETAIL = (
+    "Claude READ refused [initialize observed: verdict=mode-mismatch; "
+    "reason=credential-source-present; token_source=none; api_key_source=unknown]"
+)
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda s: s + " PRIVATE", lambda s: s[:-1], lambda s: s.replace("; ", ";", 1),
+    lambda s: s.replace("verdict=", "", 1), lambda s: s.replace("reason=", "", 1),
+    lambda s: s.replace("token_source=", "", 1), lambda s: s.replace("api_key_source=", "", 1),
+    lambda s: s.replace("mode-mismatch", PRIVATE),
+    lambda s: s.replace("credential-source-present", PRIVATE),
+    lambda s: s.replace("none", PRIVATE), lambda s: s.replace("unknown", PRIVATE),
+    lambda s: s.replace("mode-mismatch", "response-invalid"),
+    lambda s: s.replace("credential-source-present", "provider-mismatch"),
+    lambda s: s.replace("none", "absent").replace("unknown", "absent"),
+    lambda s: s.replace("mode-mismatch", "mode-match"),
+])
+def test_initialize_diagnostic_rejects_private_noncanonical_or_incoherent_text(files, mutation):
+    from constructicon.substrate.executors import claude_read as driver
+
+    detail = mutation(INITIALIZE_DETAIL)
+    assert driver.parse_initialization_detail(detail) is None
+    assert driver.known_refusal_detail(detail) is None
+    assert reader.initialize_observation(detail) is None
+    with sqlite3.connect(files / "read.sqlite") as db:
+        db.execute("UPDATE events SET payload=?", (
+            json.dumps({"error_type": "ContractViolation", "error": detail}),
+        ))
+    result = collect(files)
+    assert result["journal"]["events"] == [
+        {"kind": "NodeFailed", "error_type": "ContractViolation", "reason": "other"}]
+    assert PRIVATE not in json.dumps(result) and detail not in json.dumps(result)
+
+
+@pytest.mark.parametrize("detail", [INITIALIZE_DETAIL,
+    "Claude READ refused [initialize observed: verdict=response-invalid; "
+    "reason=unobserved; token_source=unobserved; api_key_source=unobserved]",
+])
+def test_initialize_projection_preserves_only_closed_fields_and_fits_full_event_bound(
+    files, detail,
+):
+    from scripts.ops import read_metadata_session as metadata
+
+    payload = json.dumps({"error_type": "ContractViolation", "error": detail})
+    with sqlite3.connect(files / "read.sqlite") as db:
+        db.execute("UPDATE events SET payload=?", (payload,))
+        db.executemany("INSERT INTO events VALUES(?,?,?,?,?,?)", [
+            (RUN, n, "NodeFailed", None, payload, "fixture")
+            for n in range(1, reader.EVENT_LIMIT)
+        ])
+    result = collect(files)
+    assert result["journal"]["event_count"] == reader.EVENT_LIMIT
+    expected = reader.initialize_observation(detail)
+    assert expected is not None
+    assert all(event == {"kind": "NodeFailed", "error_type": "ContractViolation",
+                         "reason": reader.INITIALIZE_REASON, "initialize_observation": expected}
+               for event in result["journal"]["events"])
+    raw = json.dumps(result).encode()
+    assert len(raw) <= reader.OUTPUT_BYTES
+    assert metadata.observation_checked(raw) == result
+    assert PRIVATE not in raw.decode() and AUTH not in raw.decode() and RUN not in raw.decode()
+
+
 def test_context_vocabulary_matches_driver():
     from constructicon.substrate.executors.claude_read import (
         ClaudeReadReceivePhase,
@@ -190,15 +284,20 @@ for family in sorted(namespace['REFUSAL_FAMILIES']):
               'terminal_result_accepted=false]')
     result[family] = namespace['refusal_context'](detail)
 result['private'] = namespace['refusal_context'](detail.replace(family, 'PRIVATE'))
+result['initialize'] = namespace['initialize_observation'](sys.argv[2])
 assert not any(name.startswith('constructicon') for name in sys.modules)
 print(json.dumps(result))
 """
     child = subprocess.run(
-        [sys.executable, "-I", "-S", "-B", "-c", program, reader.__file__],
+        [sys.executable, "-I", "-S", "-B", "-c", program, reader.__file__, INITIALIZE_DETAIL],
         stdin=subprocess.DEVNULL, capture_output=True, text=True, check=True,
     )
     observed = json.loads(child.stdout)
     assert observed.pop("private") is None
+    assert observed.pop("initialize") == {
+        "verdict": "mode-mismatch", "reason": "credential-source-present",
+        "token_source": "none", "api_key_source": "unknown",
+    }
     assert set(observed) == reader.REFUSAL_FAMILIES
     for family, (reason, context) in observed.items():
         assert reason == "claude_read_system_other"
@@ -245,6 +344,7 @@ def test_context_rejects_malformed_or_private_detail(files, mutation):
     ("ValueError", "Claude READ refused [known_refusal=api-retry; family=system-api-retry; "
                    "phase=drain; predicate=phase; terminal_result_accepted=true]"),
     ("ContractViolation", PRIVATE),
+    ("ValueError", INITIALIZE_DETAIL),
 ])
 def test_closed_refusal_projection_never_accepts_unknown_detail_or_wrong_class(
     files, error_type, message,
@@ -743,6 +843,9 @@ def test_event_limit_binds_and_private_strings_are_closed(files):
                 "family=system-model-refusal-no-fallback; phase=body-before-callback; "
                 "predicate=unsupported-family; terminal_result_accepted=false]"}),),
         )
+        db.execute("UPDATE events SET payload=? WHERE seq=2", (
+            json.dumps({"error_type": "ContractViolation", "error": INITIALIZE_DETAIL}),
+        ))
     result = collect(files)
     assert result["journal"]["state"] == "valid" and result["journal"]["partial"] is True
     assert result["journal"]["event_count"] == reader.EVENT_LIMIT
@@ -777,6 +880,7 @@ def test_event_limit_binds_and_private_strings_are_closed(files):
         "error_type",
         "reason",
         "refusal_context", "family", "predicate", "terminal_result_accepted",
+        "initialize_observation", "verdict", "token_source", "api_key_source",
     }
     allowed_strings = (
         reader.PHASES
@@ -790,6 +894,8 @@ def test_event_limit_binds_and_private_strings_are_closed(files):
         | reader.REFUSAL_PHASES
         | reader.REFUSAL_PREDICATES
         | set(reader.REASONS.values())
+        | reader.INITIALIZE_VERDICTS | reader.INITIALIZE_REASONS
+        | reader.INITIALIZE_TOKENS | reader.INITIALIZE_API_KEYS | {reader.INITIALIZE_REASON}
         | {"valid", "invalid", "missing", "other"}
     )
 

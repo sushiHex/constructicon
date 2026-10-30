@@ -10609,3 +10609,107 @@ The installed controller source and source-law revision are unchanged by this
 operator-only correction. It supplies no fresh boot, qualification, activation,
 model result or permission to reopen the stopped session. Live Claude READ
 remains unproven.
+
+
+## N6: preserve startup refusal evidence after generation 11 (#40)
+
+The [bounded generation-11 session](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6534416204)
+retained installed controller C9. Fresh D2/drift, controller, launch, checker,
+reload and qualification checks passed. The raw-Git preparation correction
+passed the local comparison that had stopped the preceding window; the fresh
+qualification source revision matched the committed source. Publication,
+activation, fixed fixture and actual-candidate review passed under the selected
+one-attempt scope.
+
+The single READ failed. Native phase status was completed, exit 1, without
+timeout or command stderr; that is not an observed vendor-process exit.
+The eligible existing metadata collector returned a checked, nonpartial
+observation: the attempt was valid, outcome failure, not dispatched, with zero
+callback starts/completions and no callback observation. Not dispatched names
+the absent user-turn intent; it does not prove that no vendor process started
+or no startup request occurred. Initial and terminal
+binding checks and relay closure were affirmative. The journal was valid and
+failed, with only the generic read_contract_refused category. Generation-11
+withdrawal, park, fresh Off/idle and custody release completed. No retry, login,
+explicit refresh, replacement, WRITE, checkpoint or re-baseline followed.
+
+The retained facts do not identify the underlying refusal. In particular,
+this does not reproduce generation 10's observed after-callback summary
+refusal, prove a credential or settings defect, or establish a successful live
+READ. Qualification is a separate exchange; its success does not prove the
+later READ startup passed.
+
+Offline fake-peer reproduction exposed a diagnostic loss: the READ driver
+emits a finite initialization observation, but the provider's closed-detail
+filter does not recognize its format. The provider and API therefore replace
+it with a generic failure. Settings, hooks and startup-snapshot-session guards
+also refuse without a named category. Sol and Claude independently confirmed
+these collisions. They are proven observability defects, not a recovered
+historical cause. Unclassified launcher/exchange failures remain another
+possible source of the historical generic result.
+
+A local metadata-request preparation lookup initially used the wrong binding
+field, before compilation or transport. It was corrected against the existing
+schema; the collector was issued once. No remote phase was repeated.
+
+
+### Closed observations through the existing path
+
+The driver now recognizes its existing initialization diagnostic only after
+parsing every field into the existing finite observation enums, checking their
+coherence and reconstructing the exact canonical string. Provider and API
+forward that same closed detail. The isolated reader projects only verdict,
+reason and the two finite source categories; it never publishes the vendor's
+source values. Its corresponding coherence law is checked against the driver's
+contract. An initialization observation is not a credential, mode grant or
+permission to dispatch.
+
+Exact settings, hooks, startup snapshot-session and native-store recipe/binding
+guards receive named refusal codes through the existing catalog. Settings and
+hooks are checked at startup and again after the result; their phase-neutral
+codes do not assert pre-dispatch timing. Their predicates and ordering do not
+change. No new await, ownership handoff, mutable
+latch, fallback, callback or terminal-success rule is introduced. The existing
+primary-failure, timeout, cancellation, cleanup and custody rules still control
+whether an observed diagnostic may be carried.
+
+This intentionally does not classify every generic failure. An arbitrary
+launcher exception, ambiguous cause group or lost custody remains unknown.
+The later before-spawn binding comparison likewise stays generic: changed
+custody must not be attributed as a previously observed protocol refusal.
+A review suggestion to label every such result as a startup-gate failure was
+rejected: the retained evidence cannot distinguish launch/exchange failures.
+No new raw capture or diagnostic host access is introduced. This correction
+requires changed-controller installation and fresh qualification before any
+separately selected live use; it does not reopen the closed window.
+
+
+### Focused verification and review
+
+The full fake graph carries an initialize refusal through provider, API,
+journal and the isolated reader. Guard cases cover settings and hooks at
+startup and after the result, snapshot-session and native-store checks.
+Canonical parsing tests include enum/coherence combinations and noncanonical
+or malicious strings; public observations remain finite and bounded. The
+accepting driver path remains part of the focused suite. Distinct mutations
+target the new diagnostic decisions rather than repeating full graph fixtures.
+
+The initial exploratory run was interrupted and is not final evidence.
+A later focused run reached 473 passing tests before an existing accepting
+provider test exceeded its 30-second acquisition deadline on Windows. A
+single causal control against raw exported parent 71e560a reproduced that
+same exception; no deadline was lengthened and no retry was used as proof.
+A separate WAL fixture initially projected invalid on the changed head, while
+the parent control passed it. That is not evidence of a reproduced pre-existing
+cause. Its diagnostic disposition and exact final checks belong in the PR;
+no blanket all-local-tests-passed claim is made.
+
+Independent Claude review inspected the frozen driver and both isolated
+reader modules. It found no introduced blocker, no acceptance/authority or
+lifecycle change, and no private-string exposure. The review confirmed
+canonical reconstruction, the reason/subrecord binding and unchanged
+cancellation/cleanup/custody precedence. Its later-binding observation was
+accepted as an explicit diagnostic limit rather than a request to weaken
+custody. Source revisions change; future local packages must use the raw-blob
+exporter, not ambient worktree/archive conversion. Final-head CI and selected
+executed mutations are recorded in the delivery PR.
