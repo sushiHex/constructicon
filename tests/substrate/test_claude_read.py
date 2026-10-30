@@ -80,6 +80,16 @@ def heartbeat(**changes):
             "heartbeat": True, "session_id": SESSION, "uuid": NATIVE_UUID, **changes}
 
 
+def classifier_sideband(kind="post_turn_summary", **changes):
+    # Pinned 2.1.296 so/ro schemas B@208312584/B@208312897 and Qi producers
+    # B@224148252/B@215553208. These display strings carry no turn authority.
+    fields = ({"summarizes_uuid": "", "status_category": "completed",
+               "status_detail": "private-summary", "needs_action": "private-action"}
+              if kind == "post_turn_summary" else {"detail": "private-progress"})
+    return {"type": "system", "subtype": kind, "uuid": NATIVE_UUID,
+            "session_id": SESSION, **fields, **changes}
+
+
 class Peer:
     def __init__(self, *, plan=ClaudePlan.PRO, callback=True, fragment=8192, defect=None):
         self.plan, self.callback, self.fragment, self.defect = plan, callback, fragment, defect
@@ -306,6 +316,205 @@ async def test_normal_init_sdk_server_source_metadata_preserves_one_read():
         "callback_replies": launcher.peer.callback_replies,
     }
     assert len(calls) == launcher.peer.callback_replies == 1
+
+
+@pytest.mark.parametrize("fragment", [1, 8192])
+async def test_classifier_sidebands_preserve_complete_read_and_delayed_idle_clear(fragment):
+    emitted = []
+
+    class ClassifierPeer(Peer):
+        def emit(self, value):
+            # A queued classifier emission can precede any receive, including
+            # the first authoritative background snapshot and post-result checks.
+            for kind in ("task_summary", "post_turn_summary"):
+                session = SESSION if self.registration or self.users else "private-display-session"
+                frame = classifier_sideband(kind, session_id=session)
+                emitted.append(kind)
+                super().emit(frame)
+            super().emit(value)
+
+        async def close_stdin(self):
+            await asyncio.sleep(0)
+            super().emit(classifier_sideband())
+            super().emit(classifier_sideband("task_summary", detail=None))
+            emitted.append("idle-clear")
+            await super().close_stdin()
+
+    launcher = Launcher(ClassifierPeer(fragment=fragment))
+    worker_done = False
+
+    async def worker(path, remaining):
+        nonlocal worker_done
+        for _ in range(claude_read.UI_RECORDS + 1):
+            launcher.peer.emit(classifier_sideband("task_summary"))
+        await asyncio.sleep(0)
+        worker_done = True
+        return "file text"
+
+    outcome, _ = await run(launcher, worker=worker)
+    assert isinstance(outcome, ExecutorSuccess), outcome
+    assert worker_done and launcher.joined and launcher.peer.closed
+    assert launcher.peer.callback_replies == 1 and len(launcher.peer.users) == 1
+    assert emitted.count("task_summary") > claude_read.UI_RECORDS and "idle-clear" in emitted
+    assert launcher.conversation._ui_records == 0
+    assert outcome.raw_reply == "task output"
+    assert outcome.usage == Usage(input_tokens=1, output_tokens=1)
+    assert outcome.rate_limit is None and "private-" not in outcome.model_dump_json()
+    assert b"private-" not in b"".join(launcher.peer.writes)
+
+
+@pytest.mark.parametrize("kind", ["post_turn_summary", "task_summary"])
+@pytest.mark.parametrize("damage", ["extra", "negative-extra", "missing", "type", "uuid",
+                                    "session", "null"])
+async def test_classifier_sideband_shape_and_session_refuse(kind, damage):
+    class Damaged(Peer):
+        def terminal(self):
+            frame = classifier_sideband(kind)
+            field = "status_detail" if kind == "post_turn_summary" else "detail"
+            if damage == "extra":
+                frame["unexpected"] = "private-field"
+            elif damage == "negative-extra":
+                frame["prevent_continuation"] = True
+            elif damage == "missing":
+                del frame[field]
+            elif damage == "type":
+                frame[field] = {"private-field": "value"}
+            elif damage == "uuid":
+                frame["uuid"] = "opaque"
+            elif damage == "session":
+                frame["session_id"] = NATIVE_UUID
+            else:
+                # detail null is lawful; every other field stays a scalar string.
+                frame["needs_action" if kind == "post_turn_summary" else "session_id"] = None
+            super().emit(frame)
+            super().terminal()
+
+    launcher = Launcher(Damaged())
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure) and launcher.joined and len(calls) == 1
+    context = assert_refusal(outcome, "system-other")
+    assert context.family.value == "system-" + kind.replace("_", "-")
+    assert context.phase is claude_read.ClaudeReadReceivePhase.BODY_AFTER_CALLBACK
+    assert context.terminal_result_accepted is False
+    assert context.predicate.value == ("correlation" if damage == "session" else "shape")
+    assert "private-" not in outcome.model_dump_json()
+
+
+@pytest.mark.parametrize("field", ["summarizes_uuid", "status_category", "status_detail",
+                                   "needs_action"])
+async def test_post_turn_summary_display_fields_are_exact_strings(field):
+    class Damaged(Peer):
+        def terminal(self):
+            super().emit(classifier_sideband(**{field: None}))
+            super().terminal()
+
+    outcome, _ = await run(Launcher(Damaged()))
+    assert isinstance(outcome, ExecutorFailure)
+    assert assert_refusal(outcome, "system-other").predicate.value == "shape"
+
+
+@pytest.mark.parametrize("kind", ["post_turn_summary", "task_summary"])
+@pytest.mark.parametrize("over_bound", [False, True])
+async def test_classifier_summary_retains_existing_complete_record_ceiling(kind, over_bound):
+    class Bounded(Peer):
+        def terminal(self):
+            field = "status_detail" if kind == "post_turn_summary" else "detail"
+            # This lawful display field is larger than task output's TEXT_BYTES;
+            # only the enclosing RECORD_BYTES bound applies to these observations.
+            size = claude_read.RECORD_BYTES if over_bound else claude_read.RECORD_BYTES - 400
+            super().emit(classifier_sideband(kind, **{field: "x" * size}))
+            super().terminal()
+
+    launcher = Launcher(Bounded())
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure if over_bound else ExecutorSuccess)
+    assert len(calls) == launcher.peer.callback_replies == 1 and launcher.joined
+    assert outcome.raw_reply == (None if over_bound else "task output")
+
+
+@pytest.mark.parametrize("limit", ["cumulative", "deadline"])
+async def test_classifier_observations_do_not_renew_or_escape_stream_bounds(limit):
+    class Limited(Peer):
+        def terminal(self):
+            for _ in range(40 if limit == "cumulative" else 1):
+                super().emit(classifier_sideband("task_summary", detail="x" * 512))
+            if limit == "cumulative":
+                super().terminal()
+            # Summary alone never settles the turn; silence spends the deadline.
+
+    launcher = Launcher(Limited())
+    if limit == "cumulative":
+        launcher.limits = replace(launcher.limits, stdout_bytes=16000)
+    outcome, calls = await run(launcher, timeout=.05 if limit == "deadline" else 5)
+    assert isinstance(outcome, ExecutorFailure) and launcher.joined
+    assert len(calls) == launcher.peer.callback_replies == 1
+    assert outcome.raw_reply is None and not launcher.conversation._terminal_result_accepted
+    if limit == "deadline":
+        assert outcome.error.kind == "timeout"
+    else:
+        assert assert_refusal(outcome, "stream-bound")
+
+
+@pytest.mark.parametrize("kind", ["post_turn_summary", "task_summary"])
+@pytest.mark.parametrize("missing", ["startup", "terminal"])
+async def test_classifier_summary_cannot_replace_required_evidence(kind, missing):
+    class Missing(Peer):
+        def emit(self, value):
+            if ((missing == "startup" and value.get("subtype") == "background_tasks_changed")
+                    or (missing == "terminal" and value.get("type") == "result")):
+                super().emit(classifier_sideband(kind))
+                self.closed = True
+                self.ready.set()
+                return
+            super().emit(value)
+
+    launcher = Launcher(Missing())
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure) and launcher.joined
+    assert launcher.peer.callback_replies == (0 if missing == "startup" else 1)
+    assert len(calls) == (0 if missing == "startup" else 1)
+    assert not launcher.conversation._terminal_result_accepted
+
+
+@pytest.mark.parametrize("ending", ["terminal", "negative", "eof", "cancel"])
+async def test_classifier_summary_before_worker_obstruction_cannot_release_reply(ending):
+    launcher = Launcher()
+    worker_joined = False
+
+    async def worker(path, remaining):
+        nonlocal worker_joined
+        try:
+            launcher.peer.emit(classifier_sideband())
+            launcher.peer.emit(classifier_sideband("task_summary", detail=None))
+            if ending == "terminal":
+                launcher.peer.terminal()
+            elif ending == "negative":
+                launcher.peer.emit(lifecycle(launcher.peer, "cancelled"))
+            elif ending == "cancel":
+                asyncio.current_task().cancel()
+            else:
+                launcher.peer.closed = True
+                launcher.peer.ready.set()
+                await asyncio.Event().wait()  # Let the reader affirm EOF after the summaries.
+            # Reader and worker may both finish at this await; read must win.
+            await asyncio.sleep(0)
+            return "file text"
+        finally:
+            worker_joined = True
+
+    if ending == "cancel":
+        with pytest.raises(asyncio.CancelledError):
+            await run(launcher, worker=worker)
+        assert worker_joined and launcher.joined and launcher.peer.callback_replies == 0
+        return
+    outcome, _ = await run(launcher, worker=worker)
+    assert isinstance(outcome, ExecutorFailure) and worker_joined and launcher.joined
+    assert launcher.peer.callback_replies == 0
+    assert not launcher.conversation._terminal_result_accepted
+    context = claude_read.parse_refusal_detail(outcome.error.detail)
+    assert context is not None
+    assert context.code.value == {"terminal": "barrier-result", "negative": "command-terminated",
+                                  "eof": "stream-end"}[ending]
 
 
 async def test_thinking_progress_is_private_inert_across_body_worker_control_and_tail():

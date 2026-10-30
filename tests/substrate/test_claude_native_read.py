@@ -115,7 +115,22 @@ async def test_compiled_fake_peer_completes_the_actual_bounded_read_protocol(wir
     titles = [row for row in records if row.get("subtype") == "session_title_changed"]
     assert {row["status"] for row in waits} == {"checking", "done"}
     assert titles and any(row["session_id"] != transaction._session for row in titles)
+    summaries = [(index, row) for index, row in enumerate(records)
+                 if row.get("subtype") in {"task_summary", "post_turn_summary"}]
+    result_index = next(index for index, row in enumerate(records) if row.get("type") == "result")
+    assert [row["subtype"] for _, row in summaries] == (
+        ["post_turn_summary", "task_summary"] if model == "fixture-zero" else
+        ["task_summary", "post_turn_summary", "task_summary"]
+    )
+    if model != "fixture-zero":
+        assert summaries[0][1]["detail"] == "Task observation"
+        assert summaries[0][0] < summaries[-2][0]
+    assert summaries[-2][1]["summarizes_uuid"] == ""
+    assert summaries[-1][1]["detail"] is None
+    assert summaries[-2][0] < result_index < summaries[-1][0]
+    assert all(row["session_id"] == transaction._session for _, row in summaries)
     assert transaction._state == "drained" and transaction._handshake == 3
+    assert transaction._terminal_result_accepted
     assert transaction._calls_completed == (0 if model == "fixture-zero" else 1)
     assert transaction._reply == {"fixture-read": SEED_CALC, "fixture-ready": "ready\n",
                                   "fixture-zero": "zero-callback"}[model]
@@ -123,6 +138,58 @@ async def test_compiled_fake_peer_completes_the_actual_bounded_read_protocol(wir
     if calls:
         assert calls[0][0] == ("ready.txt" if model == "fixture-ready" else "calc.py")
         assert 0 < calls[0][1] <= 10
+
+
+async def test_compiled_summaries_cannot_replace_the_terminal_result(wire_peer):
+    command = (str(wire_peer), "--print", "--input-format", "stream-json", "--output-format",
+               "stream-json", "--verbose", "--safe-mode", "--tools", "",
+               "--permission-mode", "default", "--allowedTools",
+               "mcp__constructicon_read__read_file", "--model", "fixture-ready", "--effort", "low")
+    child = await asyncio.create_subprocess_exec(
+        *command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    received = []
+
+    async def worker(path, remaining):
+        return "ready\n"
+
+    class OmitResult:
+        async def read(self, maximum=8192):
+            raw = await child.stdout.readline()
+            if raw:
+                record = json.loads(raw)
+                received.append(record)
+                if record.get("type") == "result":
+                    child.kill()
+                    return b""
+            return raw
+
+        async def write(self, data):
+            child.stdin.write(data)
+            await child.stdin.drain()
+
+        async def close_stdin(self):
+            child.stdin.close()
+            await child.stdin.wait_closed()
+
+    transaction = ClaudeReadTransaction(
+        TaskSpec(instruction="Read ready.txt."), selected_plan=ClaudePlan.PRO,
+        model="fixture-ready", effort="low", worker=worker, input_limit=1024 * 1024,
+        output_limit=1024 * 1024, deadline=asyncio.get_running_loop().time() + 10,
+    )
+    try:
+        async with asyncio.timeout(10):
+            with pytest.raises(_Refused):
+                await transaction(OmitResult())
+    finally:
+        if child.returncode is None:
+            child.kill()
+        await child.wait()
+    assert [row.get("subtype") for row in received if row.get("subtype") in
+            {"task_summary", "post_turn_summary"}] == ["task_summary", "post_turn_summary"]
+    assert received[-1]["type"] == "result"
+    assert transaction._state == "refused" and not transaction._terminal_result_accepted
 
 
 @pytest.mark.parametrize("kinds", [("initialize",),

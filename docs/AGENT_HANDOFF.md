@@ -16,6 +16,31 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude READ consumes the pinned classifier's complete sideband path
+
+The generation-10 attempt completed a callback but refused the positively
+identified post-turn-summary family before terminal acceptance. It was
+withdrawn and parked; the attempt is spent. The adapter now consumes exactly
+post-turn summary and task-summary observations through its existing
+synchronous receive helper, including empty summarized UUID and null idle
+clear after a result. They establish no session, callback or terminal evidence
+and publish no summary text. Malformed, foreign-session and unknown frames
+still refuse; existing byte/deadline bounds remain in force.
+
+The static audit traced ordinary frames and the independent queue through
+shutdown. BYOC intentionally enables this classifier surface and also protects
+the fixed startup environment. The earlier suppression premise was wrong:
+CLASSIFIER_SUMMARY=0 selects the heuristic, not no summaries. Removing BYOC
+would discard startup protections, so configuration stays unchanged.
+
+Source-shaped accepting/refusing tests and the shared compiled harmless peer
+cover the full sequence. The living M8 record retains source offsets, rejected
+alternatives and proof limits. This is offline compatibility evidence, not a
+live READ pass or a production qualification. A changed controller still needs
+reviewed installation and fresh qualification before a newly selected attempt.
+
+---
+
 ## Claude READ uses a repository-owned phase window
 
 The window entry composes the existing compiler, transport, receipt checks,
