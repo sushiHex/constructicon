@@ -32,7 +32,7 @@ def json_bytes(value):
     return (json.dumps(value, sort_keys=True) + "\n").encode("utf-8")
 
 
-def capture(name, captures, argv, timeout, max_stdout=4096):
+def capture(name, captures, argv, timeout, max_stdout=4096, *, run=None):
     """Retain actual completion and bounded streams, including nonzero/timeout.
 
     Bounds are checked after capture; they are not process or disk-write caps.
@@ -48,7 +48,7 @@ def capture(name, captures, argv, timeout, max_stdout=4096):
         (captures / (name + ".status.json")).open("xb") as status,
     ):
         try:
-            child = subprocess.run(
+            child = (subprocess.run if run is None else run)(
                 argv,
                 cwd=captures.parent,
                 stdin=subprocess.DEVNULL,
@@ -196,6 +196,8 @@ def one_phase(
     target,
     alias,
     grant_sha256=None,
+    *,
+    run=None,
 ):
     """Delegate exactly one reviewed phase. Native nonzero grants no successor."""
     _target(target, alias)
@@ -208,13 +210,13 @@ def one_phase(
     retain(captures / (phase + "-context.json"), context)
     sequence = transport_commands(package, manifest, bindings, target, alias, phase)
     for suffix, argv in zip(("preflight", "mkdir", "copy"), sequence[:3], strict=True):
-        status, out, err = capture(phase + "-" + suffix, captures, argv, 120)
+        status, out, err = capture(phase + "-" + suffix, captures, argv, 120, run=run)
         commands.require(commands.completed_zero(status) and out == err == b"")
     if phase == "activate":
         # Preserve duty before possible activation, including interruption prefixes.
         retain(evidence / "activation-may-have-completed.json", context)
     status, out, err = capture(
-        phase + "-native", captures, sequence[3], 600 if phase == "read" else 1800
+        phase + "-native", captures, sequence[3], 600 if phase == "read" else 1800, run=run
     )
     retain(evidence / (phase + "-context.json"), context)
     retain(evidence / (phase + ".status.json"), json_bytes(status))
@@ -223,7 +225,23 @@ def one_phase(
     return status
 
 
-def readback(package, manifest, operator_revision, evidence, part, captures, target, alias):
+def readback_argv(bindings, phase, part, manifest, target, alias):
+    """Declare the exact fixed transport argv before crossing its boundary."""
+    _target(target, alias)
+    path, limit, service, _ = commands.readback_spec(bindings, phase, part, manifest)
+    guard = (
+        'test "$(/usr/bin/cat /proc/sys/kernel/random/boot_id)" = '
+        + shlex.quote(bindings.values["EXPECTED_BOOT"])
+        + " && "
+    )
+    return [
+        SSH, "-T", *ssh_options(alias), target,
+        guard + commands.protected_read_command(path, limit, service),
+    ]
+
+
+def readback(package, manifest, operator_revision, evidence, part, captures, target, alias,
+             *, run=None):
     """Read one fixed finite metadata output under the actual request context."""
     _target(target, alias)
     pins, bindings = commands.validated_package(package, manifest, operator_revision, evidence)
@@ -239,21 +257,10 @@ def readback(package, manifest, operator_revision, evidence, part, captures, tar
         and status["returncode"] in (0, 1)
         and status["timed_out"] is False
     )
-    path, limit, service, slot = commands.readback_spec(bindings, phase, part, manifest)
-    guard = (
-        'test "$(/usr/bin/cat /proc/sys/kernel/random/boot_id)" = '
-        + shlex.quote(bindings.values["EXPECTED_BOOT"])
-        + " && "
-    )
-    argv = [
-        SSH,
-        "-T",
-        *ssh_options(alias),
-        target,
-        guard + commands.protected_read_command(path, limit, service),
-    ]
+    _, limit, _, slot = commands.readback_spec(bindings, phase, part, manifest)
+    argv = readback_argv(bindings, phase, part, manifest, target, alias)
     name = phase + "-readback-" + part
-    result, raw, err = capture(name, captures, argv, 45, limit)
+    result, raw, err = capture(name, captures, argv, 45, limit, run=run)
     commands.require(commands.completed_zero(result) and err == b"")
     retain(evidence / slot, raw)
     retain(evidence / (name + ".status.json"), json_bytes(result))

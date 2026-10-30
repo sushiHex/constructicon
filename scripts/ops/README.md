@@ -12,6 +12,63 @@ bindings, script bytes, phase, boot and target-specific grant.
 
 ## Commands
 
+For a new bounded READ window, use `claude_read_window.py` to compose these
+same phase operations. It retains the checked prefix, derives late bindings
+from the canonical receipts, and prepares withdrawal before activation. Each
+`advance` still requires an independently reviewed, phase-specific grant;
+the entry does not manufacture approvals or automatically release successors.
+
+```bash
+python -I -B scripts/ops/claude_read_window.py describe < /dev/null
+
+python -I -B scripts/ops/claude_read_window.py create \
+  --bindings PRIVATE_INITIAL_BINDINGS_JSON --evidence PRIVATE_EVIDENCE_DIR \
+  --work FRESH_PRIVATE_WINDOW_DIR --operator-revision REVIEWED_OPERATOR_REVISION \
+  --target OPERATOR_AT_ADDRESS --alias CHECKED_ALIAS \
+  --owner-approval-sha256 INDEPENDENTLY_APPROVED_SHA256 < /dev/null
+
+python -I -B scripts/ops/claude_read_window.py prepare \
+  --work PRIVATE_WINDOW_DIR < /dev/null
+
+python -I -B scripts/ops/claude_read_window.py advance \
+  --work PRIVATE_WINDOW_DIR --grant PRIVATE_PHASE_GRANT_JSON \
+  --grant-sha256 REVIEWED_PHASE_GRANT_SHA256 < /dev/null
+```
+
+`prepare` returns the exact package, manifest and required checks. Review the
+complete evidence before supplying the next grant. `advance` spends an exclusive
+phase claim before transport; failed or interrupted phases cannot be retried.
+The claim records possible dispatch, not successful completion. A checked result
+requires every declared external operation and canonical receipt to complete.
+Existing source, boot, custody, drift, scope and cost decisions remain prerequisites.
+
+After an activation claim, `prepare --cleanup` and `advance --cleanup` select
+the already prepared withdrawal package, with its own reviewed grant. This path
+remains available after a later refusal; it never recompiles recovery from damaged
+later evidence. An uncertain withdrawal requires the existing recovery procedure.
+No local success marker proves remote process termination or host idleness.
+
+The window executes only its phase's exact declared SSH/SCP operations. Unknown
+commands, altered interpreter/transport arguments and repeated operations refuse;
+there is no fixture environment switch that falls back to native execution.
+Credential-free CLI tests substitute the external boundary under a process-spawn
+denial hook and retain affirmative substitution records. This test guard is not
+a production containment boundary. The Linux rehearsal uses the same composition
+against its disposable foundation.
+
+VM custody, start, address discovery, park and final idle observation remain the
+existing separately reviewed host operations. They are deliberately outside this
+entry and cannot be invoked through its external boundary. Do not wrap those
+operations into an untested private sequencer. This tooling supplies no permission
+to resume a stopped window, change controller/runtime pins or make another READ.
+
+The `pre-reload-inventory` phase is **mutating maintenance**, not a read-only
+listing: it durably withdraws the active binding and performs the existing
+conditional boot-anchor repair under the retained maintenance lock. Its own
+bounded outputs must positively establish withdrawal and a descriptor generation
+of at least one before RELOAD can compile. Post-qualification `inventory` still
+owns the generation used for publication; the two observations are distinct.
+
 Use a reviewed checkout and its project environment. Run commands with closed
 stdin. These examples contain placeholders; they are not a host-ready session.
 

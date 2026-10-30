@@ -116,9 +116,16 @@ def consumer_world(tmp_path):
             + "\n"
         ).encode()
     )
-    for phase in ("controller-verify", "launch-verify", "checker-verify"):
+    for phase in ("controller-verify", "launch-verify", "checker-verify", "parents"):
         package, manifest, pins, bindings = build(tmp_path, record, phase, evidence)
         synthetic_receipt(evidence, package, manifest, pins, bindings)
+    package, manifest, pins, bindings = build(tmp_path, record, "pre-reload-inventory", evidence)
+    synthetic_receipt(evidence, package, manifest, pins, bindings)
+    _synthetic_readback(evidence, "pre-reload-inventory", "stderr",
+                        "pre-reload-inventory.command.stderr", b"")
+    _synthetic_readback(evidence, "pre-reload-inventory", "inventory",
+                        "pre-reload-inventory.json",
+                        b'{"highest_generation": 1, "withdrawn": true}\n')
     return record, evidence
 
 
@@ -220,14 +227,70 @@ def test_checker_receipt_is_load_bearing_consumer_guard(consumer_world, fault):
             },
         )
     with pytest.raises((commands.Refused, FileNotFoundError)):
+        commands.compile_phase(bindings, "pre-reload-inventory", evidence)
+
+
+@pytest.mark.parametrize(
+    "fault", ["missing", "native", "stderr", "readback", "zero", "bool", "withdrawn"]
+)
+def test_reload_requires_positive_pre_reload_inventory(consumer_world, fault):
+    record, evidence = consumer_world
+    bindings = commands.Bindings.from_dict(record)
+    phase = "pre-reload-inventory"
+    if fault == "missing":
+        (evidence / (phase + ".status.json")).unlink()
+    elif fault == "native":
+        write(evidence / (phase + ".status.json"),
+              {"completed": True, "returncode": 1, "timed_out": False})
+    elif fault == "stderr":
+        _synthetic_readback(evidence, phase, "stderr", phase + ".command.stderr", b"error")
+    elif fault == "readback":
+        (evidence / (phase + "-readback-inventory.status.json")).unlink()
+    else:
+        value = {"highest_generation": 7, "withdrawn": True}
+        if fault == "zero":
+            value["highest_generation"] = 0
+        elif fault == "bool":
+            value["highest_generation"] = True
+        else:
+            value["withdrawn"] = False
+        _synthetic_readback(evidence, phase, "inventory", phase + ".json",
+                            json.dumps(value).encode())
+    with pytest.raises((commands.Refused, FileNotFoundError)):
         commands.compile_phase(bindings, "reload", evidence)
+    with pytest.raises((commands.Refused, FileNotFoundError)):
+        commands.check_phase_receipt(bindings, phase, evidence)
+
+
+@pytest.mark.parametrize("predecessor", ["checker-verify", "parents"])
+def test_pre_reload_requires_predecessor_receipt(consumer_world, predecessor):
+    record, evidence = consumer_world
+    (evidence / (predecessor + ".status.json")).unlink()
+    with pytest.raises((commands.Refused, FileNotFoundError)):
+        commands.compile_phase(
+            commands.Bindings.from_dict(record), "pre-reload-inventory", evidence
+        )
+
+
+def test_pre_reload_inventory_contract_and_maintain_command(consumer_world):
+    record, evidence = consumer_world
+    bindings = commands.Bindings.from_dict(record)
+    phase = "pre-reload-inventory"
+    assert commands.PHASES[phase].checks == frozenset({
+        "controller_verified", "launch_verified", "parents_checked", "installed_checker_verified"
+    })
+    script = commands.compile_phase(bindings, phase, evidence)
+    assert b'"${STORE[@]}" maintain' in script
+    assert b'inherit_maintenance' in script and b'generation_floor >= 1' in script
+    assert b'< /dev/null > "$R/pre-reload-inventory.json"' in script
+    assert b' reload ' in commands.compile_phase(bindings, "reload", evidence)
 
 
 def test_all_names_and_readbacks_share_the_bound_namespace(consumer_world):
     record, _ = consumer_world
     bindings = commands.Bindings.from_dict(record)
     names = {commands.remote_name(bindings, phase, "a" * 64) for phase in commands.PHASES}
-    assert len(names) == 21 and all(name.startswith(record["namespace"] + "-") for name in names)
+    assert len(names) == 22 and all(name.startswith(record["namespace"] + "-") for name in names)
     for phase in ("controller-verify", "launch-verify"):
         path, _, _, _ = commands.readback_spec(bindings, phase, "verification", "a" * 64)
         assert record["namespace"] in path
@@ -243,6 +306,7 @@ def test_generated_readiness_bash_syntax_only(consumer_world):
         "launch-verify",
         "checker-verify",
         "parents",
+        "pre-reload-inventory",
         "reload",
         "reload-check",
     ):

@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 from scripts.ops import claude_read_commands as commands
 from scripts.ops import claude_read_session as session
+from scripts.ops import claude_read_window as window_entry
 from scripts.ops import read_metadata_session as metadata
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -157,7 +158,10 @@ def test_failure_observation_keeps_bounded_facts_and_redacts_paths(tmp_path):
         db.execute("INSERT INTO events VALUES (2, ?, ?)", ("RunFailed", "not emitted"))
 
     def local_python(argv, **kwargs):
-        return subprocess.run([sys.executable, "-I", "-S", "-B", "-c", argv[-2], argv[-1]],
+        assert argv[:9] == ["sudo", "-n", "-u", "m8-service", "/usr/bin/python3",
+                            "-I", "-S", "-B", "-c"] and len(argv) == 11
+        assert argv[-1] == str(tmp_path) and kwargs["stdin"] is subprocess.DEVNULL
+        return subprocess.run([sys.executable, "-I", "-S", "-B", "-c", argv[9], argv[10]],
                               **kwargs)
 
     observed = _failure_observation(str(tmp_path), local_python)
@@ -171,6 +175,9 @@ def test_failure_observation_keeps_bounded_facts_and_redacts_paths(tmp_path):
 
 def test_collector_diagnostic_reports_caught_location_without_exception_text():
     def local_python(argv, **kwargs):
+        assert argv[:9] == ["sudo", "-n", "-u", "m8-service", "/usr/bin/python3",
+                            "-I", "-S", "-B", "-c"]
+        assert len(argv) >= 11 and kwargs["stdin"] is subprocess.DEVNULL
         return subprocess.run([sys.executable, "-I", "-S", "-B", "-c", *argv[9:]], **kwargs)
 
     source = ('def main(argv):\n    try:\n        raise ValueError("PRIVATE")\n'
@@ -182,6 +189,9 @@ def test_collector_diagnostic_reports_caught_location_without_exception_text():
 
 def test_collector_diagnostic_reports_only_fixed_file_custody_booleans(tmp_path):
     def local_python(argv, **kwargs):
+        assert argv[:9] == ["sudo", "-n", "-u", "m8-service", "/usr/bin/python3",
+                            "-I", "-S", "-B", "-c"]
+        assert len(argv) >= 11 and kwargs["stdin"] is subprocess.DEVNULL
         return subprocess.run([sys.executable, "-I", "-S", "-B", "-c", *argv[9:]], **kwargs)
 
     (tmp_path / "read.sqlite").write_bytes(b"fixture")
@@ -229,9 +239,8 @@ def test_generated_phases_carry_actual_receipts_through_withdrawal(
     assert bindings.values["EXPECTED_BOOT"] == (
         Path("/proc/sys/kernel/random/boot_id").read_text().strip()
     )
-    evidence, captures = tmp_path / "evidence", tmp_path / "captures"
+    evidence = tmp_path / "evidence"
     evidence.mkdir()
-    captures.mkdir()
     original_run = subprocess.run
     # A synthetic owner decision is an explicit input to this disposable test only.
     approval_path = evidence / "owner-approval.json"
@@ -247,6 +256,7 @@ def test_generated_phases_carry_actual_receipts_through_withdrawal(
     def local_transport(argv, **kwargs):
         # Preserve the exact remote shell program and run it with its real HOME,
         # uid and cwd. SCP is a byte-preserving install into that same directory.
+        argv = list(argv)
         if argv[0] == session.SSH:
             assert argv[-2] == TARGET
             return original_run(["/usr/bin/env", "-i",
@@ -265,95 +275,58 @@ def test_generated_phases_carry_actual_receipts_through_withdrawal(
                 return result
         return result
 
-    monkeypatch.setattr(session.subprocess, "run", local_transport)
-    # The CLI remains a separate real interpreter; bypass only the transport
-    # adapter when invoking it from this process.
-    def cli(*args: str) -> dict:
-        monkeypatch.setattr(session.subprocess, "run", original_run)
-        try:
-            return _cli(*args)
-        finally:
-            monkeypatch.setattr(session.subprocess, "run", local_transport)
+    window = window_entry.ReadWindow.create(
+        binding_path, evidence, tmp_path / "window", revision, TARGET, ALIAS,
+        owner_approval_sha256=commands.sha(approval_path.read_bytes()),
+    )
 
-    def build(phase: str, output: Path) -> tuple[str, Path]:
-        value_path = tmp_path / (phase + "-bindings.json")
-        _json(value_path, record)
-        made = cli("compile", "--phase", phase, "--bindings", str(value_path),
-                   "--evidence", str(evidence), "--out", str(output),
-                   "--operator-revision", revision)
-        assert made["phase"] == phase
-        return made["package_manifest"], output
-
-    def execute(phase: str, manifest: str, package: Path) -> None:
+    def execute(cleanup: bool = False) -> dict:
+        request = window.prepare_next(cleanup=cleanup)
+        phase, manifest = request["phase"], request["manifest"]
+        package = Path(request["package"])
         pins, actual = commands.package_checked(package, manifest, revision)
         grant = {"schema_version": 1, "phase": phase, "package_manifest": manifest,
                  "operator_revision": revision, "controller_commit": actual.controller_commit,
                  "bindings_sha256": pins["bindings_sha256"], "boot": actual.values["EXPECTED_BOOT"],
                  "target_sha256": commands.sha((TARGET + "\0" + ALIAS).encode()),
-                 "checks": {name: True for name in (
-                     commands.COMMON_CHECKS | commands.PHASES[phase].checks)}}
+                 "checks": {name: True for name in request["checks"]}}
         grant_path = tmp_path / (phase + "-grant.json")
         _json(grant_path, grant)
-        status = session.one_phase(package, manifest, revision, evidence, grant_path, captures,
-                                   TARGET, ALIAS, commands.sha(grant_path.read_bytes()))
-        if not commands.completed_zero(status):
+        try:
+            result = window.advance(grant_path, commands.sha(grant_path.read_bytes()),
+                                    cleanup=cleanup, external=local_transport)
+        except Exception as error:
+            # Inspect only already-retained captures; never issue another readback.
+            captures = window.work / phase / "captures"
             observations = {}
-            if status["completed"] and status["returncode"] in (0, 1) and not status["timed_out"]:
-                parts = commands.PHASES[phase].outputs
-                for part in ("stderr", "stdout", "result"):
-                    if part not in parts:
-                        continue
-                    try:
-                        readback_status = session.readback(
-                            package, manifest, revision, evidence, part, captures, TARGET, ALIAS,
+            names = [phase + "-native"] + [
+                phase + "-readback-" + part for part in commands.PHASES[phase].outputs
+            ]
+            for name in names:
+                for suffix in ("status.json", "stdout", "stderr"):
+                    path = captures / (name + "." + suffix)
+                    if path.is_file():
+                        with path.open("rb") as stream:
+                            raw = stream.read(2048)
+                        observations[name + "." + suffix] = re.sub(
+                            r"/[^\s:'\"]+", "<path>", raw.decode(errors="replace")
                         )
-                        _, _, _, slot = commands.readback_spec(actual, phase, part, manifest)
-                        raw = commands.bounded(evidence / slot, parts[part][2], empty=True)
-                        safe = re.sub(r"/[^\s:'\"]+", "<path>", raw.decode(errors="replace"))
-                        observations[part] = {"status": readback_status, "bytes": safe[:2048]}
-                    except Exception as error:
-                        name = phase + "-readback-" + part
-                        details = {"readback_error": type(error).__name__}
-                        for suffix in ("status.json", "stderr"):
-                            capture_path = captures / (name + "." + suffix)
-                            if capture_path.is_file():
-                                with capture_path.open("rb") as stream:
-                                    raw = stream.read(1024)
-                                safe = re.sub(r"/[^\s:'\"]+", "<path>",
-                                              raw.decode(errors="replace"))
-                                details[suffix] = safe[:1024]
-                        observations[part] = details
             if phase == "read":
                 observations["fake_run"] = _failure_observation(actual.values["RUN"], original_run)
-            outer = (evidence / (phase + ".stderr")).read_bytes().decode(errors="replace")
-            outer = re.sub(r"/[^\s:'\"]+", "<path>", outer)[:2048]
-            pytest.fail(f"phase={phase} status={status} outer_stderr={outer!r} "
-                        f"readbacks={observations!r}")
-        for part in commands.PHASES[phase].outputs:
-            assert commands.completed_zero(session.readback(package, manifest, revision, evidence,
-                                                             part, captures, TARGET, ALIAS))
-        checked = cli("check", "--package", str(package), "--manifest", manifest,
-                      "--evidence", str(evidence), "--operator-revision", revision)
-        assert checked == {"phase": phase, "checked": True}
+            pytest.fail(f"phase={phase} error={type(error).__name__} "
+                        f"retained={observations!r}")
+        assert result["phase"] == phase and result["checked"] is True
+        assert result["external"]["mode"] == "substituted"
+        assert result["external"]["declared"] == result["external"]["observed"]
+        return result
 
-    cleanup = None
     for phase in commands.PHASES:
-        if phase == "activate":
-            made = cli("prepare-cleanup", "--bindings", str(binding_path),
-                       "--evidence", str(evidence), "--operator-revision", revision)
-            assert made["phase"] == "withdraw-after"
-            cleanup = made["package_manifest"], evidence / "cleanup-package"
-        if phase == "withdraw-after":
-            assert cleanup is not None
-            manifest, package = cleanup
-        else:
-            manifest, package = build(phase, tmp_path / ("package-" + phase))
-        execute(phase, manifest, package)
+        result = execute()
+        assert result["phase"] == phase
+        binding_path = window.work / phase / "next-bindings.json"
+        record = json.loads(binding_path.read_bytes())
         values = record["values"]
         if phase == "activate" and abort_after_activation:
-            # The actual activation completed. Damage its predecessor receipt,
-            # demonstrate that a later compile refuses, and use the previously
-            # compiled withdrawal without minting or dispatching a READ.
             assert (evidence / "activation-may-have-completed.json").is_file()
             receipt = evidence / "qualify.stdout"
             assert receipt.read_bytes() == commands.PHASES["qualify"].stdout
@@ -361,63 +334,47 @@ def test_generated_phases_carry_actual_receipts_through_withdrawal(
             assert commands.compile_phase(active_bindings, "mint", evidence)
             receipt.write_bytes(b"damaged receipt\n")
             with pytest.raises(commands.Refused):
-                commands.compile_phase(active_bindings, "mint", evidence)
-            assert cleanup is not None
-            cleanup_manifest, cleanup_package = cleanup
+                window.prepare_next()
+            cleanup_package = evidence / "cleanup-package"
             assert ("readonly GENERATION=" + values["GENERATION"] + "\n").encode() in (
                 cleanup_package / "phase.sh"
             ).read_bytes()
-            execute("withdraw-after", cleanup_manifest, cleanup_package)
+            assert execute(cleanup=True)["phase"] == "withdraw-after"
             assert not (evidence / "authorization-candidate.json").exists()
             assert not (evidence / "read-status.json").exists()
             break
+        if phase in ("qualify-check", "inventory"):
+            damaged = (evidence / "checker.stdout" if phase == "qualify-check" else
+                       evidence / "inventory-readback-inventory-context.json")
+            saved = damaged.read_bytes()
+            if phase == "qualify-check":
+                damaged.write_bytes(b"sha256:" + b"0" * 64 + b"\n")
+            else:
+                context = json.loads(saved)
+                context["part"] = "stderr"
+                _json(damaged, context)
+            try:
+                with pytest.raises(commands.Refused):
+                    window.prepare_next()
+            finally:
+                damaged.write_bytes(saved)
+        if phase == "candidate-pins":
+            approved = window.config["owner_approval_sha256"]
+            window.config["owner_approval_sha256"] = "0" * 64
+            try:
+                with pytest.raises(commands.Refused):
+                    window.prepare_next()
+            finally:
+                window.config["owner_approval_sha256"] = approved
         if phase == "reload-check":
             digest_path = evidence / "reload.digest"
             actual_digest = digest_path.read_bytes()
             digest_path.write_bytes(b"sha256:" + b"0" * 64 + b"\n")
             try:
                 with pytest.raises(commands.Refused):
-                    commands.compile_phase(commands.Bindings.from_dict(record), "qualify", evidence)
+                    window.prepare_next()
             finally:
                 digest_path.write_bytes(actual_digest)
-        elif phase in ("qualify-check", "inventory", "publish", "mint", "candidate-pins"):
-            next_path = tmp_path / (phase + "-prepared-bindings.json")
-            extra = []
-            if phase == "candidate-pins":
-                extra = ["--owner-approval", str(approval_path), "--owner-approval-sha256",
-                         commands.sha(approval_path.read_bytes())]
-            prepare_args = ("prepare-late", "--phase", phase, "--bindings", str(binding_path),
-                            "--evidence", str(evidence), "--out", str(next_path),
-                            "--operator-revision", revision, *extra)
-            if phase in ("qualify-check", "inventory", "candidate-pins"):
-                # Attack the selected phase's actual bytes or the explicit approval pin.
-                damaged_path = (evidence / "checker.stdout" if phase == "qualify-check" else
-                                evidence / "inventory-readback-inventory-context.json")
-                if phase != "candidate-pins":
-                    saved = damaged_path.read_bytes()
-                    if phase == "qualify-check":
-                        damaged_path.write_bytes(b"sha256:" + b"0" * 64 + b"\n")
-                    else:
-                        context = json.loads(saved)
-                        context["part"] = "stderr"
-                        _json(damaged_path, context)
-                    bad_args = prepare_args
-                else:
-                    bad_args = (*prepare_args[:-1], "0" * 64)
-                try:
-                    rejected = original_run([sys.executable, "-I", "-B", str(ENTRY), *bad_args],
-                                            stdin=subprocess.DEVNULL, capture_output=True,
-                                            check=False, timeout=120, cwd=ROOT)
-                    assert rejected.returncode != 0 and rejected.stdout == b""
-                    assert not next_path.exists()
-                finally:
-                    if phase != "candidate-pins":
-                        damaged_path.write_bytes(saved)
-            prepared = cli(*prepare_args)
-            assert prepared == {"bindings_sha256": commands.sha(next_path.read_bytes())}
-            binding_path = next_path
-            record = json.loads(binding_path.read_bytes())
-            values = record["values"]
     if not abort_after_activation:
         assert (evidence / "read-status.json").read_bytes() == b'{"status": "succeeded"}\n'
     assert (evidence / "withdraw-after.command.stdout").read_bytes() == b"withdrawn-checked\n"
@@ -461,7 +418,7 @@ def test_generated_phases_carry_actual_receipts_through_withdrawal(
         history = tmp_path / "metadata-history"
         history.mkdir()
         for source, name in ((evidence / "read-context.json", "read-context.json"),
-                             (tmp_path / "read-bindings.json", "bindings.json"),
+                             (window.work / "read" / "package" / "bindings.json", "bindings.json"),
                              (evidence / "authorization-candidate.json",
                               "authorization-candidate.json")):
             (history / name).write_bytes(source.read_bytes())
@@ -488,8 +445,24 @@ def test_generated_phases_carry_actual_receipts_through_withdrawal(
         metadata_captures.mkdir()
         metadata_revision = metadata.revision()
         manifest = metadata.compile_package(request_path, history, package, metadata_revision)
-        status = metadata.transport(package, manifest, metadata_revision, history,
-                                    metadata_captures)
+        # Metadata uses the session transport too; restrict this substitution to
+        # the call and prove every declared staging operation passed through it.
+        metadata_name = request["fresh"]["namespace"] + "-metadata-" + manifest[:16]
+        expected = session.staging_commands(package, manifest, metadata_name, TARGET, ALIAS)
+        substituted = []
+
+        def metadata_transport(argv, **kwargs):
+            assert len(substituted) < len(expected)
+            assert tuple(argv) == tuple(expected[len(substituted)])
+            assert kwargs["stdin"] is subprocess.DEVNULL
+            substituted.append(tuple(argv))
+            return local_transport(argv, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(session.subprocess, "run", metadata_transport)
+            status = metadata.transport(package, manifest, metadata_revision, history,
+                                        metadata_captures)
+        assert len(substituted) == len(expected) == 4
         assert commands.completed_zero(status), (
             status, (metadata_captures / "metadata-native.stdout").read_bytes(),
             (metadata_captures / "metadata-native.stderr").read_bytes(),

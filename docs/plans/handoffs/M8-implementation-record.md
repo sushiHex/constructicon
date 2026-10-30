@@ -13,6 +13,58 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Repository-owned Claude READ phase window (Refs #308, #40)
+
+Outcome: operator composition now uses `scripts/ops/claude_read_window.py`
+rather than a private phase loop. `create` pins the initial inputs; `prepare`
+returns one canonical package and its required checks; `advance` consumes an
+independently supplied phase grant, retains a claim before transport, collects
+the declared bounded readbacks, checks the receipts and derives the next
+bindings. It never creates a grant or automatically dispatches a successor.
+The same next-binding derivation validates the retained prefix, so a local
+progress file is not its own evidence. Operator revision covers the new entry.
+
+The execution boundary admits only the exact commands and timeouts declared
+by the selected phase. It records issued/completed/uncertain external
+dispositions and refuses duplicate or undeclared operations. The injected
+test executor is an explicit alternative with no native fallback. Real CLI
+tests install process-spawn denial before importing the entry and affirmatively
+account for substituted calls. This is a test backstop, not production
+containment. The existing Linux accepting/abort rehearsal uses the same window
+against its disposable foundation; its physical result is a CI gate, not a
+claim inferred from Windows skips.
+
+The new `pre-reload-inventory` reuses the existing retained maintenance operation.
+It withdraws the active binding durably and conditionally repairs the boot
+anchor before collecting its bounded inventory. Its checker requires positive
+withdrawal and an integer generation of at least one. RELOAD requires that
+checked receipt, with separate output names from the post-qualification
+inventory used for publication. Frozen procedure bytes remain unchanged.
+
+Withdrawal is compiled before activation. An activation claim conservatively
+carries cleanup duty even if dispatch is uncertain; the cleanup route selects
+that existing package after a later failure. A claimed phase cannot be retried.
+Incomplete cleanup requires the established recovery disposition; local records
+do not prove remote termination, VM idleness or permission to release custody.
+
+This corrects the composition boundary implicated in the
+[private rehearsal incident](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6516394962).
+An argument-position classifier missed the VM helper behind an extra Python
+flag and allowed native execution during purported offline tests. The earlier
+offline success claims were invalidated; the private artifacts remain preserved.
+The new entry does not classify Python commands or manage a VM. Custody, boot,
+address discovery, park and final idle observation remain separately reviewed
+host operations. No private sequencer may silently compose them into this entry.
+
+Risk tier: consequential authority, evidence and cleanup. The selected proof
+set is focused accepting/refusing CLI and interruption coverage, distinct guard
+mutations, the existing Linux composition lane, independent boundary review and
+required final-head CI. Final receipts and review dispositions belong on the
+delivery PR; written or platform-skipped checks are not reported as passes.
+This work performs no VM session, vendor execution, account operation or model
+call. It does not establish live READ success, reopen a stopped window, require
+reinstallation of an unchanged controller, or complete #308's broader consumers.
+
 ## Canonical local owner-approval preparation (Refs #40)
 
 The generation-8 window installed and verified merged controller `1d50efe`,
