@@ -162,6 +162,13 @@ def run(mutants) -> int:
             if len(codes) != 1:
                 raise RuntimeError("mutation must compile exactly one matching function")
             prepared = codes[0]
+            if prepared.co_freevars != function.__code__.co_freevars:
+                # A recompiled body cannot carry the original closure cells
+                # (e.g. zero-argument super()'s __class__); assigning it would
+                # fail inside pytest. Report the target as unsupported instead.
+                print("MUTATION_UNSUPPORTED", target, "free variables",
+                      json.dumps(list(function.__code__.co_freevars)))
+                return 2
         evidence = Evidence()
         # No cache provider: deliberate mutant failures must never reach the
         # ordinary run's lastfailed record, nor may its state steer selection.
