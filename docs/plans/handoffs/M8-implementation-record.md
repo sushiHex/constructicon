@@ -10562,3 +10562,50 @@ full local gate, credential use, VM operation or live model retry was performed.
 Controller source identity changes, so installation and fresh qualification
 remain prerequisites to any separately selected bounded READ. Live admitted
 Claude READ remains unproven.
+## N6: raw reviewed-source preparation after local qualification refusal (#40)
+
+The bounded C9 session installed the reviewed controller with zero differences
+and passed both import checks. Fresh reload and qualification completed, and
+the on-host qualification checker emitted its digest successfully. The canonical
+local window then refused the qualification source-law comparison, before
+publication, activation or a model READ. No phase was retried. The retained
+inventory recorded generation 10 withdrawn, qualification joined cleanly, and
+park plus usage-after established Off/idle before custody release. The stopped
+window remains closed.
+
+The cause was local preparation: Git's ambient `core.autocrlf=true` converted
+all ten qualification source files in the archive to CRLF. Imported modules
+came from that selected archive, so editable-install precedence was not the
+cause. Raw archive hashes reproduced the local revision; exact committed blob
+hashes reproduced the retained on-host revision. Sol and Claude independently
+confirmed that relation. Comparing the archive with another archive had repeated
+the same conversion. The earlier claim that the complete archive was LF was
+incorrect; neither its commit comment nor that comparison proved raw identity.
+
+`scripts/ops/reviewed_source.py` applies the existing host-artifact law locally:
+enumerate the explicit Git tree and read raw blobs with replacement objects
+disabled. Export is fresh-only, and verification compares the entire source
+inventory and each file's bytes with the selected commit. It does not normalize
+files, relax qualification evidence, edit host helpers, or execute the source.
+The operator instructions require verification before use, with evidence kept
+outside the source image. Parent custody remains an independent prerequisite.
+
+The focused regression uses actual Git with autocrlf enabled, demonstrating
+converted archive bytes while raw export verifies. Refusing cases exercise
+source changes, incomplete or extra inventory, unsafe entry types and existing
+targets. The actual C9 source export verified all 833 files and reproduced the
+retained host qualification revision exactly. Its raw operator revision also
+differs from the converted archive's revision; no stopped receipt is relabeled.
+
+The accepting Windows run caught an initial implementation error: cached
+directory-entry stat data lacked the file identity fields needed for the check.
+The verifier now uses the path's lstat result and compares the opened file.
+Independent review found that checking merely for any executable bit admitted
+a Git executable file without owner execution. Exact execute-bit patterns and
+a platform-primitive substitution test cover that correction. Windows supplies
+no POSIX mode proof; the Linux case remains CI evidence. Final executed checks
+and the narrow review disposition are recorded in the PR.
+The installed controller source and source-law revision are unchanged by this
+operator-only correction. It supplies no fresh boot, qualification, activation,
+model result or permission to reopen the stopped session. Live Claude READ
+remains unproven.

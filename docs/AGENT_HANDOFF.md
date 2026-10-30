@@ -3303,3 +3303,17 @@ availability proof, and the source says so.
 launch-identity bytes, and `EXECUTOR_LAW_REVISION`, all reproduced from goldens
 captured at `d2b8f94` in a detached worktree — because a golden captured by the
 same code it validates proves nothing.
+
+## #40 — source archives are not raw Git identity
+
+The local operator now has an explicit raw-blob export and full-tree verification
+entry, with a real-Git autocrlf regression. Use it before host preparation and
+keep session evidence outside the source image. A matching archive commit label
+or archive-to-archive comparison is insufficient.
+
+The stopped C9 session passed installation and on-host qualification but failed
+the local source-law comparison because its archive contained CRLF bytes.
+The previous all-LF preparation claim was wrong. Exact Git blobs reproduce the
+host's revision; the acceptance guard was correct. No READ or activation occurred,
+and the VM was parked Off/idle. This correction changes no controller or
+qualification law and grants no resumed session or live-success claim.
