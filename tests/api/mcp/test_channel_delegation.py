@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from mcp import Client
+from tests.api.mcp.test_server import _structured
 from tests.channel_requests import AttestedMailboxChannel as MailboxChannel
 from tests.conftest import pipeline_graph
 
@@ -199,12 +200,7 @@ def _server(
 
 
 def _fault(result: Any) -> str:
-    assert result.is_error is False
-    payload = result.structured_content
-    assert isinstance(payload, dict)
-    body = payload.get("result", payload)
-    assert isinstance(body, dict)
-    return str(body["faults"][0]["code"])
+    return str(_structured(result)["faults"][0]["code"])
 
 
 async def test_the_channel_scope_matrix_holds_through_the_transport(
@@ -303,13 +299,3 @@ async def test_the_channel_scope_matrix_holds_through_the_transport(
         listed = _structured(await client.call_tool("runs_list", {}))
         assert listed["page"]["count"] == 1
         assert listed["items"][0]["run_id"] == str(RUN)
-
-
-def _structured(result: Any) -> dict[str, Any]:
-    assert result.is_error is False
-    payload = result.structured_content
-    assert isinstance(payload, dict)
-    wrapped = payload.get("result")
-    if len(payload) == 1 and isinstance(wrapped, dict):
-        return wrapped
-    return payload
