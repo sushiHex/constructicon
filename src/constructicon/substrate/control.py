@@ -41,8 +41,8 @@ class InMemoryControlStore:
     def __init__(self, *, now_fn: Callable[[], datetime] = utc_now) -> None:
         self._now = now_fn
         self._commands: dict[str, CommandRecord] = {}
-        self._approvals: dict[str, ApprovalRecord] = {}
-        self._approval_command_by_id: dict[str, str] = {}
+        # approval_id -> (owning command_id, approval), as SQLite keeps one row.
+        self._approvals: dict[str, tuple[str, ApprovalRecord]] = {}
         self._approval_id_by_command: dict[str, str] = {}
         self._lock = Lock()
 
@@ -264,21 +264,18 @@ class InMemoryControlStore:
     def store_approval(self, claim: CommandClaim, approval: ApprovalRecord) -> ApprovalRecord:
         with self._lock:
             self._approval_fenced(claim, approval)
-            existing = self._approvals.get(approval.approval_id)
-            if existing is None:
+            stored = self._approvals.get(approval.approval_id)
+            if stored is None:
                 owned = self._approval_id_by_command.get(claim.command_id)
                 if owned is not None:
                     raise JournalDamaged(
                         f"command {claim.command_id!r} already wrote a different approval"
                     )
-                self._approvals[approval.approval_id] = approval
-                self._approval_command_by_id[approval.approval_id] = claim.command_id
+                self._approvals[approval.approval_id] = (claim.command_id, approval)
                 self._approval_id_by_command[claim.command_id] = approval.approval_id
                 return approval
-            if (
-                existing != approval
-                or self._approval_command_by_id.get(approval.approval_id) != claim.command_id
-            ):
+            command_id, existing = stored
+            if existing != approval or command_id != claim.command_id:
                 raise JournalDamaged(
                     f"approval {approval.approval_id!r} was rewritten contradictorily"
                 )
@@ -299,45 +296,19 @@ class InMemoryControlStore:
         with self._lock:
             approval_id = self._approval_id_by_command.get(command_id)
             if approval_id is None:
-                if command_id in self._approval_command_by_id.values():
-                    raise JournalDamaged(
-                        f"approval indexes disagree for command {command_id!r}"
-                    )
                 return None
-            return self._project_approval(
-                approval_id,
-                expected_command_id=command_id,
-            )
+            return self._project_approval(approval_id)
 
     def approval(self, approval_id: str) -> ApprovalRecord | None:
         with self._lock:
             if approval_id not in self._approvals:
-                if approval_id in self._approval_command_by_id:
-                    raise JournalDamaged(
-                        f"approval {approval_id!r} has provenance but no record"
-                    )
                 return None
             return self._project_approval(approval_id)
 
-    def _project_approval(
-        self,
-        approval_id: str,
-        *,
-        expected_command_id: str | None = None,
-    ) -> ApprovalRecord:
+    def _project_approval(self, approval_id: str) -> ApprovalRecord:
         """Project one approval only beside its exact owning command."""
 
-        approval = self._approvals.get(approval_id)
-        command_id = self._approval_command_by_id.get(approval_id)
-        if approval is None or command_id is None:
-            raise JournalDamaged(f"approval {approval_id!r} has incomplete provenance")
-        if expected_command_id is not None and command_id != expected_command_id:
-            raise JournalDamaged(
-                f"approval {approval_id!r} belongs to command {command_id!r}, "
-                f"not {expected_command_id!r}"
-            )
-        if self._approval_id_by_command.get(command_id) != approval_id:
-            raise JournalDamaged(f"approval indexes disagree for command {command_id!r}")
+        command_id, approval = self._approvals[approval_id]
         command = self._commands.get(command_id)
         if command is None:
             raise JournalDamaged(

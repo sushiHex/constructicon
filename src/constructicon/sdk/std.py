@@ -251,74 +251,54 @@ def human_panel_member(name: str, channel_id: str) -> DefinitionBundle:
     )
 
 
-def _pure_definition(
+def _bundle(
     name: str,
     inputs: tuple[Port, ...],
     outputs: tuple[Port, ...],
     impl: Any,
-) -> ComponentDef:
-    """A complete contract that holds no capability, and declares that.
-
-    `()` is not the same as omitting the field: omitted means capability-opaque
-    history, `()` means "asked for nothing", and admission refuses to hand an
-    empty declaration anything (I3).
-    """
-
-    return ComponentDef(
-        name=name,
-        role="node",
-        capability_requirements=(),
-        body=PythonRef(
-            package="constructicon",
-            module=impl.__module__,
-            qualname=impl.__qualname__,
-            contract_hash=digest(
-                "component-contract",
-                1,
-                {
-                    "inputs": [port.model_dump(mode="json") for port in inputs],
-                    "outputs": [port.model_dump(mode="json") for port in outputs],
-                },
-            ),
-            source_digest=source_digest_for(impl),
-        ),
-        inputs=inputs,
-        outputs=outputs,
-    )
-
-
-def _definition(name: str, request: Port, reply: Port, alias: str, impl: Any) -> ComponentDef:
-    """One complete contract: its ports, and the one capability it may hold.
+    *,
+    channel: str | None = None,
+) -> DefinitionBundle:
+    """One complete contract: its ports, and the capability it may hold, declared.
 
     `capability_requirements` is declared rather than omitted. Omitting it means
     *capability-opaque* — the historical shape — and admission then validates no
-    alias, no kind, and no extra binding, so a graph could hand these components
+    alias, no kind, and no extra binding, so a graph could hand the component
     any capability it liked. A component introduced today declares what it needs
-    and, by doing so, refuses everything it does not (I3).
+    and, by doing so, refuses everything it does not (I3). With a `channel`, that
+    is one durable channel under that alias. Without one it is `()`, never an
+    omission: `()` means "asked for nothing", and admission refuses to hand an
+    empty declaration anything.
     """
 
-    return ComponentDef(
-        name=name,
-        role="node",
-        capability_requirements=(
-            CapabilityRequirement(alias=alias, kind=MAILBOX_CHANNEL_KIND),
-        ),
-        body=PythonRef(
-            package="constructicon",
-            module=impl.__module__,
-            qualname=impl.__qualname__,
-            contract_hash=digest(
-                "component-contract",
-                1,
-                {
-                    "inputs": [request.model_dump(mode="json")],
-                    "outputs": [reply.model_dump(mode="json")],
-                },
+    requirements: tuple[CapabilityRequirement, ...] = (
+        ()
+        if channel is None
+        else (CapabilityRequirement(alias=channel, kind=MAILBOX_CHANNEL_KIND),)
+    )
+    return DefinitionBundle(
+        definition=ComponentDef(
+            name=name,
+            role="node",
+            capability_requirements=requirements,
+            body=PythonRef(
+                package="constructicon",
+                module=impl.__module__,
+                qualname=impl.__qualname__,
+                contract_hash=digest(
+                    "component-contract",
+                    1,
+                    {
+                        "inputs": [port.model_dump(mode="json") for port in inputs],
+                        "outputs": [port.model_dump(mode="json") for port in outputs],
+                    },
+                ),
+                source_digest=source_digest_for(impl),
             ),
-            source_digest=source_digest_for(impl),
+            inputs=inputs,
+            outputs=outputs,
         ),
-        inputs=(request,),
-        outputs=(reply,),
+        implementation=impl,
     )
 
 
@@ -329,44 +309,22 @@ def definitions() -> tuple[DefinitionBundle, ...]:
     """
 
     return (
-        DefinitionBundle(
-            definition=_definition(
-                ADVISOR_COMPONENT,
-                ADVICE_REQUEST,
-                ADVICE_REPLY,
-                ADVISOR_CHANNEL,
-                human_advisor,
-            ),
-            implementation=human_advisor,
+        _bundle(
+            ADVISOR_COMPONENT,
+            (ADVICE_REQUEST,),
+            (ADVICE_REPLY,),
+            human_advisor,
+            channel=ADVISOR_CHANNEL,
         ),
-        DefinitionBundle(
-            definition=_definition(
-                APPROVAL_COMPONENT,
-                APPROVAL_REQUEST,
-                APPROVAL_DECISION,
-                APPROVAL_CHANNEL,
-                human_approval,
-            ),
-            implementation=human_approval,
+        _bundle(
+            APPROVAL_COMPONENT,
+            (APPROVAL_REQUEST,),
+            (APPROVAL_DECISION,),
+            human_approval,
+            channel=APPROVAL_CHANNEL,
         ),
-        DefinitionBundle(
-            definition=_pure_definition(
-                PANEL_BALLOT_COMPONENT,
-                (ADVICE_REPLY,),
-                (PANEL_VOTE,),
-                panel_ballot,
-            ),
-            implementation=panel_ballot,
-        ),
-        DefinitionBundle(
-            definition=_pure_definition(
-                PANEL_QUORUM_COMPONENT,
-                (PANEL_VOTES, PANEL_QUORUM),
-                (PANEL_RESULT,),
-                panel_quorum,
-            ),
-            implementation=panel_quorum,
-        ),
+        _bundle(PANEL_BALLOT_COMPONENT, (ADVICE_REPLY,), (PANEL_VOTE,), panel_ballot),
+        _bundle(PANEL_QUORUM_COMPONENT, (PANEL_VOTES, PANEL_QUORUM), (PANEL_RESULT,), panel_quorum),
     )
 
 
