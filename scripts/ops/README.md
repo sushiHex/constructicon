@@ -131,6 +131,36 @@ transport exit means native completion, not permission to skip the remaining
 receipt, actual-pin or owner checks. Failed native transport returns nonzero
 while retaining its status and bounded captures.
 
+## Source bytes before host use
+
+Use `reviewed_source.py` from its reviewed tooling revision to materialize the
+explicit controller commit into a fresh private source directory. It reads raw
+Git blobs, not a checkout or archive, and verifies the complete file inventory.
+Run `verify` again before using that source for a host session:
+
+```bash
+python -I -S -B scripts/ops/reviewed_source.py export \
+  --repository LOCAL_REPOSITORY --commit REVIEWED_CONTROLLER_COMMIT \
+  --out FRESH_PRIVATE_SOURCE_DIR < /dev/null
+
+python -I -S -B scripts/ops/reviewed_source.py verify \
+  --repository LOCAL_REPOSITORY --commit REVIEWED_CONTROLLER_COMMIT \
+  --source PRIVATE_SOURCE_DIR < /dev/null
+```
+
+Keep session evidence, bindings, grants and captures outside that source tree.
+Run its Python entries with `-B` so bytecode caches do not change the inventory.
+The parent directory still needs the existing private custody checks. The
+exporter establishes source bytes, not permission, branch approval, runtime
+isolation or host qualification. An interrupted export is not reusable; retain
+it and choose a different fresh target.
+
+A Git archive's commit label, or equality to another archive, does not prove
+blob-byte equality: ambient Git configuration can convert text. Do not normalize
+files to make a qualification revision match. Correct the source image and
+compare it with the selected Git blobs; the installed source-law comparator
+must remain unchanged. A source correction never resumes a stopped window.
+
 ## Local preparation
 
 Use `prepare-bindings` with a trusted installation-only JSON and one fresh
