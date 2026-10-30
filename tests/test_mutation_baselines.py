@@ -140,6 +140,23 @@ def test_mutation_is_active_before_fixture_setup(tmp_path):
     assert "guard: KILLED" in result.stdout
 
 
+def test_mutation_children_leave_the_ordinary_failure_cache_untouched(tmp_path):
+    """A deliberate mutant failure must not masquerade as a real last failure (#280)."""
+
+    cache = tmp_path / ".pytest_cache" / "v" / "cache" / "lastfailed"
+    cache.parent.mkdir(parents=True)
+    sentinel = b'{\n  "test_real.py::test_interrupted": true\n}'
+    cache.write_bytes(sentinel)
+    result = inventory(
+        tmp_path, "import subject\ndef test_value():\n    assert subject.value() == 1\n",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "BASELINE PASSED" in result.stdout
+    assert "guard: KILLED" in result.stdout
+    assert cache.read_bytes() == sentinel
+    assert sorted(path.name for path in cache.parent.iterdir()) == ["lastfailed"]
+
+
 def test_all_collection_hooks_return_before_mutation_activation(tmp_path):
     (tmp_path / "conftest.py").write_text(
         "import pytest, subject\nsubject.collection_events = []\n"
