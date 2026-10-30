@@ -16,6 +16,33 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude READ uses a repository-owned phase window
+
+The window entry composes the existing compiler, transport, receipt checks,
+late-binding preparer and generation-bound withdrawal. It requires an explicit
+grant for each phase and retains an exclusive claim before possible dispatch.
+A claimed failure cannot become a retry; recovery selects the previously
+compiled cleanup package. The new pre-RELOAD inventory performs maintenance,
+including durable withdrawal and conditional boot-anchor repair. Its own
+positive receipt is required before RELOAD; it is not the later publication
+generation observation.
+
+The change follows a private rehearsal incident: an argument-position check
+missed the VM helper behind an extra Python isolation flag, and the purported
+fake fell through to native VM operations. Those rehearsal success claims were
+invalidated and the artifacts preserved. The replacement admits only declared
+whole SSH/SCP commands and timeouts, records each external disposition, and
+exercises the actual CLI under a spawn-denying fake boundary. VM lifecycle is
+outside this entry; existing reviewed host helpers remain separate. Test-only
+spawn denial is not a production sandbox or proof about an earlier invocation.
+
+This establishes operator composition, not live Claude READ success. Installed
+controller/runtime identity remains independent of operator-tool identity;
+no controller reinstall, VM session, vendor call or resume of a stopped window
+is established by this delivery. Broader preparation consumers remain in #308.
+
+---
+
 ## Claude READ observational sidebands and source inventory
 
 READ now consumes only the exact pinned permission-check wait and session-title

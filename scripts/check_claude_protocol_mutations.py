@@ -2291,5 +2291,33 @@ READ_SIDEBAND_MUTANTS = (
 MUTANTS += READ_SIDEBAND_MUTANTS
 
 
+MUTANTS += (
+    ("pre-reload inventory positively proves withdrawal",
+     "scripts.ops.claude_read_commands:pre_reload_inventory_gate",
+     'and record["withdrawn"] is True', 'and True',
+     "tests/test_claude_read_session.py::test_reload_requires_positive_pre_reload_inventory[withdrawn]"),
+    ("reload requires its pre-reload inventory receipt",
+     "scripts.ops.claude_read_commands:_scripts",
+     '        pre_reload_inventory_gate(evidence, values)', '        pass',
+     "tests/test_claude_read_session.py::test_reload_requires_positive_pre_reload_inventory[missing]"),
+)
+
+
+READ_WINDOW_MUTANTS = (
+    ("window explicit substitution never falls through to native execution",
+     "scripts.ops.claude_read_window:ExternalBoundary.__call__",
+     '(subprocess.run if self.external is None else self.external)(argv, **kwargs)',
+     'subprocess.run(argv, **kwargs)',
+     "tests/test_claude_read_window.py::test_explicit_substitution_never_uses_native_executor"),
+    ("window external operation retains its declared timeout",
+     "scripts.ops.claude_read_window:ExternalBoundary.__call__",
+     'and type(kwargs["timeout"]) is int and kwargs["timeout"] == timeout',
+     'and type(kwargs["timeout"]) is int',
+     "tests/test_claude_read_window.py::"
+     "test_boundary_binds_timeout_closed_stdin_and_capture_ownership[timeout]"),
+)
+MUTANTS += READ_WINDOW_MUTANTS
+
+
 if __name__ == "__main__":
     raise SystemExit(run(MUTANTS))

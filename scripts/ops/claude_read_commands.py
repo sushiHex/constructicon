@@ -141,6 +141,14 @@ PHASES = MappingProxyType(
         "parents": _phase(
             checks=("controller_verified", "launch_verified", "parent_paths_approved")
         ),
+        "pre-reload-inventory": _phase(
+            checks=("controller_verified", "launch_verified", "parents_checked",
+                    "installed_checker_verified"),
+            outputs={
+                "inventory": ("R", "pre-reload-inventory.json", 256),
+                "stderr": ("R", "pre-reload-inventory.stderr", 4096),
+            },
+        ),
         "reload": _phase(
             checks=(
                 "controller_verified",
@@ -563,6 +571,7 @@ def operator_revision():
     paths = [
         Path(__file__),
         Path(__file__).with_name("claude_read_session.py"),
+        Path(__file__).with_name("claude_read_window.py"),
         ROOT / "scripts/m8_procedure_package.py",
         ROOT / "scripts/check_claude_phase.py",
     ]
@@ -1239,6 +1248,21 @@ def reload_gate(evidence, values):
     )
 
 
+def pre_reload_inventory_gate(evidence, values):
+    phase = "pre-reload-inventory"
+    phase_receipt(evidence, values, phase)
+    quiet_command(evidence, values, phase)
+    readback_receipt(evidence, values, phase, "inventory", phase + ".json")
+    record = parsed(bounded(evidence / (phase + ".json"), 256))
+    require(
+        type(record) is dict
+        and set(record) == {"highest_generation", "withdrawn"}
+        and record["withdrawn"] is True
+        and type(record["highest_generation"]) is int
+        and record["highest_generation"] >= 1
+    )
+
+
 def inventory_gate(evidence, values):
     phase_receipt(evidence, values, "inventory")
     quiet_command(evidence, values, "inventory")
@@ -1397,8 +1421,12 @@ def _scripts(values, phase, evidence):
     if phase == "checker-verify":
         phase_receipt(evidence, values, "controller-verify")
         phase_receipt(evidence, values, "launch-verify")
+    if phase == "pre-reload-inventory":
+        phase_receipt(evidence, values, "checker-verify")
+        phase_receipt(evidence, values, "parents")
     if phase == "reload":
         phase_receipt(evidence, values, "checker-verify")
+        pre_reload_inventory_gate(evidence, values)
     if phase in ("withdraw-before", "publish"):
         inventory_gate(evidence, values)
     if phase in ("activate", "authority-install", "read"):
@@ -1484,7 +1512,7 @@ def _scripts(values, phase, evidence):
         "read": blocks[4][0],
         "withdraw-after": withdraw_code + blocks[4][1],
     }
-    if phase == "inventory":
+    if phase in ("inventory", "pre-reload-inventory"):
         inventory = r"""
 import argparse, os, sys, json
 from pathlib import Path
@@ -1512,7 +1540,7 @@ with inherit_maintenance(
             'sudo -n "${STORE[@]}" maintain --store-root "$STORES" --key "$STORE_KEY" '
             '--service "$SERVICE" --wait 0 -- /usr/bin/python3 -I -S -B -c '
             + shlex.quote(inventory)
-            + ' < /dev/null > "$R/inventory.json" 2> "$R/inventory.stderr"\n'
+            + f' < /dev/null > "$R/{phase}.json" 2> "$R/{phase}.stderr"\n'
         )
     if phase == "candidate-pins":
         code = _EXPECTED_CODE
@@ -1669,7 +1697,9 @@ def check_phase_receipt(bindings, phase, evidence):
             quiet_command(
                 evidence, values, phase, stdout=phase in ("reload", "qualify", "activate")
             )
-        if phase == "read":
+        if phase == "pre-reload-inventory":
+            pre_reload_inventory_gate(evidence, values)
+        elif phase == "read":
             terminal_gate(evidence, values)
         elif phase == "withdraw-after":
             cleanup_complete(evidence, values)
@@ -1776,6 +1806,7 @@ def readback_spec(bindings, phase, part, manifest):
         ("reload", "evidence"): "reload.json",
         ("reload-check", "digest"): "reload.digest",
         ("inventory", "inventory"): "inventory.json",
+        ("pre-reload-inventory", "inventory"): "pre-reload-inventory.json",
         ("publish", "sealed"): "published-sealed.json",
         ("fixture", "fixture"): "fixture.json",
         ("mint", "candidate"): "authorization-candidate.json",
