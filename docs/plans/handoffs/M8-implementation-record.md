@@ -10440,3 +10440,125 @@ Required final-head CI and PR review receipts belong in the PR. Controller and
 metadata identities change; installation, fresh qualification and any new
 one-attempt scope require their existing independent authority. Live admitted
 READ success and general production availability remain unproven.
+
+## N6: complete classifier sideband path for pinned Claude READ (#40)
+
+The generation-10 attempt reached one completed callback, then refused
+`system-post-turn-summary / body-after-callback / unsupported-family`.
+Terminal acceptance was false. The checked closeout records withdrawal, park
+and custody release in #77; that window is spent. Unlike generation 9's
+unidentified frame, this bounded observation names the family affirmatively.
+It proves neither that an answer was admitted nor that a terminal result
+arrived. This correction was developed offline without executing the vendor.
+
+### Pinned source and route audit
+
+The audited artifact remains Claude Code 2.1.296, 257,068,216 bytes, SHA-256
+`24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de`.
+The SDK 0.3.296 declaration digest remains
+`fc2866dfe2c01468edb19b1d94f26156bfacecdf1e7f1452b276ed2f8cc0b08f`.
+Offsets below are zero-based native-artifact byte offsets, not line numbers.
+Minified names are meaningful only with their chunk/offset; same-name symbols
+elsewhere are not evidence of this route.
+
+| Route or decision | Source evidence and consequence |
+| --- | --- |
+| Classifier surface | Surface selection at 225594367, BYOC branch at 225594771 and sinks at 225595085 select the summary sink. |
+| Post-turn producer | Xa at 2241466xx and constructor at 224148252 produce `system/post_turn_summary`; `summarizes_uuid` falls back to the empty string. |
+| Tool progress and idle clear | Tool classifier at 224271821 updates task summary; metadata notification at 215553208 emits `system/task_summary`. Idle transitions at 215551420/215551443 clear it with `detail: null`. |
+| Ordinary frame path | Rk at 233288149 forwards its explicit cases. `stop_hook_summary` and `turn_duration` fall through and are not stdout frames on this path. The separate internal top-level `post_turn_summary` clear is dropped. None is newly admitted. |
+| Direct queue | Qi at 210011077 is stamped by qh and written by FL at 233566838. FL installation at 233573926 and the final Ss drain at 233594581 permit sidebands independently of Rk. |
+| Result ordering | Sf.run drains at 2332987xx. Op.release at 233198485 waits for a pending summary; idle clearing at 233200413 precedes another drain. A summary or null clear can therefore arrive after the terminal result. |
+| Aggregation is not filtering | xMe writes at 2335853xx before OL's aggregation at 233565280. An aggregation exclusion does not prove a frame cannot reach stdout. |
+| Optional tool-use summary | Bl at 224193547 enables it only with `CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES`, absent from the fixed environment. It remains refused. |
+| Artifact metadata | Emission at 224480905 requires changed frame URLs and X_e. The projector at 216909731-216910645 derives URLs from artifact meta messages or artifact-tool results (216918199). The selected fixed task and read_file-only grant supply neither. `session_metadata` remains refused. X_e's complete policy chain was not resolved; no global unreachability claim follows. |
+
+The fixed environment deliberately sets `CLAUDE_CODE_ENVIRONMENT_KIND=byoc`.
+Removing it is not an equivalent suppression fix: host-orchestrated startup at
+211229053 and the initial-environment snapshot at 211250517 protect the fixed
+environment from settings. The BYOC path also affects Datadog initialization
+(214837829/209649674) and proxy MCP connectors (250929757).
+`CLAUDE_CODE_CLASSIFIER_SUMMARY=0` selects the heuristic classifier; it does
+**not** disable emission. The static review found no supported summary-off
+control preserving these startup restrictions. Internal feature overrides,
+changing the execution surface, and removing BYOC were rejected. No fixed
+environment or accepted-plan bytes change.
+
+This audit closes the identified classifier route for the pinned selected
+READ. It does not admit every catalogued family, establish all externally
+constructed frames, or qualify later vendor releases. Unknown, negative,
+task-effect and artifact families still refuse.
+
+### One observational law, two exact shapes
+
+The shared synchronous `_inert_sideband` receives two additional exact shapes:
+
+- `system/post_turn_summary`: `summarizes_uuid`, `status_category`,
+  `status_detail`, `needs_action`, `uuid`, `session_id`, all strings, with
+  the native UUID envelope. Schema 208312584 owns this shape. The summarized
+  UUID is opaque display data, including empty, never callback correlation.
+- `system/task_summary`: `detail` is string or null, with string `uuid`
+  and `session_id` and the native UUID envelope. Schema 208312897 owns this
+  shape. A null clear is not task settlement.
+
+The schema types session_id as string. Before authoritative initialization,
+an observational session does not seed identity; afterwards the existing
+session equality is required. An initial implementation unnecessarily demanded
+UUID syntax for this session string; review removed that restriction and a
+non-UUID pre-snapshot display session pins the distinction. The actual uuid
+envelope retains UUID validation. Extra or malformed fields refuse.
+
+No new await, phase, latch, deadline, queue or callback counter is introduced.
+Every existing receive site uses the same helper, including the callback
+barrier and final drain. Summary text is never exposed as the reply, usage,
+status, permission or terminal evidence. Complete-record and cumulative-byte
+bounds and the absolute deadline apply before the observational dispatch.
+There is no invented per-field vendor limit or summary-count budget.
+
+The interleaving review explicitly considered summaries buffered before
+initialization, before a worker return, together with a terminal or cancelled
+lifecycle record, and after terminal acceptance during shutdown. A summary
+cannot discharge the existing pending-reader barrier, establish a missing
+snapshot, turn EOF into success or hide a negative frame. The existing
+transaction owns cancellation and joins; the helper cannot publish from a
+finally block.
+
+### Evidence and limits
+
+Source-shaped tests drive both families through the complete READ, including
+fragmented input, pre-snapshot display sessions, mid-callback traffic, empty
+summarized UUID and delayed null clear after terminal acceptance. They assert
+one real callback response, unchanged reply/usage and no display-field leakage
+in the published outcome or outbound messages. Refusing cases cover malformed
+and extra fields, wrong established session, missing snapshot/result, record
+limits, and buffered summary followed by terminal, negative lifecycle, EOF
+or cancellation. The byte-bound cases include both permitting and refusing
+inputs at the actual enclosing record limit.
+
+The shared compiled harmless peer emits task progress, post-turn summary
+before result and the null clear after result. Its portable acceptance test
+affirmatively checks these records and their order; a separate refusal
+withholds the actual terminal result. The first three shared maintenance
+observations are unchanged. This is the same fixture consumed by the existing
+Linux physical and abort rehearsal lanes, not a new vendor invocation.
+
+The portable READ/native-events suite and mutation-target resolution passed
+(553 tests); changed-source Ruff and strict mypy passed. The compiled-peer
+portable run passed seven tests with two Linux-only skips. Ten selected
+mutants passed positive baselines and were killed by assertion, with unchanged
+begin/end repository source snapshots. The first exact-key mutant survived
+because the test's extra field was independently invalid by type. The test
+now uses a string-valued extra field and separately retains the negative
+boolean extension case; the corrected mutant was killed. No survivor or
+harness error was credited as proof.
+
+Independent Astra review inspected the pinned artifact, runtime/test diff and
+shared compiled fixture and found no remaining blocker. The introduced
+session-string overrestriction was corrected before its final inspection.
+Rejected alternatives and source limits are stated above. Final-head CI owns
+the full code gate and
+required Linux proof lanes; Windows skips are not that proof. No duplicate
+full local gate, credential use, VM operation or live model retry was performed.
+Controller source identity changes, so installation and fresh qualification
+remain prerequisites to any separately selected bounded READ. Live admitted
+Claude READ remains unproven.

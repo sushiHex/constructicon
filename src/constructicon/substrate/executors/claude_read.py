@@ -39,7 +39,9 @@ from constructicon.substrate.executors.claude_native_events import (
     ClaudeSystemRecordCategory,
     exact_inert_notification,
     exact_permission_check_status,
+    exact_post_turn_summary,
     exact_session_title_changed,
+    exact_task_summary,
     read_system_record_category,
     system_record_category,
 )
@@ -496,9 +498,15 @@ class ClaudeReadTransaction:
         if self._ui(value):
             return True
         if (value.get("type") != "system" or value.get("subtype") not in
-                ("permission_check_status", "session_title_changed")):
+                ("permission_check_status", "session_title_changed",
+                 "post_turn_summary", "task_summary")):
             return False
-        if not (exact_permission_check_status(value) or exact_session_title_changed(value)):
+        if not (exact_permission_check_status(value) or exact_session_title_changed(value)
+                or exact_post_turn_summary(value) or exact_task_summary(value)):
+            raise self._refused(ClaudeReadRefusalCode.SYSTEM_OTHER, value,
+                                predicate=ClaudeReadRefusalPredicate.SHAPE)
+        if (value["subtype"] in ("post_turn_summary", "task_summary")
+                and not _uuid(value["uuid"])):
             raise self._refused(ClaudeReadRefusalCode.SYSTEM_OTHER, value,
                                 predicate=ClaudeReadRefusalPredicate.SHAPE)
         session = self._session or self._startup_session

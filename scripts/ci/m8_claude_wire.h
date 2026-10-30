@@ -270,6 +270,9 @@ static int claude_wire(int argc, char **argv) {
              "\"uuid\":\"00000000-0000-4000-8000-000000000004\"}");
         puts("{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed\","
              "\"isUsingOverage\":false},\"uuid\":\"" WIRE_UUID "\",\"session_id\":\"" WIRE_SESSION "\"}");
+        /* 2.1.296 task summary is an observation, not a callback result. */
+        puts("{\"type\":\"system\",\"subtype\":\"task_summary\",\"detail\":\"Task observation\","
+             "\"uuid\":\"" WIRE_UUID "\",\"session_id\":\"" WIRE_SESSION "\"}");
         wire_permission_check("done");
         wire_title(WIRE_SESSION);
         wire_ack("\"request_id\":\"outer-tools/call\"", "\"id\":19");
@@ -282,12 +285,18 @@ static int claude_wire(int argc, char **argv) {
     wire_retry();
     wire_thinking(user_uuid, 5, 2);
     wire_lifecycle(user_uuid, "completed");
+    /* 2.1.296 permits an empty summarized UUID; it is not result identity. */
+    puts("{\"type\":\"system\",\"subtype\":\"post_turn_summary\",\"summarizes_uuid\":\"\","
+         "\"status_category\":\"complete\",\"status_detail\":\"done\",\"needs_action\":\"none\","
+         "\"uuid\":\"" WIRE_UUID "\",\"session_id\":\"" WIRE_SESSION "\"}");
     printf("{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,"
            "\"session_id\":\"" WIRE_SESSION "\",\"user_message_uuid\":%s,\"result\":%s,"
            "\"uuid\":\"" WIRE_UUID "\",\"duration_ms\":1,\"duration_api_ms\":1,\"num_turns\":1,"
            "\"stop_reason\":\"end_turn\",\"total_cost_usd\":0,\"usage\":{"
            "\"input_tokens\":1,\"output_tokens\":1},\"modelUsage\":{},\"permission_denials\":[]}\n",
            user_uuid, result);
+    puts("{\"type\":\"system\",\"subtype\":\"task_summary\",\"detail\":null,"
+         "\"uuid\":\"" WIRE_UUID "\",\"session_id\":\"" WIRE_SESSION "\"}");
     wire_observation("\"subtype\":\"initialize\"", model, 1);
     wire_observation("\"subtype\":\"get_settings\"", model, 0);
     wire_observation("\"subtype\":\"get_hooks_listing\"", model, 0);

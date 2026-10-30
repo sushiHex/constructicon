@@ -2291,6 +2291,43 @@ READ_SIDEBAND_MUTANTS = (
 MUTANTS += READ_SIDEBAND_MUTANTS
 
 
+READ_CLASSIFIER_MUTANTS = (
+    ("post-turn summary retains its exact producer keys",
+     NATIVE_EVENTS + "exact_post_turn_summary", 'and set(value) ==', 'and set(value) >=',
+     READ_TEST + "test_classifier_sideband_shape_and_session_refuse[extra-post_turn_summary]"),
+    ("task summary retains its exact producer keys",
+     NATIVE_EVENTS + "exact_task_summary", 'and set(value) ==', 'and set(value) >=',
+     READ_TEST + "test_classifier_sideband_shape_and_session_refuse[extra-task_summary]"),
+    ("post-turn display fields are scalar strings",
+     NATIVE_EVENTS + "exact_post_turn_summary",
+     'all(type(field) is str for field in value.values())', 'True',
+     READ_TEST + "test_post_turn_summary_display_fields_are_exact_strings"),
+    ("task summary detail is only a string or null",
+     NATIVE_EVENTS + "exact_task_summary",
+     '(value["detail"] is None or type(value["detail"]) is str)', 'True',
+     READ_TEST + "test_classifier_sideband_shape_and_session_refuse[type-task_summary]"),
+    ("classifier observation envelopes retain native UUID framing",
+     READ + "ClaudeReadTransaction._inert_sideband",
+     'and not _uuid(value["uuid"])', 'and False',
+     READ_TEST + "test_classifier_sideband_shape_and_session_refuse[uuid-post_turn_summary]"),
+    ("classifier observations cannot cross the established session",
+     READ + "ClaudeReadTransaction._inert_sideband",
+     'if session is not None and value["session_id"] != session:', 'if False:',
+     READ_TEST + "test_classifier_sideband_shape_and_session_refuse[session-task_summary]"),
+    ("post-turn summary reaches the shared observational path",
+     READ + "ClaudeReadTransaction._inert_sideband",
+     'or exact_post_turn_summary(value) or exact_task_summary(value)',
+     'or exact_task_summary(value)',
+     READ_TEST + "test_classifier_sidebands_preserve_complete_read_and_delayed_idle_clear[8192]"),
+    ("task summary reaches the shared observational path",
+     READ + "ClaudeReadTransaction._inert_sideband",
+     'or exact_post_turn_summary(value) or exact_task_summary(value)',
+     'or exact_post_turn_summary(value)',
+     READ_TEST + "test_classifier_sidebands_preserve_complete_read_and_delayed_idle_clear[8192]"),
+)
+MUTANTS += READ_CLASSIFIER_MUTANTS
+
+
 MUTANTS += (
     ("pre-reload inventory positively proves withdrawal",
      "scripts.ops.claude_read_commands:pre_reload_inventory_gate",

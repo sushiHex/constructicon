@@ -151,3 +151,28 @@ def exact_session_title_changed(value: object) -> bool:
             and set(value) == {"type", "subtype", "title", "uuid", "session_id"}
             and value.get("type") == "system" and value.get("subtype") == "session_title_changed"
             and all(type(field) is str for field in value.values()))
+
+
+def exact_post_turn_summary(value: object) -> bool:
+    """Pinned so schema B@208312584 and Xa producer B@224148252.
+
+    summarizes_uuid is opaque display metadata, including the producer's empty
+    fallback. Complete-record and cumulative bounds belong to the caller.
+    """
+    return (type(value) is dict
+            and set(value) == {"type", "subtype", "summarizes_uuid", "status_category",
+                              "status_detail", "needs_action", "uuid", "session_id"}
+            and value.get("type") == "system" and value.get("subtype") == "post_turn_summary"
+            and all(type(field) is str for field in value.values()))
+
+
+def exact_task_summary(value: object) -> bool:
+    """Pinned ro schema B@208312897; notifyMetadataChanged B@215553208.
+
+    The idle transition emits detail null. This is never task settlement.
+    """
+    return (type(value) is dict
+            and set(value) == {"type", "subtype", "detail", "uuid", "session_id"}
+            and value.get("type") == "system" and value.get("subtype") == "task_summary"
+            and all(type(value[key]) is str for key in ("type", "subtype", "uuid", "session_id"))
+            and (value["detail"] is None or type(value["detail"]) is str))
