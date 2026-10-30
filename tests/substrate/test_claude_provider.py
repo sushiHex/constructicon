@@ -397,8 +397,13 @@ async def test_terminal_refusal_retains_emitted_telemetry_without_native_text(as
     await a.executor.close(acquired, "discard")
 
 
-@pytest.mark.parametrize("detail", ["PRIVATE-ACCOUNT-CANARY",
-                                    "Claude READ refused [known_refusal=PRIVATE-CANARY]"])
+@pytest.mark.parametrize("detail", [
+    "PRIVATE-ACCOUNT-CANARY", "Claude READ refused [known_refusal=PRIVATE-CANARY]",
+    "Claude READ refused [initialize observed: verdict=mode-mismatch; "
+    "reason=PRIVATE-CANARY; token_source=none; api_key_source=unknown]",
+    "Claude READ refused [initialize observed: verdict=response-invalid; "
+    "reason=credential-source-present; token_source=none; api_key_source=unknown]",
+])
 async def test_provider_does_not_forward_unknown_driver_detail(assembled, monkeypatch, detail):
     async def failed(*args, **kwargs):
         return ExecutorFailure(error=ExecutorError(kind="exit", detail=detail))

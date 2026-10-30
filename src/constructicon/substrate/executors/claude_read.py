@@ -47,9 +47,12 @@ from constructicon.substrate.executors.claude_native_events import (
 )
 from constructicon.substrate.executors.claude_protocol import (
     RECORD_BYTES,
+    ClaudeApiKeySourceCategory,
     ClaudeInitializeObservation,
     ClaudeInitializeVerdict,
+    ClaudeModeMismatchReason,
     ClaudePlan,
+    ClaudeTokenSourceCategory,
     initialize_request,
     observe_initialize,
 )
@@ -88,6 +91,11 @@ class ClaudeReadRefusalCode(StrEnum):
     SYSTEM_OTHER = "system-other"
     API_RETRY = "api-retry"
     THINKING_TOKENS = "thinking-tokens"
+    SETTINGS = "settings"
+    HOOKS = "hooks"
+    STARTUP_SNAPSHOT_SESSION = "startup-snapshot-session"
+    NATIVE_STORE_RECIPE = "native-store-recipe"
+    NATIVE_STORE_BINDING = "native-store-binding"
     LIFECYCLE = "command-lifecycle"
     LIFECYCLE_TERMINATED = "command-terminated"
     STREAM_BOUND = "stream-bound"
@@ -185,9 +193,10 @@ def parse_refusal_detail(value: object) -> ClaudeReadRefusalContext | None:
 
 
 def known_refusal_detail(value: object) -> str | None:
-    """The provider/API may forward only exact closed contexts or legacy codes."""
+    """Forward only canonical closed observations, contexts or legacy codes."""
     if type(value) is str and (value in {refusal_detail(code) for code in ClaudeReadRefusalCode}
-                              or parse_refusal_detail(value) is not None):
+                              or parse_refusal_detail(value) is not None
+                              or parse_initialization_detail(value) is not None):
         return value
     return None
 
@@ -227,6 +236,29 @@ def _initialization_detail(observation: ClaudeInitializeObservation | None) -> s
     observed = (f"{detail} [initialize observed: verdict={observation.verdict.value}; "
                 f"reason={reason}; token_source={token}; api_key_source={api_key}]")
     return observed if len(observed.encode("utf-8")) <= 256 else detail
+
+
+def parse_initialization_detail(value: object) -> ClaudeInitializeObservation | None:
+    """Validate the existing finite diagnostic, including coherence and exact bytes."""
+    prefix = "Claude READ refused [initialize observed: verdict="
+    if type(value) is not str or len(value) > 256 or not value.startswith(prefix):
+        return None
+    try:
+        fields = value.removeprefix(prefix).removesuffix("]").split("; ")
+        if len(fields) != 4:
+            return None
+        reason = fields[1].removeprefix("reason=")
+        token = fields[2].removeprefix("token_source=")
+        api_key = fields[3].removeprefix("api_key_source=")
+        observation = ClaudeInitializeObservation(
+            ClaudeInitializeVerdict(fields[0]),
+            None if reason == "unobserved" else ClaudeModeMismatchReason(reason),
+            None if token == "unobserved" else ClaudeTokenSourceCategory(token),
+            None if api_key == "unobserved" else ClaudeApiKeySourceCategory(api_key),
+        )
+        return observation if _initialization_detail(observation) == value else None
+    except ValueError:
+        return None
 
 
 def _wire(value: object) -> bytes:
@@ -748,10 +780,10 @@ class ClaudeReadTransaction:
                 elif kind == "get_settings":
                     if judge_settings(response, expected_request_id=identifier, model=self._model,
                                       effort=self._effort) is not ClaudeStartupVerdict.MATCH:
-                        raise _Refused()
+                        raise self._refused(ClaudeReadRefusalCode.SETTINGS, value)
                 elif (judge_hooks(response, expected_request_id=identifier)
                       is not ClaudeStartupVerdict.MATCH):
-                    raise _Refused()
+                    raise self._refused(ClaudeReadRefusalCode.HOOKS, value)
                 break
             if kind == "initialize" and (register or self._state == "terminal"):
                 while True:
@@ -768,7 +800,7 @@ class ClaudeReadTransaction:
                                 or snapshot.get("subtype") != "background_tasks_changed"):
                             raise self._unsupported(snapshot)
                         if not _uuid(snapshot.get("session_id")):
-                            raise _Refused()
+                            raise _Refused(ClaudeReadRefusalCode.STARTUP_SNAPSHOT_SESSION)
                         self._startup_session = str(snapshot["session_id"])
                     if not self._background(snapshot):
                         raise self._unsupported(snapshot)
@@ -1073,10 +1105,10 @@ async def run_read_transaction(
                     or native_store.lock_fd not in guard_fds or launcher.claude is None
                     or command != launcher.claude.command
                     or model != launcher.claude.model or effort != launcher.claude.effort):
-                raise _Refused()
+                raise _Refused(ClaudeReadRefusalCode.NATIVE_STORE_RECIPE)
             initial_binding = native_store.before_spawn()
             if type(initial_binding) is not BindingCheck:
-                raise _Refused()
+                raise _Refused(ClaudeReadRefusalCode.NATIVE_STORE_BINDING)
 
             def check_binding() -> BindingCheck:
                 checked = native_store.before_spawn()

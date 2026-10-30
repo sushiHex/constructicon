@@ -388,11 +388,19 @@ def observation_checked(raw):
             require(
                 type(event) is dict
                 and set(event) in ({"kind", "error_type", "reason"},
-                                   {"kind", "error_type", "reason", "refusal_context"})
+                                   {"kind", "error_type", "reason", "refusal_context"},
+                                   {"kind", "error_type", "reason", "initialize_observation"})
                 and _closed(event["kind"], reader.EVENTS | {"other"})
                 and _closed(event["error_type"], reader.ERRORS | {"other"}, nullable=True)
-                and _closed(event["reason"], {*reader.REASONS.values(), "other"}, nullable=True)
+                and _closed(event["reason"], {*reader.REASONS.values(), reader.INITIALIZE_REASON,
+                                              "other"}, nullable=True)
             )
+            require((event["reason"] == reader.INITIALIZE_REASON)
+                    == ("initialize_observation" in event))
+            if "initialize_observation" in event:
+                require(event["kind"] == "NodeFailed"
+                        and event["error_type"] == "ContractViolation"
+                        and reader.initialize_fields_valid(event["initialize_observation"]))
             if "refusal_context" in event:
                 context = event["refusal_context"]
                 require(
