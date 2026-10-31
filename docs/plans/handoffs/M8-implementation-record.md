@@ -10713,3 +10713,48 @@ accepted as an explicit diagnostic limit rather than a request to weaken
 custody. Source revisions change; future local packages must use the raw-blob
 exporter, not ambient worktree/archive conversion. Final-head CI and selected
 executed mutations are recorded in the delivery PR.
+
+## 2026-10-31 — recovered Claude READ initialization refusal
+
+The selected metadata-only recovery collected and checked generation 12's
+retained attempt/journal projection. NodeFailed names claude_read_initialize,
+mode-mismatch, subscription-mismatch, with token_source and api_key_source
+absent. The attempt was not dispatched, had zero callbacks, both binding checks
+passed, and relay closed. No commercial-tier value or initialize ordinal was
+collected. No model call occurred in recovery. Park and positive Off/idle checks
+passed; custody released.
+
+Evidence: [recovery closeout](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6537185562).
+
+Static inspection of the SHA-256-verified 2.1.296 member proves the initialize
+subscription field can use a server-supplied display name instead of its fixed
+tier name. This invalidates display equality as a tier discriminator, but does
+not establish generation 12's exact label or refresh timing. A scripted peer
+reproduced the evidence collision: normal Max succeeds; missing or different
+subscription values at either initialization refuse identically before user
+dispatch. An initial scratch invocation incorrectly treated the existing test
+helper's outcome/calls tuple as its outcome; corrected evidence is separate.
+
+The [proposed correction](M8-claude-subscription-mode-correction.md) separates
+subscription authentication from commercial-tier display and records the
+producer, fallback and managed-policy proof obligations. No production mode
+predicate, accepted plan or live authority changed. Qualification and live READ
+remain incomplete under the replacement contract until it is approved and
+implemented. Issue #40 owns current work and remaining decisions.
+
+### Subscription-mode proposal review corrections
+
+The proposal now specifies the pinned display grammar, mode/profile names,
+qualification evidence 8 and operator configuration 2, and the affected
+maintenance-selector supersession. Helper retry preservation is conditional on
+absent/static-default state; a previously successful helper can fall back and
+change output. Gi and environment-application/reset paths are explicit proof
+gates, not omitted branches.
+
+A reported environment-value bug was reclassified after checking the accepted
+fixed-startup contract: its predicate deliberately checks names/types, not
+equality to process.env. The current implementation follows it. Exact equality
+is proposed compatibility hardening; no live billing bypass was demonstrated.
+A separate uncommitted hardening draft and focused fake evidence are retained,
+but no source change was committed or deployed. The older contract-acceptance
+request is paused pending the revised proposal; no expanded mode is accepted.
