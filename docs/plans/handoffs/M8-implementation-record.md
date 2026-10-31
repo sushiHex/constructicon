@@ -10935,3 +10935,12 @@ Assembly now seals and verifies both; the worker's artifact bound is not widened
 to accommodate trusted capture. Rejected review suggestions are recorded in
 that review: no frozen-Codex extraction, speculative timeout environment knob,
 callback queue or mandatory capture of failed turns was introduced.
+
+The independent implementation review found one introduced completion-latch
+race: a native completion consumed during a second callback preflight did not
+prevent that worker from launching. Root reproduced the false successful
+two-worker result. Completion is now rechecked after the preflight await and
+before admission/effect. Complete and fragmented frame tests refuse with only
+one callback; the targeted guard mutation must fail an assertion. This review
+did not identify another concrete boundary defect. Final CI/review receipts
+remain on PR #340 rather than being inferred from this record.

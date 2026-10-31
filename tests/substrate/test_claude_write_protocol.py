@@ -14,7 +14,7 @@ from constructicon.substrate.executors.claude_native import (
 )
 from constructicon.substrate.executors.claude_protocol import ClaudeAuthMode
 from constructicon.substrate.executors.operator_store import BindingCheck
-from tests.substrate.test_claude_read import Launcher, Peer, wire
+from tests.substrate.test_claude_read import Launcher, Peer, lifecycle, wire
 
 WRITE = ClaudeNativeRecipe.STREAM_JSON_WRITE
 
@@ -178,6 +178,28 @@ async def test_buffered_parallel_write_call_refuses_before_effect():
     result, calls = await run_write(Parallel())
     assert isinstance(result, ExecutorFailure)
     assert calls == []
+
+
+@pytest.mark.parametrize("fragmented", [False, True])
+async def test_completed_command_buffered_before_next_callback_refuses(fragmented):
+    class CompletedBetweenCalls(WritePeer):
+        def terminal(self):
+            if self.callback_replies == 1:
+                self.mcp("tools/call", identifier=20)
+                if fragmented:
+                    # A partial completed frame is not evidence of a quiet channel.
+                    self.output.extend(wire(lifecycle(self))[:-1])
+                    self.ready.set()
+                else:
+                    self.emit(lifecycle(self))
+            else:
+                super().terminal()
+
+    progress = []
+    result, calls = await run_write(CompletedBetweenCalls(count=2), progress=progress.append)
+    assert isinstance(result, ExecutorFailure)
+    assert calls == ["print('ready')"]
+    assert progress == ["started", "worker_success", "response_completed"]
 
 
 def test_closed_native_recipes_never_enable_builtin_tools(tmp_path):

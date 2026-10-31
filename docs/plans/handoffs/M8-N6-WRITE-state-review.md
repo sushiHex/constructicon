@@ -112,7 +112,9 @@ for the 300-second controller deadline. SDK cancellation emits
 `notifications/cancelled` on timeout/abort (`B@226910034`); propagation through
 the native SDK control path is an inference, not a recorded live fact. The
 existing quiet barrier refuses such cancellation traffic and joins the worker
-without replay. These are source observations, not executed vendor evidence.
+without replay. These are source observations, not executed vendor evidence. The final upper
+clamp imported by `qo` was not independently mapped to its Bun module; no
+minimum vendor timeout guarantee is claimed or needed for acceptance.
 
 Startup evidence currently names the READ OBSERVE launcher revision. WRITE
 selection must flow through trusted qualification and evidence validation;
@@ -187,3 +189,15 @@ selected task/model/budget/overage decision and explicit live-attempt authority
 remain prerequisites for any later subscription WRITE. No READ authorization,
 spent attempt or historical Codex decision supplies those facts. Frozen plan
 bytes and Codex modules remain unchanged.
+
+## Implementation review correction
+
+The independent implementation review found one introduced lifecycle race.
+After the first completed callback, callback preflight could consume and latch
+a native `command_lifecycle/completed` frame after the initial completion
+check, then launch another worker. Root reproduced a successful two-worker
+transaction at reviewed head `2f2de5a`. The fix rechecks completion immediately
+after the quiet-barrier await and before spending another admitted start or
+launching its worker. Complete-frame and fragmented-frame regressions require
+refusal with only the first callback completed; the new guard has an assertion
+mutation. Review findings and final-head evidence remain in PR #340.

@@ -911,6 +911,8 @@ class ClaudeReadTransaction:
                 raise self._refused(ClaudeReadRefusalCode.MCP_ARGUMENTS, value)
             assert isinstance(path, str)
             await self._quiet()  # Classify buffered frames before worker authority.
+            if self._command_completed:
+                raise self._refused(ClaudeReadRefusalCode.LIFECYCLE, value)
             self._calls += 1  # ID and admitted start are spent before the worker's first await.
             if self._progress is not None:
                 self._progress("started")

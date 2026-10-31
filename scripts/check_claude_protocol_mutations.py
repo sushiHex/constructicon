@@ -2503,6 +2503,13 @@ MUTANTS += (
 
 WRITE_PROTOCOL_TEST = "tests/substrate/test_claude_write_protocol.py::"
 MUTANTS += (
+    ("WRITE command completion is rechecked after callback preflight",
+     READ + "ClaudeReadTransaction._mcp",
+     'await self._quiet()  # Classify buffered frames before worker authority.\n'
+     '        if self._command_completed:',
+     'await self._quiet()  # Classify buffered frames before worker authority.\n'
+     '        if False:',
+     WRITE_PROTOCOL_TEST + "test_completed_command_buffered_before_next_callback_refuses"),
     ("WRITE callbacks cannot exceed the closed recipe ceiling",
      READ + "ClaudeReadTransaction._mcp", "self._calls >= self._recipe.call_limit", "False",
      WRITE_PROTOCOL_TEST + "test_write_callback_ceiling_refuses_ninth_effect"),
