@@ -10944,3 +10944,35 @@ before admission/effect. Complete and fragmented frame tests refuse with only
 one callback; the targeted guard mutation must fail an assertion. This review
 did not identify another concrete boundary defect. Final CI/review receipts
 remain on PR #340 rather than being inferred from this record.
+
+## Independent WRITE pins and first-session preparation — #339
+
+The qualification entry now has a metadata-only `pins` command. It assembles
+the actual unavailable WRITE provider with no authorization input, recomputes
+its graph/grants/resource/fixture/report pins and declared limits, checks the
+current physical binding under its retained metadata lock, and closes that
+ownership before publishing at most 8 KiB of JSON. It does not enroll or
+dispatch. The selected journal is initialized/reopened as an existing assembly
+operation; semantic snapshot tests prove that schema version, all table rows
+and checkpoints stay unchanged across pin inspection and minting beyond
+initial schema creation. No extra journal close API exists: the existing
+transaction/read context managers already close every connection in `finally`.
+
+Root review rejected an initial design that required a protected root-owned
+'review-only' candidate file. Such a valid authorization could already be used
+by `run`, regardless of its basename. Pin inspection now consumes no candidate
+and explicitly rejects an authorization argument. The operator compares its
+independently derived facts to the raw candidate before placing any valid
+protected authorization. Error, output-bound and close-failure tests require
+no partial success output and ownership cleanup. Independent Claude review
+accepted this boundary and the journal-state proof; no worker/protocol changes
+were needed for this preparation slice.
+
+The [first WRITE proposal](M8-N6-first-write-session.md) records the bounded
+sequence, actual current CLI spellings, separate WRITE startup validator and
+cleanup validation before activation. Its templates were syntax-checked only;
+it is not yet the private host-ready package. The merged controller commit,
+fresh boot/generation/qualification and exact package still need binding and
+review before owner selection. No installation, credential operation, API key,
+model call or production availability is established here. Final CI and review
+receipts belong to the linked PR. Frozen plans remain unchanged.

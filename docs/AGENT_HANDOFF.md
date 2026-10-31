@@ -3391,3 +3391,15 @@ limits for trusted Git export. Resource and callback launchers are now distinct
 and independently identity-bound. Failed turns discard; successful no-op
 captures refuse before checkpoint/checker. Buffered parallel callbacks refuse,
 not queue. This establishes no installed WRITE profile or live model result.
+
+## WRITE preparation keeps candidate review outside authority placement
+
+`claude_write_qualification pins` derives current metadata without reading or
+accepting an authorization. A protected root-owned valid candidate is already
+runnable authority even if named 'review-only'; never create one merely to
+perform independent pin inspection. Compare the raw candidate against the
+independent projection first, then place authority only under its selected
+owner scope. The first WRITE procedure is still an unexecuted proposal, not
+a host-ready package or live qualification. SQLite connections already close
+per transaction; semantic snapshots prove no run/checkpoint enrollment during
+metadata preparation.

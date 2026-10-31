@@ -11,7 +11,7 @@ import asyncio
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -65,6 +65,7 @@ from constructicon.substrate.executors.qualification import read_authorization
 from constructicon.substrate.journal.sqlite import SqliteJournal
 
 CAPABILITY = "claude-operator"
+PINS_BYTES = 8192
 Issue = projection.Issue
 
 
@@ -424,13 +425,51 @@ async def mint(options: argparse.Namespace) -> QualificationAuthorization:
     )
 
 
+async def pins(options: argparse.Namespace) -> dict[str, Any]:
+    """Independent actual assembly metadata; neither enroll nor dispatch a task."""
+    assembly = await assemble(options)
+    provider = assembly.executor
+    opened = provider.binding_store.open_candidate()
+    try:
+        contained.require_contained_write(assembly.resources)
+        actual = contained.contained_pins(assembly.resources, report_definition())
+        if actual != assembly.pins or provider.qualification is not None:
+            raise ContractViolation("Claude WRITE metadata assembly is unavailable")
+        grants = fixed_grants(provider)
+        identity = provider.identity
+        result = {
+            "schema": 1, "stage": "qualification-write",
+            "scope": fixed.WRITER_SCOPE.model_dump(mode="json"),
+            "binding": fixed.EXECUTOR, "capability_id": CAPABILITY,
+            "source_graph_hash": str(source_graph_hash_for(graph(grants, actual))),
+            "revision": identity.revision,
+            "operator_binding_digest": str(identity.store.operator_binding_digest),
+            "grants": grants.model_dump(mode="json"), "write": actual.model_dump(mode="json"),
+            "qualification_digest": str(identity.store.store_conformance_revision),
+            "subscription_mode_revision": str(identity.store.subscription_mode_adapter_revision),
+            "model": grants.model_selection.model, "effort": grants.effort,
+            "declared_limits": {
+                "native": asdict(provider.launcher.limits),
+                "worker": asdict(provider.worker_launcher.limits),
+                "resource": asdict(assembly.resources.workspace.launcher.limits),
+                "callback_limit": provider.recipe.call_limit, "exchange_s": grants.timeout_s,
+            },
+            "active_binding_checked": True, "checked_at": utc_now().isoformat(),
+        }
+        if len(canonical_json(result).encode("utf-8")) + 1 > PINS_BYTES:
+            raise ContractViolation("Claude WRITE pins exceed their output bound")
+    finally:
+        provider.binding_store.close_candidate(opened)
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="constructicon.api.claude_write_qualification",
                                      allow_abbrev=False)
     commands = parser.add_subparsers(dest="command", required=True)
     prepare = commands.add_parser("prepare")
     prepare.add_argument("--fixture", type=Path, required=True)
-    for name in ("mint", "run"):
+    for name in ("mint", "pins", "run"):
         command = commands.add_parser(name)
         for path in ("fixture", "launch-config", "store-root", "sealed", "qualification",
                      "acquisition-root"):
@@ -443,6 +482,8 @@ def main(argv: list[str] | None = None) -> int:
             for path in ("journal", "attempt-record"):
                 command.add_argument("--" + path, type=Path, required=True)
             command.add_argument("--hours", type=float, choices=(1., 2., 4.), default=1.)
+        elif name == "pins":
+            command.add_argument("--journal", type=Path, required=True)
         else:
             command.add_argument("--authorization", type=Path, required=True)
     options = parser.parse_args(argv)
@@ -452,6 +493,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if options.command == "mint":
         print(asyncio.run(mint(options)).model_dump_json())
+        return 0
+    if options.command == "pins":
+        print(canonical_json(asyncio.run(pins(options))))
         return 0
 
     async def run() -> WriteQualificationReport:
