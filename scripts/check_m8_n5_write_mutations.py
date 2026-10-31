@@ -144,7 +144,7 @@ MUTANTS = (
      ENTRY + "run", "_require_coherent(authorization)", "pass",
      ENTRY_TEST + "test_write_run_checks_actual_coherence_before_constructing_journal"),
     ("WRITE qualification refuses a captured no-change candidate before checkpoint or gate",
-     "constructicon.api._qualification_write_graph:write_writer",
+     "constructicon.api._qualification_write_graph:capture_changed_candidate",
      "if candidate.commit == request.base_commit:", "if False:",
      "tests/api/test_qualification_write_lifecycle.py::"
      "test_write_no_change_capture_refuses_before_checkpoint_and_gate"),

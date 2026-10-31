@@ -10878,3 +10878,101 @@ input drift locally instead of depending only on the Linux-only execution.
 Local accepting-path checks passed; the two physical rehearsal cases remain
 unverified locally and require the final-head Linux run. No production code
 changed in this fixture correction.
+
+## First live Claude subscription READ (#77)
+
+The [live scope](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6541652063),
+[owner authorization](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6541827758),
+[START](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6541868597)
+and [closeout](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6542183807)
+cover one bounded session on controller `196d220640fd3e9032fd47c797f0fe3ab780f089`
+from PR #338. The fixed `ready.txt` READ using `claude-sonnet-4-6` at low effort
+succeeded, with all 22 canonical phase receipts. The raw READ status SHA-256 was
+`957ac33f9a26b6714edb9721a4f2fad5808ff9ac202c71e8c8c669bdd2e5d503`.
+The controller's successful kernel check implies one callback and ready output;
+the host attempt and journal were retained, not separately exported. Tokens
+were not exported and backend request count is unknown.
+
+Generation 13 was explicitly withdrawn, Off/idle was positively observed, and
+custody was released. Independent Claude checked actual pin MATCH and the terminal
+and closeout evidence. Qualification raw bytes equaled the prior deterministic
+value; new boot and transport records establish freshness, rather than the bytes
+alone. This proves the bounded READ for this revision, not WRITE, general
+production availability, a result on a subsequent boot, or natural refresh.
+
+## Claude WRITE qualification implementation — #339
+
+The next slice reuses the existing task-shaped executor, WRITE authorization,
+contained workspace capture and contained gate. A closed WRITE native recipe
+advertises only `contained_python`; the READ recipe stays the default. Both
+use the same Claude framing, initialization, callback correlation and drain
+lifecycle. Concrete READ/WRITE workers share custody and cancellation ownership.
+Codex modules and accepted plan bytes remain unchanged.
+
+WRITE progress records an admitted callback before its first effect await,
+observes the actual worker result, and records response completion only after
+the response write. Only one through eight sequential completed callbacks can
+succeed; buffered parallel calls refuse rather than queue. A refused turn's
+workspace is discarded under the existing disposal law. Successful turns
+capture before their writer checkpoint; no-op candidates refuse before the
+checker. The ordinary gate attests the exact immutable candidate and preserves
+the target. Qualification is unavailable by default and pins its actual graph,
+workspace, gate, report, recipe and one-attempt budget. WRITE startup evidence
+must name the WRITE launch; historical READ evidence cannot attest it.
+
+The new metadata projection explicitly selects fixed WRITE files and bounds
+while preserving the READ default. Reports carry finite callback observations;
+unobserved tokens, served model, spend readings and backend requests remain
+unknown. This implementation is credential-free evidence only. Final-head CI,
+affected physical/mutation results and independent boundary review are recorded
+in the linked PR; no installation or live WRITE is established by this entry.
+
+The design and await-resume obligations are in the
+[WRITE state review](M8-N6-WRITE-state-review.md). The first API accepting test
+exposed a real assembly error: capture/gate resources need their existing
+artifact-capable launcher, distinct from the tightly bounded callback launcher.
+Assembly now seals and verifies both; the worker's artifact bound is not widened
+to accommodate trusted capture. Rejected review suggestions are recorded in
+that review: no frozen-Codex extraction, speculative timeout environment knob,
+callback queue or mandatory capture of failed turns was introduced.
+
+The independent implementation review found one introduced completion-latch
+race: a native completion consumed during a second callback preflight did not
+prevent that worker from launching. Root reproduced the false successful
+two-worker result. Completion is now rechecked after the preflight await and
+before admission/effect. Complete and fragmented frame tests refuse with only
+one callback; the targeted guard mutation must fail an assertion. This review
+did not identify another concrete boundary defect. Final CI/review receipts
+remain on PR #340 rather than being inferred from this record.
+
+## Independent WRITE pins and first-session preparation — #339
+
+The qualification entry now has a metadata-only `pins` command. It assembles
+the actual unavailable WRITE provider with no authorization input, recomputes
+its graph/grants/resource/fixture/report pins and declared limits, checks the
+current physical binding under its retained metadata lock, and closes that
+ownership before publishing at most 8 KiB of JSON. It does not enroll or
+dispatch. The selected journal is initialized/reopened as an existing assembly
+operation; semantic snapshot tests prove that schema version, all table rows
+and checkpoints stay unchanged across pin inspection and minting beyond
+initial schema creation. No extra journal close API exists: the existing
+transaction/read context managers already close every connection in `finally`.
+
+Root review rejected an initial design that required a protected root-owned
+'review-only' candidate file. Such a valid authorization could already be used
+by `run`, regardless of its basename. Pin inspection now consumes no candidate
+and explicitly rejects an authorization argument. The operator compares its
+independently derived facts to the raw candidate before placing any valid
+protected authorization. Error, output-bound and close-failure tests require
+no partial success output and ownership cleanup. Independent Claude review
+accepted this boundary and the journal-state proof; no worker/protocol changes
+were needed for this preparation slice.
+
+The [first WRITE proposal](M8-N6-first-write-session.md) records the bounded
+sequence, actual current CLI spellings, separate WRITE startup validator and
+cleanup validation before activation. Its templates were syntax-checked only;
+it is not yet the private host-ready package. The merged controller commit,
+fresh boot/generation/qualification and exact package still need binding and
+review before owner selection. No installation, credential operation, API key,
+model call or production availability is established here. Final CI and review
+receipts belong to the linked PR. Frozen plans remain unchanged.

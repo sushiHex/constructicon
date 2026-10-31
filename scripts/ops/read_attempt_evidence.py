@@ -1,9 +1,11 @@
-"""Fixed Claude READ metadata projection; no execution/recovery/credential imports.
+"""Fixed Claude attempt metadata projection; no execution or credential imports.
 
 Source laws: attempt_record.py:reserve/_replace; claude_provider.py:_settle;
 _sqlite_base.py:_SCHEMA; walker.py NodeFailed/RunFailed writers. SQLite read
 locks can touch its guarded shm; mode=ro is not a zero-filesystem-write claim.
 The two retained artifacts are independent observations, not an atomic snapshot.
+READ remains the default schema-1 projection. Explicit WRITE selects separate
+fixed files, its eight-callback ceiling and a schema-2 posture label.
 """
 
 from __future__ import annotations
@@ -394,7 +396,7 @@ def _integer(value, maximum):
     return type(value) is int and 0 <= value <= maximum
 
 
-def _attempt(root, uid, authorization, run, maximum):
+def _attempt(root, uid, authorization, run, maximum, posture="read"):
     result = dict(
         state="invalid",
         partial=True,
@@ -408,7 +410,7 @@ def _attempt(root, uid, authorization, run, maximum):
         relay_closed=None,
         callback_observation=None,
     )
-    path = root / "read-attempt.json"
+    path = root / (posture + "-attempt.json")
     fd = None
     try:
         fd, before = _open(path, uid, ATTEMPT_BYTES)
@@ -485,7 +487,7 @@ def _attempt(root, uid, authorization, run, maximum):
                 or (type(facts["status"]) is str and facts["status"] in STATUS)
             )
             require(
-                _integer(facts["callback_started"], 1)
+                _integer(facts["callback_started"], 8 if posture == "write" else 1)
                 and _integer(facts["callback_completed"], facts["callback_started"])
             )
             require(
@@ -511,16 +513,16 @@ def _attempt(root, uid, authorization, run, maximum):
     return result
 
 
-def _journal(root, uid, authorization, run, maximum):
+def _journal(root, uid, authorization, run, maximum, posture="read"):
     result = dict(state="invalid", partial=True, run_status=None, event_count=None, events=None)
     opened, connection, wal_digests = [], None, {}
     try:
-        path = root / "read.sqlite"
+        path = root / (posture + ".sqlite")
         fd, before = _open(path, uid, DB_BYTES, sqlite_file=True)
         opened.append((path, fd, before, False))
         absent = []
         for suffix, bound in (("-wal", DB_BYTES), ("-shm", 1024 * 1024)):
-            auxiliary = root / ("read.sqlite" + suffix)
+            auxiliary = root / (posture + ".sqlite" + suffix)
             if auxiliary.exists() or auxiliary.is_symlink():
                 aux_fd, info = _open(auxiliary, uid, bound, sqlite_file=True)
                 opened.append((auxiliary, aux_fd, info, suffix == "-shm"))
@@ -619,9 +621,10 @@ def _journal(root, uid, authorization, run, maximum):
     return result
 
 
-def collect(run_root, expected_authorization_id, expected_run_id, max_epoch=1):
+def collect(run_root, expected_authorization_id, expected_run_id, max_epoch=1, *, posture="read"):
     """Inspect two fixed private artifacts; caller supplies previously checked pins."""
     require(type(max_epoch) is int and max_epoch == 1)
+    require(type(posture) is str and posture in ("read", "write"))
     require(
         all(
             type(value) is str and 0 < len(value) <= 256 and value.isprintable()
@@ -634,9 +637,13 @@ def collect(run_root, expected_authorization_id, expected_run_id, max_epoch=1):
     directory = root.lstat()
     result = {
         "schema_version": 1,
-        "attempt": _attempt(root, uid, expected_authorization_id, expected_run_id, max_epoch),
-        "journal": _journal(root, uid, expected_authorization_id, expected_run_id, max_epoch),
+        "attempt": _attempt(root, uid, expected_authorization_id, expected_run_id, max_epoch,
+                            posture),
+        "journal": _journal(root, uid, expected_authorization_id, expected_run_id, max_epoch,
+                            posture),
     }
+    if posture == "write":
+        result.update(schema_version=2, posture="write")
     _root(root, uid)
     after = root.lstat()
     require((directory.st_dev, directory.st_ino) == (after.st_dev, after.st_ino))
@@ -655,10 +662,12 @@ def main(argv=None):
     for name in ("run-root", "authorization-id", "run-id"):
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--max-epoch", required=True, type=int, choices=(1,))
+    parser.add_argument("--posture", choices=("read", "write"), default="read")
     options = parser.parse_args(argv)
     try:
         result = collect(
-            options.run_root, options.authorization_id, options.run_id, options.max_epoch
+            options.run_root, options.authorization_id, options.run_id, options.max_epoch,
+            posture=options.posture,
         )
     except (OSError, ValueError, TypeError, KeyError, ImportError):
         print("read evidence collection refused", file=sys.stderr)

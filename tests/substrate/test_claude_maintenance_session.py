@@ -927,3 +927,36 @@ def session_facts_type() -> type[Any]:
     )
 
     return ClaudeMaintenanceSessionFacts
+
+
+@pytest.mark.asyncio
+async def test_write_qualification_executes_selected_command(monkeypatch, tmp_path):
+    from constructicon.substrate.executors import claude_maintenance_session as session
+
+    monkeypatch.setattr(session, "EgressRelay", Relay)
+    custody, launcher = Custody(), QualificationLauncher()
+    launcher.claude_recipe = ClaudeNativeRecipe.STREAM_JSON_WRITE
+    launcher.claude = type("Vendor", (), {
+        "command": ("fixed", "--allowedTools", "mcp__constructicon_read__read_file"),
+        "model": "claude-sonnet-4-6", "effort": "low",
+    })()
+    original = launcher.exchange
+    commands = []
+
+    async def record(command, **kwargs):
+        commands.append(command)
+        return await original(command, **kwargs)
+
+    launcher.exchange = record
+    try:
+        facts = await run_maintenance_session(
+            custody, launcher, policy("platform.claude.com", "api.anthropic.com"),
+            tmp_path / "lane", phase=ClaudeMaintenanceSessionPhase.QUALIFY,
+            mode=ClaudeAuthMode.SUBSCRIPTION,
+        )
+        assert facts.lifecycle is ClaudeMaintenanceSessionLifecycle.JOINED_CLEAN
+        assert commands == [(
+            "fixed", "--allowedTools", "mcp__constructicon_write__contained_python",
+        )]
+    finally:
+        custody.finish()

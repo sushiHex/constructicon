@@ -11,7 +11,10 @@ import asyncio
 import inspect
 import math
 import textwrap
+from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
+from typing import ClassVar
 
 from constructicon.core.errors import ContractViolation
 from constructicon.core.grants import Posture
@@ -87,32 +90,39 @@ except (OSError, ValueError, UnicodeError):
 )
 
 
-class ClaudeReadWorker:
-    """Sequential fixed reader; any interrupted/refused use poisons this owner."""
+class _ClaudeWorkspaceWorker:
+    """Private shared custody loop for the two fixed Claude worker recipes."""
+
+    _posture: ClassVar[Posture] = Posture.READ
+    _limits: ClassVar[ProcessLimits] = READ_WORKER_LIMITS
+    _provider_kind: ClassVar[type[ContainedWorkspaceProvider]] = ContainedWorkspaceProvider
+    _name: ClassVar[str] = "Claude READ"
 
     def __init__(
         self, *, provider: ContainedWorkspaceProvider, context: LeaseContext,
         workspace: WorkspaceView, launcher: LinuxLauncher,
+        observe_result: Callable[[ProcessResult], None] | None = None,
     ) -> None:
-        if (type(provider) is not ContainedWorkspaceProvider
+        if (type(provider) is not self._provider_kind
                 or type(context) is not LeaseContext or not isinstance(launcher, LinuxLauncher)):
-            raise ContractViolation("Claude READ worker requires assembled workspace custody")
+            raise ContractViolation(f"{self._name} worker requires assembled workspace custody")
         self._provider, self._context = provider, context
         self._workspace, self._launcher = workspace, launcher
+        self._observe_result = observe_result
         self._active = False
         self._poisoned = False
         self._owned()
 
     def _owned(self) -> ContainedWorkspace:
         if self._poisoned:
-            raise ContractViolation("Claude READ worker is permanently refused")
-        if (self._provider.posture is not Posture.READ or self._launcher.vendor is not None
+            raise ContractViolation(f"{self._name} worker is permanently refused")
+        if (self._provider.posture is not self._posture or self._launcher.vendor is not None
                 or self._launcher.claude is not None
-                or self._launcher.limits != READ_WORKER_LIMITS):
-            raise ContractViolation("Claude READ worker requires its fixed networkless launcher")
+                or self._launcher.limits != self._limits):
+            raise ContractViolation(f"{self._name} worker requires its fixed networkless launcher")
         owned = self._provider.owned_view(self._workspace, self._context)
         if owned.context.run_lease.owner_id != self._context.run_lease.owner_id:
-            raise ContractViolation("Claude READ workspace belongs to another lease owner")
+            raise ContractViolation(f"{self._name} workspace belongs to another lease owner")
         if self._context.check_control is not None:
             self._context.check_control()
         if owned.context.check_control is not None:
@@ -125,62 +135,89 @@ class ClaudeReadWorker:
             self._provider.closure.require_open, owned.paths,
         )))
         self._owned()
+        # The thread may have observed absence before closure was published;
+        # the authority transfer itself must not contain another await.
+        self._provider.closure.require_open(owned.paths)
         if asyncio.get_running_loop().time() >= deadline:
-            raise ContractViolation("Claude READ worker deadline expired")
+            raise ContractViolation(f"{self._name} worker deadline expired")
+
+    def _input(self, argument: str) -> tuple[tuple[str, ...], bytes]:
+        raise NotImplementedError
+
+    async def _run_process(self, task: asyncio.Task[ProcessResult]) -> ProcessResult:
+        result: ProcessResult | None = None
+        errors: list[BaseException] = []
+        try:
+            result = await asyncio.shield(task)
+        except BaseException as primary:
+            errors.append(primary)
+            if not task.done():
+                task.cancel()
+            try:
+                await finish_owned(task)
+            except asyncio.CancelledError:
+                pass
+            except BaseException as cleanup:
+                failure: BaseException | None
+                if isinstance(cleanup, BaseExceptionGroup):
+                    _, failure = cleanup.split(asyncio.CancelledError)
+                else:
+                    failure = cleanup if cleanup is not primary else None
+                if failure is not None:
+                    errors.append(failure)
+        # A native-read race may cancel this owner after the process completed.
+        # Observe its real result before later custody/output checks discard it.
+        if result is None and task.done() and not task.cancelled():
+            with suppress(BaseException):  # No process result is an unknown observation.
+                result = task.result()
+        if type(result) is ProcessResult and self._observe_result is not None:
+            try:
+                self._observe_result(result)
+            except BaseException as observation:
+                errors.append(observation)
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise BaseExceptionGroup("Claude worker failed while joining", errors) from None
+        assert result is not None
+        return result
 
     async def __call__(self, path: str, remaining_s: float) -> str:
         if self._active or self._poisoned:
             self._poisoned = True
-            raise ContractViolation("Claude READ callbacks must remain sequential")
+            raise ContractViolation(f"{self._name} callbacks must remain sequential")
         self._active = True  # Reentry is visible before the first await.
         try:
-            if (not validate_read_path(path) or type(remaining_s) not in (int, float)
+            if (type(remaining_s) not in (int, float)
                     or not math.isfinite(remaining_s) or remaining_s <= 0):
-                raise ContractViolation("Claude READ worker arguments refused")
+                raise ContractViolation(f"{self._name} worker arguments refused")
+            command, stdin = self._input(path)
             deadline = asyncio.get_running_loop().time() + remaining_s
             owned = self._owned()
             async with owned.use() as guard:
                 await self._open(owned, deadline)
                 task = asyncio.create_task(self._launcher.run(
-                    ("/usr/bin/python3", "-I", "-c", READ_PROGRAM, path),
-                    workspace=Path(owned.path), posture=Posture.READ, guard_fds=(guard,),
-                    stdin=b"", input_kind="task",
+                    command,
+                    workspace=Path(owned.path), posture=self._posture, guard_fds=(guard,),
+                    stdin=stdin, input_kind="task",
                     timeout_s=deadline - asyncio.get_running_loop().time(),
                 ))
-                try:
-                    result = await asyncio.shield(task)
-                except BaseException as primary:
-                    if not task.done():
-                        task.cancel()
-                    try:
-                        await finish_owned(task)
-                    except asyncio.CancelledError:
-                        pass
-                    except BaseException as cleanup:
-                        failure: BaseException | None
-                        if isinstance(cleanup, BaseExceptionGroup):
-                            _, failure = cleanup.split(asyncio.CancelledError)
-                        else:
-                            failure = cleanup if cleanup is not primary else None
-                        if failure is not None:
-                            raise BaseExceptionGroup(
-                                "Claude READ worker failed while joining", [primary, failure],
-                            ) from None
-                    raise
+                result = await self._run_process(task)
                 await self._open(owned, deadline)
                 if (type(result) is not ProcessResult
                         or type(result.returncode) is not int or result.returncode != 0
                         or type(result.payload_returncode) is not int
                         or result.payload_returncode != 0
                         or result.timed_out is not False or result.bound_exceeded is not None
-                        or type(result.stdout) is not bytes or len(result.stdout) > READ_BYTES
+                        or type(result.stdout) is not bytes
+                        or len(result.stdout) > self._limits.stdout_bytes
                         or type(result.stderr) is not bytes
-                        or len(result.stderr) > READ_WORKER_LIMITS.stderr_bytes):
-                    raise ContractViolation("Claude READ worker process refused")
+                        or len(result.stderr) > self._limits.stderr_bytes):
+                    raise ContractViolation(f"{self._name} worker process refused")
                 try:
                     text = result.stdout.decode("utf-8", errors="strict")
                 except UnicodeError:
-                    raise ContractViolation("Claude READ worker output refused") from None
+                    raise ContractViolation(f"{self._name} worker output refused") from None
             # A guard-release await can observe closure/reentry after a clean
             # worker. Recheck before returning any workspace bytes.
             await self._open(owned, deadline)
@@ -190,3 +227,12 @@ class ClaudeReadWorker:
             raise
         finally:
             self._active = False
+
+
+class ClaudeReadWorker(_ClaudeWorkspaceWorker):
+    """Sequential fixed reader; any interrupted/refused use poisons this owner."""
+
+    def _input(self, argument: str) -> tuple[tuple[str, ...], bytes]:
+        if not validate_read_path(argument):
+            raise ContractViolation("Claude READ worker arguments refused")
+        return ("/usr/bin/python3", "-I", "-c", READ_PROGRAM, argument), b""

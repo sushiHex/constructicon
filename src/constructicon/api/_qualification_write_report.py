@@ -28,6 +28,8 @@ from constructicon.api.detail import DEFAULT_DETAIL_BYTES
 from constructicon.core.address import ExecutionPath, RunId
 from constructicon.core.envelope import GitRef
 from constructicon.core.gates import MergeEvaluation
+from constructicon.core.grants import EffectiveGrants
+from constructicon.core.graph import Graph
 from constructicon.core.identity import Digest, canonical_json, digest, parse_json_value
 from constructicon.core.manifest import SELF_BINDING, CapabilityLease
 from constructicon.core.qualification import QualificationAuthorization
@@ -169,9 +171,15 @@ def _capture_facts(
     observation: WriteObservation,
     *,
     authorization: QualificationAuthorization | None,
+    expected_graph: Graph | None = None,
+    writer_grants: EffectiveGrants = WRITE_GRANTS,
+    checker_grants: EffectiveGrants = CHECKER_GRANTS,
+    report_definition: Digest | None = None,
 ) -> tuple[dict[str, Any], set[Issue], list[CapabilityLease]]:
     """The real two consumers share exactly one capture/checkpoint/attestation law."""
     data, issues = _base(run_id, observation)
+    if report_definition is not None:
+        data["report_definition"] = report_definition
     rows: list[CapabilityLease] = []
     writer_scope = WRITER_SCOPE if authorization is not None else SMOKE_WRITER_SCOPE
     checker_scope = CHECKER_SCOPE if authorization is not None else SMOKE_CHECKER_SCOPE
@@ -208,7 +216,7 @@ def _capture_facts(
             issues.add(Issue.TARGET_DRIFT)
         manifest = system.manifest_for_run(run_id)
         data["manifest_hash"] = manifest.manifest_hash
-        graph = (
+        graph = expected_graph if expected_graph is not None else (
             write_graph(authorization.capability_id, pins)
             if authorization is not None
             else smoke_graph(pins)
@@ -247,7 +255,7 @@ def _capture_facts(
                 if pin
                 else None
             )
-            grants = CHECKER_GRANTS if role == "gate" else WRITE_GRANTS
+            grants = checker_grants if role == "gate" else writer_grants
             if (
                 binding.revision != revision
                 or binding.capability_id != capability
@@ -329,6 +337,7 @@ def _capture_facts(
         )
         if (
             candidate.repository != resources.authority.repository_id
+            or candidate.commit == pins.fixture.base_commit
             or candidate.paths
             or candidate.diff_against != pins.fixture.base_commit
         ):

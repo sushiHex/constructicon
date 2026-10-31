@@ -181,9 +181,15 @@ class LaneConfiguration:
     effort: str
     egress: dict[str, EgressPolicy]
 
-    def launcher(self, phase: ClaudeMaintenanceSessionPhase) -> LinuxLauncher:
-        recipe = (ClaudeNativeRecipe.LOGIN if phase is ClaudeMaintenanceSessionPhase.LOGIN
-                  else ClaudeNativeRecipe.STREAM_JSON)
+    def launcher(self, phase: ClaudeMaintenanceSessionPhase, *,
+                 recipe: ClaudeNativeRecipe = ClaudeNativeRecipe.STREAM_JSON) -> LinuxLauncher:
+        if recipe not in (ClaudeNativeRecipe.STREAM_JSON, ClaudeNativeRecipe.STREAM_JSON_WRITE):
+            raise ValueError("invalid Claude qualification recipe")
+        if (recipe is ClaudeNativeRecipe.STREAM_JSON_WRITE
+                and phase is not ClaudeMaintenanceSessionPhase.QUALIFY):
+            raise ValueError("WRITE recipe requires qualification")
+        recipe = (ClaudeNativeRecipe.LOGIN
+                  if phase is ClaudeMaintenanceSessionPhase.LOGIN else recipe)
         login = phase is ClaudeMaintenanceSessionPhase.LOGIN
         return LinuxLauncher(
             runtime_root=self.launch_root / "runtime",
@@ -373,13 +379,14 @@ async def _run(
     *, phase: ClaudeMaintenanceSessionPhase, mode: ClaudeAuthMode | None,
     first_login: bool, configuration: LaneConfiguration, store_root: Path,
     key: str, lock_fd: int, floor: int, lane_dir: Path,
+    recipe: ClaudeNativeRecipe = ClaudeNativeRecipe.STREAM_JSON,
 ) -> tuple[ClaudeMaintenanceSessionFacts, LinuxLauncher, EgressPolicy]:
     seconds = LOGIN_SECONDS if phase is ClaudeMaintenanceSessionPhase.LOGIN else MODE_SECONDS
     deadline = asyncio.get_running_loop().time() + seconds
     operator = (ClaudeOperatorFDIO(input_fd=0, output_fd=1, error_fd=2,
                                    deadline=deadline)
                 if phase is ClaudeMaintenanceSessionPhase.LOGIN else None)
-    launcher = configuration.launcher(phase)
+    launcher = configuration.launcher(phase, recipe=recipe)
     policy = configuration.egress["observe" if phase is ClaudeMaintenanceSessionPhase.QUALIFY
                                   else phase.value]
     with inherit_maintenance(store_root, key, lock_fd,
@@ -400,6 +407,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lane-dir", type=Path, required=True)
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--mode", choices=("subscription",))
+    parser.add_argument("--recipe", choices=("read", "write"), default="read")
     parser.add_argument("--first-login", action="store_true")
     parser.add_argument("--store-root", type=Path, required=True)
     parser.add_argument("--key", required=True)
@@ -411,6 +419,7 @@ def main(argv: list[str] | None = None) -> int:
     mode = {"subscription": ClaudeAuthMode.SUBSCRIPTION}.get(options.mode)
     if ((phase is ClaudeMaintenanceSessionPhase.LOGIN) != (mode is None)
             or (options.first_login and phase is not ClaudeMaintenanceSessionPhase.LOGIN)
+            or (options.recipe == "write" and phase is not ClaudeMaintenanceSessionPhase.QUALIFY)
             or options.lock_fd < 0 or options.floor < 0 or not options.key
             or any(not path.is_absolute() or ".." in path.parts for path in (
                 options.store_root, options.lane_dir, options.evidence,
@@ -427,6 +436,8 @@ def main(argv: list[str] | None = None) -> int:
                 configuration=configuration, store_root=options.store_root,
                 key=options.key, lock_fd=options.lock_fd, floor=options.floor,
                 lane_dir=options.lane_dir,
+                recipe=(ClaudeNativeRecipe.STREAM_JSON_WRITE if options.recipe == "write"
+                        else ClaudeNativeRecipe.STREAM_JSON),
             ))
             evidence = _record(facts, launcher, policy, configuration,
                                mode=mode)

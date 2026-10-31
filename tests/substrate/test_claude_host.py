@@ -299,3 +299,23 @@ def test_operator_provider_refuses_before_downstream_reads_or_construction(
     with pytest.raises(ContractViolation, match="not qualified"):
         claude_host.operator_provider(host, **arguments)
     assert calls == ["config", "sealed", "evidence"]
+
+
+def test_write_qualification_binds_the_selected_launch_recipe(case):
+    config, record, path = case
+    recipe = claude_host.ClaudeNativeRecipe.STREAM_JSON_WRITE
+    path.write_text(canonical_json(record), encoding="utf-8")
+    with pytest.raises(ContractViolation):
+        claude_host.validate_startup_evidence(path, config, recipe=recipe)
+    record["launch_revision"] = str(config.launcher(
+        ClaudeMaintenanceSessionPhase.QUALIFY, recipe=recipe,
+    ).revision)
+    path.write_text(canonical_json(record), encoding="utf-8")
+    assert (claude_host.validate_startup_evidence(path, config, recipe=recipe)[0]
+            is ClaudeAuthMode.SUBSCRIPTION)
+    with pytest.raises(ContractViolation):
+        claude_host.validate_startup_evidence(path, config)
+    profile, grants = claude_host.write_profile(config), claude_host.write_grants(config)
+    assert profile.grant_faults(grants) == ()
+    assert grants.allowed_tools == ("contained_python",)
+    assert grants.timeout_s == 300

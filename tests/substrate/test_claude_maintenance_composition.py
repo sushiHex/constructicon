@@ -353,7 +353,10 @@ def test_cli_composes_real_phases_and_publishes_finite_evidence(
         yield custody
 
     def build_launcher(_config: claude_lane.LaneConfiguration,
-                       phase: ClaudeMaintenanceSessionPhase) -> EntryLauncher:
+                       phase: ClaudeMaintenanceSessionPhase, *,
+                       recipe: ClaudeNativeRecipe = ClaudeNativeRecipe.STREAM_JSON,
+                       ) -> EntryLauncher:
+        assert recipe is ClaudeNativeRecipe.STREAM_JSON
         assert all(item.joined for item in launchers)
         assert all(item.closed for item in Relay.instances)
         launcher = EntryLauncher(phase, persist_login=persist_login)

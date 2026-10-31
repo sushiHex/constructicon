@@ -16,6 +16,25 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## First live Claude subscription READ succeeded
+
+The bounded live session on controller `196d220640fd3e9032fd47c797f0fe3ab780f089`
+(source PR #338) completed the fixed `ready.txt` READ with
+`claude-sonnet-4-6`, low effort, and all 22 canonical phase receipts. Generation
+13 was explicitly withdrawn; Off/idle was positively observed and custody
+released. Independent Claude checked the actual pin as MATCH and checked terminal
+and closeout evidence. See the [implementation record](plans/handoffs/M8-implementation-record.md#first-live-claude-subscription-read-77)
+for the evidence and its limits.
+
+This establishes READ for that revision and bounded task, not WRITE, general
+production availability, a result on a subsequent boot, or natural refresh. The successful
+controller kernel check implies one callback and ready output; host attempt and
+journal were retained but not separately exported. Tokens were not exported and
+backend request count is unknown. Qualification bytes matched an earlier
+deterministic value; fresh boot and transport records establish freshness.
+
+---
+
 ## Claude READ preserves finite startup refusals
 
 Generation 11 passed fresh raw-source qualification and actual candidate checks,
@@ -3357,3 +3376,30 @@ The writable credential FD is not an immutable snapshot. Controller Unicode
 tables depend on the verified host/runtime profile; unsupported characters may
 refuse conservatively. No source merge alone proves live provider readiness,
 installation or a successful model attempt.
+
+## Claude WRITE qualification path
+
+The qualification-only Claude WRITE implementation adds a closed hosted
+`contained_python` catalog, shared Claude worker ownership, durable callback
+progress and an ordinary capture/checker graph over existing contained
+workspace/gate contracts. READ remains the default recipe; neither a READ
+qualification nor generic wave approval attests a later live WRITE launch.
+Codex modules remain frozen and untouched. The issue/PR carries final evidence.
+
+A permitting API test caught the first assembly's use of callback artifact
+limits for trusted Git export. Resource and callback launchers are now distinct
+and independently identity-bound. Failed turns discard; successful no-op
+captures refuse before checkpoint/checker. Buffered parallel callbacks refuse,
+not queue. This establishes no installed WRITE profile or live model result.
+
+## WRITE preparation keeps candidate review outside authority placement
+
+`claude_write_qualification pins` derives current metadata without reading or
+accepting an authorization. A protected root-owned valid candidate is already
+runnable authority even if named 'review-only'; never create one merely to
+perform independent pin inspection. Compare the raw candidate against the
+independent projection first, then place authority only under its selected
+owner scope. The first WRITE procedure is still an unexecuted proposal, not
+a host-ready package or live qualification. SQLite connections already close
+per transaction; semantic snapshots prove no run/checkpoint enrollment during
+metadata preparation.
