@@ -2529,5 +2529,22 @@ MUTANTS += (
      WRITE_PROTOCOL_TEST + "test_closed_native_recipes_never_enable_builtin_tools"),
 )
 
+WRITE_PINS = "constructicon.api.claude_write_qualification:pins"
+WRITE_PINS_TEST = "tests/api/test_claude_write_pins.py::"
+MUTANTS += (
+    ("WRITE metadata must inspect the current physical binding", WRITE_PINS,
+     "opened = provider.binding_store.open_candidate()", "opened = None",
+     WRITE_PINS_TEST + "test_main_pins_reports_actual_metadata_without_enrollment_or_dispatch"),
+    ("WRITE metadata checks independently recomputed assembly pins", WRITE_PINS,
+     "actual != assembly.pins", "False",
+     WRITE_PINS_TEST + "test_main_pins_refuses_assembled_pin_mismatch_and_closes_binding"),
+    ("WRITE metadata publishes only its complete bounded projection", WRITE_PINS,
+     'if len(canonical_json(result).encode("utf-8")) + 1 > PINS_BYTES:', "if False:",
+     WRITE_PINS_TEST + "test_main_pins_closes_on_error_and_never_emits_partial_success[bound]"),
+    ("WRITE metadata closes binding ownership before publishing", WRITE_PINS,
+     "provider.binding_store.close_candidate(opened)", "pass",
+     WRITE_PINS_TEST + "test_main_pins_reports_actual_metadata_without_enrollment_or_dispatch"),
+)
+
 if __name__ == "__main__":
     raise SystemExit(run(MUTANTS))

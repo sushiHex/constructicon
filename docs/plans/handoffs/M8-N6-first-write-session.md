@@ -67,6 +67,16 @@ Absent, unknown or arbitrary refusal is HOLD. A current controller needs no
 replacement. Verify exact installed equality and R19 imports on either route,
 including the WRITE entry and its dependency closure at `C`.
 
+For any controller replacement, preserve the previously reviewed R17-R20
+transport constraint: write each runbook block verbatim to its own LF-only
+file, verify its SHA-256 locally and on the host, copy with `scp`, and invoke
+the file through strict batch SSH with plain `bash` and closed stdin. Add no
+`-e`, `pipefail`, wrapper or stdin pipe. The separate controller-vars file
+contains only the reviewed declaration lines; new session-phase options do
+not belong there. Require the runbook's explicit completion/install/check
+markers, not exit zero alone. Unexpected output stops; do not resume again
+without the applicable owner decision.
+
 No login, R6 launch replacement, checkpoint, restore, vendor upgrade or credential
 inspection/copy is selected. Verify the existing installed launch artifact and
 enforcing profiles using their original source/artifact pins, with staging
