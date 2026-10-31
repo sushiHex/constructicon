@@ -15,6 +15,7 @@ from constructicon.core.executor import ExecutorFailure, ExecutorSuccess, TaskSp
 from constructicon.core.identity import digest
 from constructicon.substrate.executors import claude_read
 from constructicon.substrate.executors.claude_native import (
+    ClaudeNativeRecipe,
     ClaudeNativeStoreMount,
     ClaudeNativeVendor,
 )
@@ -258,6 +259,7 @@ class Peer:
 
 
 class Launcher:
+    claude_recipe = ClaudeNativeRecipe.STREAM_JSON
     limits = DEFAULT_PROCESS_LIMITS
 
     def __init__(self, peer=None, *, result=None):

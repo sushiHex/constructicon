@@ -30,6 +30,7 @@ from constructicon.substrate.executors.claude_lane import LaneConfiguration
 from constructicon.substrate.executors.claude_maintenance_session import (
     ClaudeMaintenanceSessionPhase,
 )
+from constructicon.substrate.executors.claude_native import ClaudeNativeRecipe
 from constructicon.substrate.executors.claude_protocol import (
     ClaudeAuthMode,
     ClaudeInitializeVerdict,
@@ -49,6 +50,7 @@ from constructicon.substrate.executors.egress import identity_digests
 from constructicon.substrate.executors.linux import LinuxLauncher
 from constructicon.substrate.executors.operator_store import BindingStore, _sealed_file
 from constructicon.substrate.git.acquisition import AcquisitionClosure
+from constructicon.substrate.git.capture import ContainedWriteWorkspaceProvider
 from constructicon.substrate.git.contained import ContainedWorkspaceProvider
 
 READ_SECONDS = 120
@@ -70,9 +72,10 @@ _QUALIFICATION_FIELDS = frozenset({
 
 def sealed_mode(
     store: NativeOperatorStoreIdentityV1, evidence: Path, configuration: LaneConfiguration,
+    *, recipe: ClaudeNativeRecipe = ClaudeNativeRecipe.STREAM_JSON,
 ) -> ClaudeAuthMode:
     """Bind already-validated startup facts to this published store generation."""
-    mode, revision = validate_startup_evidence(evidence, configuration)
+    mode, revision = validate_startup_evidence(evidence, configuration, recipe=recipe)
     if (revision != store.subscription_mode_adapter_revision
             or revision != store.store_conformance_revision):
         raise ContractViolation("Claude startup evidence is not sealed by this generation")
@@ -81,6 +84,7 @@ def sealed_mode(
 
 def checked_startup_evidence(
     evidence: Path, configuration: LaneConfiguration,
+    *, recipe: ClaudeNativeRecipe = ClaudeNativeRecipe.STREAM_JSON,
 ) -> tuple[dict[str, Any], Digest]:
     """Check one closed current snapshot, without claiming qualification."""
     # Reuse the existing bounded regular-file/duplicate-key reader. It does no
@@ -152,7 +156,7 @@ def checked_startup_evidence(
     plan = qualification["mode"]
     if not all(checks) or type(plan) is not str or plan not in plans:
         raise ContractViolation("Claude startup evidence has invalid current facts")
-    launcher = configuration.launcher(ClaudeMaintenanceSessionPhase.OBSERVE)
+    launcher = configuration.launcher(ClaudeMaintenanceSessionPhase.QUALIFY, recipe=recipe)
     expected: dict[str, Any] = {
         "runtime_digest": str(configuration.runtime_digest),
         "vendor_digest": str(configuration.vendor_digest),
@@ -169,9 +173,10 @@ def checked_startup_evidence(
 
 def validate_startup_evidence(
     evidence: Path, configuration: LaneConfiguration,
+    *, recipe: ClaudeNativeRecipe = ClaudeNativeRecipe.STREAM_JSON,
 ) -> tuple[ClaudeAuthMode, Digest]:
     """Require positive qualification from the same checked current snapshot."""
-    record, revision = checked_startup_evidence(evidence, configuration)
+    record, revision = checked_startup_evidence(evidence, configuration, recipe=recipe)
     facts = record["facts"]
     qualification = facts["qualification"]
     checks = (
@@ -219,6 +224,23 @@ def read_profile(configuration: LaneConfiguration) -> NativeOperatorExecutorProf
     )
 
 
+def write_grants(configuration: LaneConfiguration) -> EffectiveGrants:
+    return read_grants(configuration).model_copy(update={
+        "posture": Posture.WRITE, "allowed_tools": ("contained_python",), "timeout_s": 300,
+    })
+
+
+def write_profile(configuration: LaneConfiguration) -> NativeOperatorExecutorProfileV3:
+    read = read_profile(configuration)
+    return read.model_copy(update={
+        "name": "claude-operator-write", "posture": Posture.WRITE,
+        "grant_policy": read.grant_policy.model_copy(update={
+            "tool_sets": (("contained_python",),),
+        }),
+        "isolation": read.isolation.model_copy(update={"filesystem": "workspace_only"}),
+    })
+
+
 @dataclass(frozen=True)
 class ClaudeHostSession:
     configuration: Path
@@ -243,11 +265,17 @@ def operator_provider(
         host.configuration, expected_sha256=host.configuration_sha256,
     )
     store = _sealed_file(host.sealed, os.getuid())
-    mode = sealed_mode(store, host.qualification, configuration)
-    launcher = configuration.launcher(ClaudeMaintenanceSessionPhase.OBSERVE)
+    write = type(workspace) is ContainedWriteWorkspaceProvider
+    recipe = ClaudeNativeRecipe.STREAM_JSON_WRITE if write else ClaudeNativeRecipe.STREAM_JSON
+    if write:
+        mode = sealed_mode(store, host.qualification, configuration, recipe=recipe)
+        launcher = configuration.launcher(ClaudeMaintenanceSessionPhase.QUALIFY, recipe=recipe)
+    else:
+        mode = sealed_mode(store, host.qualification, configuration)
+        launcher = configuration.launcher(ClaudeMaintenanceSessionPhase.OBSERVE)
     policy = configuration.egress["observe"]
     revision = store.store_conformance_revision
-    profile = read_profile(configuration)
+    profile = write_profile(configuration) if write else read_profile(configuration)
     identity = NativeOperatorLaunchIdentityV3(
         **identity_fields(
             launcher, worker_launcher, workspace_provider=workspace,

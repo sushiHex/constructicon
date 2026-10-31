@@ -48,6 +48,8 @@ from constructicon.substrate.git import contained
 from constructicon.substrate.git.authority import _remove_tree
 from tests.gitworld import push_to_main
 from tests.substrate.test_claude_read import NATIVE_UUID, SESSION, Peer, lifecycle
+from tests.substrate.test_claude_write_worker import custody as write_custody  # noqa: F401
+from tests.substrate.test_claude_write_worker import read_custody as read_custody
 from tests.substrate.test_contained_workspace import context, stale_row
 from tests.substrate.test_contained_workspace import provider as provider
 
@@ -607,3 +609,177 @@ def test_protocol_revision_covers_the_closed_observation_law():
     })
     assert claude_provider._protocol_revision() == expected
     assert expected == claude_provider.PROTOCOL_REVISION
+
+
+def test_write_callback_progress_retains_only_completed_response(tmp_path):
+    from constructicon.substrate.executors.attempt_record import AttemptRecord
+
+    attempt = AttemptRecord.reserve(tmp_path / "attempt", {"authorization_id": "test"})
+    attempt.enable_callbacks()
+    assert attempt.intend() is None
+    handle = object.__new__(native.ClaudeOperatorHandle)
+    handle.attempt = attempt
+    handle._callback_started = handle._callback_completed = 0
+    handle._progress("started")
+    assert attempt.callbacks.admitted_started == 1
+    assert attempt.callbacks.worker_results == (None,)
+    handle._worker_result("success")
+    handle._progress("worker_success")
+    assert attempt.callbacks.admitted_completed == 0
+    handle._progress("response_completed")
+    assert attempt.callbacks.admitted_completed == 1
+    assert attempt.callbacks.worker_results == ("success",)
+
+
+def test_write_callback_refuses_unobserved_worker_success(tmp_path):
+    from constructicon.substrate.executors.attempt_record import AttemptRecord
+
+    attempt = AttemptRecord.reserve(tmp_path / "attempt", {"authorization_id": "test"})
+    attempt.enable_callbacks()
+    assert attempt.intend() is None
+    handle = object.__new__(native.ClaudeOperatorHandle)
+    handle.attempt = attempt
+    handle._callback_started = handle._callback_completed = 0
+    handle._progress("started")
+    with pytest.raises(ContractViolation):
+        handle._progress("worker_success")
+    assert attempt.callbacks.admitted_completed == 0
+
+
+def test_write_multiple_callbacks_record_order_and_reject_unobserved_completion(tmp_path):
+    from constructicon.substrate.executors.attempt_record import AttemptRecord
+
+    attempt = AttemptRecord.reserve(tmp_path / "attempt", {"authorization_id": "test"})
+    attempt.enable_callbacks()
+    assert attempt.intend() is None
+    handle = object.__new__(native.ClaudeOperatorHandle)
+    handle.attempt = attempt
+    handle._callback_started = handle._callback_completed = 0
+    handle._progress("started")
+    handle._worker_result("success")
+    handle._progress("worker_success")
+    handle._progress("response_completed")
+    handle._progress("started")
+    assert attempt.callbacks.worker_results == ("success", None)
+    with pytest.raises(ContractViolation):
+        handle._progress("worker_success")
+    assert attempt.callbacks.admitted_completed == 1
+
+
+async def test_write_provider_accepts_exact_workspace_recipe_and_refuses_read_recipe(assembled):
+    from constructicon.substrate.executors.claude_native import ClaudeNativeRecipe
+    from constructicon.substrate.git.capture import ContainedWriteWorkspaceProvider
+
+    a = assembled
+    original = a.kwargs["workspace_provider"]
+    workspace = ContainedWriteWorkspaceProvider(
+        original.authority, root=original.root, target_ref=original.target_ref,
+        provider_id=original.provider_id, posture=Posture.WRITE, launcher=original.launcher,
+    )
+    launch = replace(a.kwargs["launcher"], claude_recipe=ClaudeNativeRecipe.STREAM_JSON_WRITE)
+    worker = replace(a.kwargs["worker_launcher"], limits=native.WRITE_WORKER_LIMITS)
+    read = a.kwargs["profile"]
+    profile = read.model_copy(update={
+        "posture": Posture.WRITE,
+        "grant_policy": read.grant_policy.model_copy(update={"tool_sets": (native.WRITE_CATALOG,)}),
+        "isolation": read.isolation.model_copy(update={"filesystem": "workspace_only"}),
+    })
+    identity = a.kwargs["identity"].model_copy(update={
+        **native.identity_fields(
+            launch, worker, workspace_provider=workspace,
+            workspace_capability_id="owned-workspace", workspace_revision="test",
+            mode=ClaudeAuthMode.SUBSCRIPTION, expected_base=a.kwargs["expected_base"],
+        ),
+        "profile": profile,
+    })
+    arguments = {**a.kwargs, "launcher": launch, "worker_launcher": worker,
+                 "profile": profile, "identity": identity, "workspace_provider": workspace,
+                 "qualification": None}
+    assert native.ClaudeOperatorProvider(**arguments).unavailable_reasons
+    with pytest.raises(ContractViolation):
+        native.ClaudeOperatorProvider(**{**arguments, "launcher": a.kwargs["launcher"]})
+    grants = a.grants.model_copy(update={
+        "posture": Posture.WRITE, "allowed_tools": native.WRITE_CATALOG, "timeout_s": 300,
+    })
+    raw = a.kwargs["qualification"].model_dump(mode="python")
+    raw.update({
+        "stage": "qualification-write", "revision": identity.revision, "grants": grants,
+        "write": {
+            "workspace": {"capability_id": "owned-workspace", "revision": "test"},
+            "gate": {"capability_id": "gate", "revision": mark("gate")},
+            "fixture": {"identity": mark("fixture"), "base_commit": a.kwargs["expected_base"],
+                        "target_ref": workspace.target_ref},
+            "report_definition": mark("report"),
+        },
+    })
+    # Capability revisions are digests; use a real digest in both the pin and provider.
+    workspace_revision = str(mark("workspace"))
+    raw["write"]["workspace"]["revision"] = workspace_revision
+    arguments["workspace_revision"] = workspace_revision
+    fields = native.identity_fields(
+        launch, worker, workspace_provider=workspace,
+        workspace_capability_id="owned-workspace", workspace_revision=workspace_revision,
+        mode=ClaudeAuthMode.SUBSCRIPTION, expected_base=a.kwargs["expected_base"],
+    )
+    identity = identity.model_copy(update=fields)
+    arguments["identity"] = identity
+    raw["revision"] = identity.revision
+    arguments["qualification"] = QualificationAuthorization.model_validate(raw)
+    assert native.ClaudeOperatorProvider(**arguments).qualification.stage == "qualification-write"
+    raw["write"]["fixture"]["target_ref"] = "refs/heads/other"
+    arguments["qualification"] = QualificationAuthorization.model_validate(raw)
+    with pytest.raises(ContractViolation):
+        native.ClaudeOperatorProvider(**arguments)
+
+
+async def test_write_provider_run_retains_actual_worker_and_eight_completed_responses(
+    assembled, write_custody, monkeypatch, tmp_path,  # noqa: F811
+):
+    from constructicon.substrate.executors.attempt_record import AttemptRecord
+    from constructicon.substrate.executors.claude_native import ClaudeNativeRecipe
+    from constructicon.substrate.executors.claude_write_worker import ClaudeWriteWorker
+    from tests.substrate.test_claude_write_protocol import WritePeer
+
+    a = assembled
+    launcher = replace(a.kwargs["launcher"], claude_recipe=ClaudeNativeRecipe.STREAM_JSON_WRITE)
+    provider = SimpleNamespace(
+        write=True, recipe=ClaudeNativeRecipe.STREAM_JSON_WRITE, launcher=launcher,
+        egress=a.kwargs["egress"], mode=ClaudeAuthMode.SUBSCRIPTION,
+        _check_workspace_base=lambda: None,
+    )
+    attempt = AttemptRecord.reserve(tmp_path / "write-attempt", {"authorization_id": "write"})
+    attempt.enable_callbacks()
+    handle = native.ClaudeOperatorHandle(provider, a.context, a.workspace.resource.paths, attempt)
+    handle._deadline = asyncio.get_running_loop().time() + 60
+    handle._held = SimpleNamespace(lock_fd=88)
+    handle._guard_fd, handle._credential_fd = 77, 99
+    handle._check = lambda: None
+    handle._binding = lambda: BindingCheck(mark("binding"))
+    peer = WritePeer(count=8)
+    commands = []
+
+    async def exchange(self, command, **kwargs):
+        commands.append(command)
+        assert kwargs["workspace"] is None and kwargs["posture"] is Posture.READ
+        await kwargs["conversation"](peer)
+        return ProcessResult(0, b"", b"", .01, payload_returncode=0)
+
+    async def run(self, command, **kwargs):
+        assert kwargs["stdin"] == b"print('ready')"
+        assert kwargs["posture"] is Posture.WRITE
+        return ProcessResult(0, b"file text", b"", .01, payload_returncode=0)
+
+    workspace, ctx, acquired, worker_launcher, _ = write_custody
+    worker = ClaudeWriteWorker(provider=workspace, context=ctx, workspace=acquired.resource,
+                               launcher=worker_launcher, observe_result=handle._worker_result)
+    monkeypatch.setattr(LinuxLauncher, "run", run)
+    monkeypatch.setattr(LinuxLauncher, "exchange", exchange)
+    result = await handle._run(TaskSpec(instruction="write the fixed file"), worker)
+    assert isinstance(result, ExecutorSuccess)
+    handle._settle(result)
+    saved = json.loads((tmp_path / "write-attempt").read_text())
+    assert saved["phase"] == "outcome" and saved["dispatch"] == "completed"
+    assert saved["callbacks"]["admitted_started"] == 8
+    assert saved["callbacks"]["admitted_completed"] == 8
+    assert saved["callbacks"]["worker_results"] == ["success"] * 8
+    assert commands == [ClaudeNativeRecipe.STREAM_JSON_WRITE.command(launcher.claude)]

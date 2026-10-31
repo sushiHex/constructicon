@@ -206,8 +206,11 @@ async def run_maintenance_session(
                 or not _policy_ok(policy, phase)
                 or not _limits_ok(launcher.limits, login=login)
                 or launcher.claude is None
-                or launcher.claude_recipe is not (
-                    ClaudeNativeRecipe.LOGIN if login else ClaudeNativeRecipe.STREAM_JSON
+                or launcher.claude_recipe not in (
+                    (ClaudeNativeRecipe.LOGIN,) if login else
+                    (ClaudeNativeRecipe.STREAM_JSON, ClaudeNativeRecipe.STREAM_JSON_WRITE)
+                    if phase is ClaudeMaintenanceSessionPhase.QUALIFY else
+                    (ClaudeNativeRecipe.STREAM_JSON,)
                 )
                 or (login and (operator is None or mode is not None))
                 or (not login and (operator is not None or first_login
@@ -264,7 +267,8 @@ async def run_maintenance_session(
                 )
                 async with asyncio.timeout_at(end):
                     result = await launcher.exchange(
-                        launcher.claude.command, workspace=None, posture=Posture.READ,
+                        launcher.claude_recipe.command(launcher.claude),
+                        workspace=None, posture=Posture.READ,
                         guard_fds=(custody.lock_fd,),
                         conversation=qualification_conversation,
                         timeout_s=end - loop.time(), native_store=native_store,

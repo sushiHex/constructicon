@@ -17,7 +17,7 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from constructicon.core import claude_read_observation
 from constructicon.core import qualification as qualification_law
@@ -37,6 +37,7 @@ from constructicon.core.native_operator import (
     NativeOperatorLaunchIdentityV3,
 )
 from constructicon.core.qualification import QualificationAuthorization
+from constructicon.core.qualification_write import CallbackObservation, WorkerResultCategory
 from constructicon.core.workspace import (
     AcquiredCapability,
     Disposition,
@@ -58,6 +59,7 @@ from constructicon.substrate.executors import (
     claude_read,
     claude_read_worker,
     claude_startup,
+    claude_write_worker,
 )
 from constructicon.substrate.executors.attempt_record import AttemptRecord, Dispatch
 from constructicon.substrate.executors.claude_native import (
@@ -68,6 +70,10 @@ from constructicon.substrate.executors.claude_protocol import ClaudeAuthMode
 from constructicon.substrate.executors.claude_read_worker import (
     READ_WORKER_LIMITS,
     ClaudeReadWorker,
+)
+from constructicon.substrate.executors.claude_write_worker import (
+    WRITE_WORKER_LIMITS,
+    ClaudeWriteWorker,
 )
 from constructicon.substrate.executors.egress import (
     MAX_SOCKET_PATH_BYTES,
@@ -88,9 +94,11 @@ from constructicon.substrate.git.acquisition import (
     acquisition_guard,
     dispose_acquisition,
 )
+from constructicon.substrate.git.capture import ContainedWriteWorkspaceProvider
 from constructicon.substrate.git.contained import ContainedWorkspaceProvider
 
 READ_CATALOG = ("read_file",)
+WRITE_CATALOG = ("contained_python",)
 UNAVAILABLE = (
     "Claude READ subscription qualification has not established production availability",
 )
@@ -137,12 +145,12 @@ def _recipe_fields(
         "adapter_revision": ADAPTER_REVISION,
         "decoder_revision": PROTOCOL_REVISION,
         "callback_protocol_revision": PROTOCOL_REVISION,
-        "callback_catalog_digest": digest("claude-read-catalog", 1, claude_read.READ_TOOL),
+        "callback_catalog_digest": digest("claude-read-catalog", 1, launcher.claude_recipe.tool),
         "isolation_revision": digest("claude-read-isolation", 1,
                                      (launcher.revision, worker_launcher.revision,
                                       workspace_provider.launcher.revision)),
         "configuration_digest": digest("claude-read-configuration", 1, {
-            "command": vendor.command, "mode": mode.value,
+            "command": launcher.claude_recipe.command(vendor), "mode": mode.value,
             "workspace_capability_id": workspace_capability_id,
             "workspace_revision": workspace_revision,
             "workspace_provider_id": workspace_provider.provider_id,
@@ -169,23 +177,30 @@ class ClaudeOperatorProvider:
         mode: ClaudeAuthMode, expected_base: GitSha,
         qualification: QualificationAuthorization | None = None,
     ) -> None:
+        write = type(workspace_provider) is ContainedWriteWorkspaceProvider
+        recipe = ClaudeNativeRecipe.STREAM_JSON_WRITE if write else ClaudeNativeRecipe.STREAM_JSON
+        posture = Posture.WRITE if write else Posture.READ
+        catalog = WRITE_CATALOG if write else READ_CATALOG
+        limits = WRITE_WORKER_LIMITS if write else READ_WORKER_LIMITS
         if (type(launcher) is not LinuxLauncher or type(worker_launcher) is not LinuxLauncher
-                or type(workspace_provider) is not ContainedWorkspaceProvider
+                or type(workspace_provider) not in (ContainedWorkspaceProvider,
+                                                    ContainedWriteWorkspaceProvider)
                 or type(mode) is not ClaudeAuthMode
                 or launcher.claude is None or launcher.vendor is not None
-                or launcher.claude_recipe is not ClaudeNativeRecipe.STREAM_JSON
+                or launcher.claude_recipe is not recipe
                 or worker_launcher.vendor is not None or worker_launcher.claude is not None
-                or worker_launcher.limits != READ_WORKER_LIMITS
-                or workspace_provider.posture is not Posture.READ
+                or worker_launcher.limits != limits
+                or workspace_provider.posture is not posture
                 or type(workspace_provider.launcher) is not LinuxLauncher
                 or workspace_provider.launcher.vendor is not None
                 or workspace_provider.launcher.claude is not None
                 or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", expected_base) is None
-                or profile.posture is not Posture.READ
-                or profile.grant_policy.tool_sets != (READ_CATALOG,)
+                or profile.posture is not posture
+                or profile.grant_policy.tool_sets != (catalog,)
                 or not profile.grant_policy.workspace_required
                 or profile.grant_policy.environment_names
-                or profile.isolation.filesystem != "read_only_snapshot"
+                or profile.isolation.filesystem != (
+                    "workspace_only" if write else "read_only_snapshot")
                 or profile.structured_output
                 or identity.profile != profile or binding_store.sealed != identity.store
                 or closure.authority is not workspace_provider.authority
@@ -200,6 +215,7 @@ class ClaudeOperatorProvider:
         if len(os.fsencode(AcquisitionPaths(acquisition_root, "acq-" + "0" * 32).payload
                            / SOCKET_NAME)) > MAX_SOCKET_PATH_BYTES:
             raise ContractViolation("Claude READ acquisition root exceeds the relay path bound")
+        self.write, self.recipe = write, recipe
         self.launcher, self.worker_launcher = launcher, worker_launcher
         self.profile, self._identity = profile, identity
         self.binding_store, self.closure = binding_store, closure
@@ -217,11 +233,17 @@ class ClaudeOperatorProvider:
                 )
             except (AttributeError, ValueError) as error:
                 raise ContractViolation("Claude READ qualification is invalid") from error
-            if (qualification.stage != "qualification-read"
+            if (qualification.stage != ("qualification-write" if write else "qualification-read")
                     or qualification.revision != identity.revision
                     or qualification.operator_binding_digest
                     != identity.store.operator_binding_digest
-                    or qualification.grants is None or self._grant_faults(qualification.grants)):
+                    or qualification.grants is None or self._grant_faults(qualification.grants)
+                    or (write and (qualification.write is None
+                        or qualification.write.workspace.capability_id != workspace_capability_id
+                        or str(qualification.write.workspace.revision) != workspace_revision
+                        or qualification.write.fixture.base_commit != expected_base
+                        or qualification.write.fixture.target_ref
+                        != workspace_provider.target_ref))):
                 raise ContractViolation("Claude READ authorization differs from its sealed recipe")
         self.qualification = qualification
         self._handles: weakref.WeakKeyDictionary[
@@ -261,7 +283,7 @@ class ClaudeOperatorProvider:
         return (self.launcher, self.launcher.root, self.worker_launcher, self.worker_launcher.root,
                 self.binding_store, self.binding_store.root, self.closure, self.closure.authority,
                 workspace, workspace.root, workspace.authority, workspace.authority._repo,
-                workspace.launcher,
+                workspace.launcher, self.write, self.recipe,
                 workspace.closure, workspace.closure.authority, self.acquisition_root,
                 self.qualification, self.egress, self.mode, self.expected_base)
 
@@ -334,6 +356,8 @@ class ClaudeOperatorProvider:
             "run_id": context.run_lease.run_id, "epoch": context.run_lease.epoch,
             "acquisition_id": acquisition,
         })
+        if self.write:
+            attempt.enable_callbacks()
         handle = ClaudeOperatorHandle(self, context, AcquisitionPaths(self.acquisition_root,
                                                                       acquisition), attempt)
         self._handles[handle] = context, attempt
@@ -585,9 +609,19 @@ class ClaudeOperatorHandle:
                     or binding.revision != self.provider.workspace_revision
                     or owned.context.run_lease.owner_id != self.context.run_lease.owner_id):
                 raise ContractViolation("Claude READ workspace differs from its admitted binding")
-            worker = ClaudeReadWorker(provider=self.provider.workspace_provider,
-                                      context=self.context, workspace=owned,
-                                      launcher=self.provider.worker_launcher)
+            worker: ClaudeReadWorker | ClaudeWriteWorker
+            if self.provider.write:
+                worker = ClaudeWriteWorker(
+                    provider=cast(
+                        ContainedWriteWorkspaceProvider, self.provider.workspace_provider,
+                    ),
+                    context=self.context, workspace=owned, launcher=self.provider.worker_launcher,
+                    observe_result=self._worker_result,
+                )
+            else:
+                worker = ClaudeReadWorker(provider=self.provider.workspace_provider,
+                                          context=self.context, workspace=owned,
+                                          launcher=self.provider.worker_launcher)
             self.active = asyncio.create_task(self._run(task, worker))
             result = await self.active
             self._check()
@@ -606,7 +640,46 @@ class ClaudeOperatorHandle:
         finally:
             self._settle(outcome)
 
-    async def _run(self, task: TaskSpec, worker: ClaudeReadWorker) -> ExecutorOutcome:
+    def _worker_result(self, category: WorkerResultCategory) -> None:
+        previous = self.attempt.callbacks
+        if (previous is None or not previous.worker_results
+                or previous.worker_results[-1] is not None):
+            raise ContractViolation("Claude WRITE worker result has no admitted callback")
+        self.attempt.observe_callbacks(CallbackObservation(
+            schema_version=1, admitted_started=previous.admitted_started,
+            admitted_completed=previous.admitted_completed,
+            worker_results=(*previous.worker_results[:-1], category),
+        ))
+
+    def _progress(self, event: str) -> None:
+        previous = self.attempt.callbacks
+        if previous is None:
+            raise ContractViolation("Claude WRITE callback observation unavailable")
+        if event == "started":
+            self._callback_started += 1
+            observation = CallbackObservation(
+                schema_version=1, admitted_started=self._callback_started,
+                admitted_completed=self._callback_completed,
+                worker_results=(*previous.worker_results, None),
+            )
+        elif event == "worker_success":
+            if not previous.worker_results or previous.worker_results[-1] != "success":
+                raise ContractViolation("Claude WRITE worker success is unobserved")
+            return
+        elif event == "response_completed":
+            self._callback_completed += 1
+            observation = CallbackObservation(
+                schema_version=1, admitted_started=self._callback_started,
+                admitted_completed=self._callback_completed,
+                worker_results=previous.worker_results,
+            )
+        else:
+            raise ContractViolation("Claude WRITE callback progress invalid")
+        self.attempt.observe_callbacks(observation)
+
+    async def _run(
+        self, task: TaskSpec, worker: ClaudeReadWorker | ClaudeWriteWorker,
+    ) -> ExecutorOutcome:
         self._check()
         assert self._deadline is not None and self._held is not None
         assert self._guard_fd is not None and self._credential_fd is not None
@@ -617,12 +690,14 @@ class ClaudeOperatorHandle:
 
         async def read(path: str, remaining: float) -> str:
             self._check()
-            if self._callback_started:
-                raise ContractViolation("Claude READ permits one callback")
-            self._callback_started += 1
+            if not self.provider.write:
+                if self._callback_started:
+                    raise ContractViolation("Claude READ permits one callback")
+                self._callback_started += 1
             text = await worker(path, remaining)
             self._check()
-            self._callback_completed += 1
+            if not self.provider.write:
+                self._callback_completed += 1
             return text
 
         outcome: ExecutorOutcome | None = None
@@ -633,13 +708,18 @@ class ClaudeOperatorHandle:
                 mount = ClaudeNativeStoreMount(
                     self._held.lock_fd, self._credential_fd, self._before_spawn, egress,
                 )
+                extra: dict[str, Any] = (
+                    {"recipe": self.provider.recipe, "progress": self._progress}
+                    if self.provider.write else {}
+                )
                 outcome = await claude_read.run_read_transaction(
-                    self.provider.launcher, vendor.command, task,
+                    self.provider.launcher, self.provider.recipe.command(vendor), task,
                     mode=self.provider.mode, model=vendor.model,
                     effort=vendor.effort, worker=read,
                     guard_fds=(self._guard_fd, self._held.lock_fd),
                     timeout_s=self._deadline - asyncio.get_running_loop().time(),
                     native_store=mount, before_user=self._before_user, check_control=self._check,
+                    **extra,
                 )
                 self._check()
         except BaseException as error:
@@ -661,7 +741,8 @@ class ClaudeOperatorHandle:
         self._check()
         assert outcome is not None
         if (not self.relay_closed or self.relay_denied
-                or self._callback_started != 1 or self._callback_completed != 1):
+                or not (1 <= self._callback_started <= (8 if self.provider.write else 1))
+                or self._callback_completed != self._callback_started):
             detail = (claude_read.known_refusal_detail(outcome.error.detail)
                       if isinstance(outcome, ExecutorFailure) and outcome.error.kind == "exit"
                       else None)
@@ -774,6 +855,6 @@ def _protocol_revision() -> Digest:
 PROTOCOL_REVISION = _protocol_revision()
 ADAPTER_REVISION = digest("claude-read-owned-adapter", 3, {
     module.__name__: inspect.getsource(module)
-    for module in (sys.modules[__name__], claude_read_worker, claude_native,
+    for module in (sys.modules[__name__], claude_read_worker, claude_write_worker, claude_native,
                    attempt_record, qualification_law)
 })

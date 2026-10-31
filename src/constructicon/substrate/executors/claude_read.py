@@ -34,7 +34,10 @@ from constructicon.core.grants import Posture
 from constructicon.core.identity import parse_json_value
 from constructicon.core.process import ProcessIO
 from constructicon.substrate.executors.claude_initialize import _cancelled, _clean
-from constructicon.substrate.executors.claude_native import ClaudeNativeStoreMount
+from constructicon.substrate.executors.claude_native import (
+    ClaudeNativeRecipe,
+    ClaudeNativeStoreMount,
+)
 from constructicon.substrate.executors.claude_native_events import (
     ClaudeSystemRecordCategory,
     exact_inert_notification,
@@ -63,6 +66,10 @@ from constructicon.substrate.executors.claude_startup import (
     judge_hooks,
     judge_settings,
     settings_request,
+)
+from constructicon.substrate.executors.claude_write_worker import (
+    WRITE_WORKER_LIMITS,
+    validate_write_program,
 )
 from constructicon.substrate.executors.linux import LinuxLauncher, ProcessExchangeError
 from constructicon.substrate.executors.operator_store import BindingCheck
@@ -321,14 +328,14 @@ def _uuid(value: object) -> bool:
         return False
 
 
-def _registered_sdk_server(value: object) -> bool:
+def _registered_sdk_server(value: object, server_name: str = SERVER) -> bool:
     """One exact registered server; SDK origin metadata supplies no authority."""
     if type(value) is not list or len(value) != 1:
         return False
     server = value[0]
     return (type(server) is dict
             and set(server) in ({"name", "status"}, {"name", "status", "source"})
-            and type(server["name"]) is str and server["name"] == SERVER
+            and type(server["name"]) is str and server["name"] == server_name
             and type(server["status"]) is str and server["status"] == "connected"
             and ("source" not in server
                  or (type(server["source"]) is str and server["source"] == "sdk")))
@@ -395,8 +402,16 @@ class ClaudeReadTransaction:
         worker: ReadWorker, input_limit: int, output_limit: int, deadline: float,
         before_user: Callable[[], None] | None = None,
         check_control: Callable[[], None] | None = None,
+        recipe: ClaudeNativeRecipe = ClaudeNativeRecipe.STREAM_JSON,
+        progress: Callable[[Literal["started", "worker_success", "response_completed"]], None]
+        | None = None,
     ) -> None:
+        if (type(recipe) is not ClaudeNativeRecipe
+                or recipe not in (ClaudeNativeRecipe.STREAM_JSON,
+                                  ClaudeNativeRecipe.STREAM_JSON_WRITE)):
+            raise ValueError("a task requires a closed Claude task recipe")
         self._task, self._auth_mode, self._model, self._effort = task, mode, model, effort
+        self._recipe, self._progress = recipe, progress
         self._worker = worker
         self._before_user, self._check_control = before_user, check_control
         self._input_limit, self._output_limit, self._deadline = input_limit, output_limit, deadline
@@ -639,7 +654,7 @@ class ClaudeReadTransaction:
                 or self._state != "dispatched" or self._session is None
                 or value.get("session_id") != self._session
                 or not _uuid(value.get("session_id")) or not _uuid(value.get("uuid"))
-                or value.get("tool_name") != "mcp__constructicon_read__read_file"
+                or value.get("tool_name") != self._recipe.allowed_tool
                 or not _text(value.get("tool_use_id"), RECORD_BYTES)
                 or not _text(value.get("parent_tool_use_id"), RECORD_BYTES)
                 or type(value.get("elapsed_time_seconds")) is not int
@@ -685,7 +700,8 @@ class ClaudeReadTransaction:
             raise self._refused(ClaudeReadRefusalCode.MESSAGE, value)
         if value["type"] == "user":
             content = message.get("content")
-            if (self._calls_completed != 1 or type(content) is not list or not content
+            if (not 1 <= self._calls_completed <= self._recipe.call_limit
+                    or type(content) is not list or not content
                     or any(type(block) is not dict or block.get("type") != "tool_result"
                            for block in content)):
                 raise self._refused(ClaudeReadRefusalCode.MESSAGE, value)
@@ -751,7 +767,7 @@ class ClaudeReadTransaction:
                 raw = initialize_request(identifier)
                 if register:
                     value = json.loads(raw)
-                    value["request"]["sdkMcpServers"] = [SERVER]
+                    value["request"]["sdkMcpServers"] = [self._recipe.server]
                     raw = _wire(value)
             elif kind == "get_settings":
                 raw = settings_request(identifier)
@@ -820,7 +836,8 @@ class ClaudeReadTransaction:
         if (not _text(outer, 128) or not outer or outer in self._outer_ids
                 or type(request) is not dict
                 or set(request) != {"subtype", "server_name", "message"}
-                or request.get("subtype") != "mcp_message" or request.get("server_name") != SERVER):
+                or request.get("subtype") != "mcp_message"
+                or request.get("server_name") != self._recipe.server):
             raise self._refused(ClaudeReadRefusalCode.MCP_ENVELOPE, value)
         assert isinstance(outer, str)
         self._outer_ids.add(outer)
@@ -863,39 +880,47 @@ class ClaudeReadTransaction:
                         or any(not _text(item, 1024) for item in client.values())):
                     raise self._refused(ClaudeReadRefusalCode.MCP_HANDSHAKE, value)
                 result = {"protocolVersion": "2025-11-25", "capabilities": {"tools": {}},
-                          "serverInfo": {"name": SERVER, "version": "1"}}
+                          "serverInfo": {"name": self._recipe.server, "version": "1"}}
             elif notification:
                 result = {}
             else:
                 if message.get("params", {}) != {}:
                     raise self._refused(ClaudeReadRefusalCode.MCP_HANDSHAKE, value)
-                result = {"tools": [READ_TOOL]}
+                result = {"tools": [self._recipe.tool]}
             self._handshake += 1
         else:
             if self._command_completed:
                 raise self._refused(ClaudeReadRefusalCode.LIFECYCLE, value)
             if (self._state != "dispatched" or self._session is None
-                    or method != "tools/call" or self._calls >= CALL_LIMIT):
+                    or method != "tools/call" or self._calls >= self._recipe.call_limit):
                 raise self._refused(ClaudeReadRefusalCode.MCP_CALL, value)
             params = message.get("params")
             # Native MCP metadata is open JSON, discarded under the existing record budget.
             if (type(params) is not dict
                     or set(params) not in ({"name", "arguments"}, {"name", "arguments", "_meta"})
                     or ("_meta" in params and type(params["_meta"]) is not dict)
-                    or params.get("name") != "read_file"):
+                    or params.get("name") != self._recipe.tool_name):
                 raise self._refused(ClaudeReadRefusalCode.MCP_CALL, value)
             arguments = params["arguments"]
-            if type(arguments) is not dict or set(arguments) != {"path"}:
+            if type(arguments) is not dict or set(arguments) != {self._recipe.argument_name}:
                 raise self._refused(ClaudeReadRefusalCode.MCP_ARGUMENTS, value)
-            path = arguments["path"]
-            if not validate_read_path(path):
+            path = arguments[self._recipe.argument_name]
+            valid = (validate_read_path(path) if self._recipe is ClaudeNativeRecipe.STREAM_JSON
+                     else validate_write_program(path))
+            if not valid:
                 raise self._refused(ClaudeReadRefusalCode.MCP_ARGUMENTS, value)
             assert isinstance(path, str)
             await self._quiet()  # Classify buffered frames before worker authority.
             self._calls += 1  # ID and admitted start are spent before the worker's first await.
+            if self._progress is not None:
+                self._progress("started")
             text = await self._read_worker(path)
-            if not _text(text, TEXT_BYTES):
+            output_limit = (TEXT_BYTES if self._recipe is ClaudeNativeRecipe.STREAM_JSON
+                            else WRITE_WORKER_LIMITS.stdout_bytes)
+            if not _text(text, output_limit):
                 raise self._refused(ClaudeReadRefusalCode.MCP_CALL, value)
+            if self._progress is not None:
+                self._progress("worker_success")
             result = {"content": [{"type": "text", "text": text}], "isError": False}
         await self._write(_wire({"type": "control_response", "response": {
             "subtype": "success", "request_id": outer,
@@ -903,6 +928,8 @@ class ClaudeReadTransaction:
         }}))
         if not handshake:
             self._calls_completed += 1
+            if self._progress is not None:
+                self._progress("response_completed")
 
     async def _read_worker(self, path: str) -> str:
         remaining = self._deadline - asyncio.get_running_loop().time()
@@ -966,9 +993,9 @@ class ClaudeReadTransaction:
                     raise self._refused(ClaudeReadRefusalCode.INIT_UUID, value)
                 if value.get("model") != self._model:
                     raise self._refused(ClaudeReadRefusalCode.INIT_MODEL, value)
-                if value.get("tools") != ["mcp__constructicon_read__read_file"]:
+                if value.get("tools") != [self._recipe.allowed_tool]:
                     raise self._refused(ClaudeReadRefusalCode.INIT_TOOLS, value)
-                if not _registered_sdk_server(value.get("mcp_servers")):
+                if not _registered_sdk_server(value.get("mcp_servers"), self._recipe.server):
                     raise self._refused(ClaudeReadRefusalCode.INIT_SERVER, value)
                 self._session = str(value["session_id"])
             elif self._message(value) or self._rate_limit_event(value):
@@ -1077,6 +1104,9 @@ async def run_read_transaction(
     native_store: ClaudeNativeStoreMount | None = None,
     before_user: Callable[[], None] | None = None,
     check_control: Callable[[], None] | None = None,
+    recipe: ClaudeNativeRecipe = ClaudeNativeRecipe.STREAM_JSON,
+    progress: Callable[[Literal["started", "worker_success", "response_completed"]], None]
+    | None = None,
 ) -> ExecutorOutcome:
     """Publish only after this same exchange and all owned work have joined."""
     if (type(mode) is not ClaudeAuthMode or not _text(model, 256) or not model
@@ -1097,13 +1127,15 @@ async def run_read_transaction(
         input_limit=launcher.limits.input_bytes, output_limit=launcher.limits.stdout_bytes,
         deadline=started_at + timeout_s,
         before_user=before_user, check_control=check_control,
+        recipe=recipe, progress=progress,
     )
     try:
         launch_store = native_store
         if native_store is not None:
             if (type(native_store) is not ClaudeNativeStoreMount
                     or native_store.lock_fd not in guard_fds or launcher.claude is None
-                    or command != launcher.claude.command
+                    or recipe is not launcher.claude_recipe
+                    or command != recipe.command(launcher.claude)
                     or model != launcher.claude.model or effort != launcher.claude.effort):
                 raise _Refused(ClaudeReadRefusalCode.NATIVE_STORE_RECIPE)
             initial_binding = native_store.before_spawn()
@@ -1136,7 +1168,10 @@ async def run_read_transaction(
         if launch_store is not None:
             launch_store.before_spawn()
         conversation._check()
-        success = _clean(result) and conversation._state == "drained"
+        success = (_clean(result) and conversation._state == "drained"
+                   and (recipe is ClaudeNativeRecipe.STREAM_JSON
+                        or 1 <= conversation._calls_completed == conversation._calls
+                        <= recipe.call_limit))
         timed_out = result.timed_out is True
     except (Exception, asyncio.CancelledError, BaseExceptionGroup) as error:
         conversation._state = "refused"

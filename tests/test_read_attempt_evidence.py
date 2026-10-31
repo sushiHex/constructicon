@@ -118,6 +118,31 @@ def collect(root):
     return reader.collect(root, AUTH, RUN, 1)
 
 
+def test_write_projection_names_only_its_exact_files_and_callback_budget(files):
+    record = attempt()
+    record["facts"].update(callback_started=8, callback_completed=8)
+    record["callbacks"] = {"schema_version": 1, "admitted_started": 8,
+                           "admitted_completed": 8, "worker_results": ["success"] * 8}
+    write(files / "write-attempt.json", record)
+    (files / "read.sqlite").rename(files / "write.sqlite")
+    result = reader.collect(files, AUTH, RUN, posture="write")
+    assert result["schema_version"] == 2 and result["posture"] == "write"
+    assert result["attempt"]["state"] == result["journal"]["state"] == "valid"
+    assert result["attempt"]["callback_started"] == result["attempt"]["callback_completed"] == 8
+    assert result["attempt"]["callback_observation"] == record["callbacks"]
+    # Default READ keeps its old path and shape and cannot borrow the WRITE database.
+    assert collect(files)["journal"]["state"] == "missing"
+    record["facts"]["callback_started"] = 9
+    write(files / "write-attempt.json", record)
+    assert reader.collect(files, AUTH, RUN, posture="write")["attempt"]["state"] == "invalid"
+
+
+@pytest.mark.parametrize("posture", ["../write", "", "READ", 1])
+def test_projection_refuses_unselected_posture_before_paths(files, posture):
+    with pytest.raises(ValueError, match="invalid retained evidence"):
+        reader.collect(files, AUTH, RUN, posture=posture)
+
+
 def test_real_files_and_schema_accept_without_publishing_private_values(files):
     result = collect(files)
     assert result["attempt"] == {

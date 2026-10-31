@@ -95,6 +95,13 @@ async def write_writer(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[s
     outcome = await executor.execute(task, workspace=workspace, grants=ctx.grants)
     if not isinstance(outcome, ExecutorSuccess):
         raise ContractViolation(f"the WRITE turn ended {outcome.status}")
+    return await capture_changed_candidate(workspace, request)
+
+
+async def capture_changed_candidate(
+    workspace: ContainedWriteWorkspace, request: WriteQualificationRequest,
+) -> Mapping[str, Any]:
+    """Both subscription writers checkpoint only an actual changed capture."""
     await workspace.commit_all("constructicon N5 WRITE candidate")
     candidate = workspace.git_ref()
     if candidate.commit == request.base_commit:

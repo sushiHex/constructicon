@@ -45,10 +45,48 @@ class ClaudeNativeRecipe(StrEnum):
     """Closed assembly selection; login never gains the READ command's tools."""
 
     STREAM_JSON = "stream-json"
+    STREAM_JSON_WRITE = "stream-json-write"
     LOGIN = "login"
 
     def command(self, vendor: ClaudeNativeVendor) -> tuple[str, ...]:
-        return LOGIN_COMMAND if self is ClaudeNativeRecipe.LOGIN else vendor.command
+        if self is ClaudeNativeRecipe.LOGIN:
+            return LOGIN_COMMAND
+        if self is ClaudeNativeRecipe.STREAM_JSON:
+            return vendor.command
+        command = list(vendor.command)
+        command[command.index("--allowedTools") + 1] = self.allowed_tool
+        return tuple(command)
+
+    @property
+    def server(self) -> str:
+        if self is ClaudeNativeRecipe.LOGIN:
+            raise ContractViolation("login has no task catalog")
+        return "constructicon_write" if self is self.STREAM_JSON_WRITE else "constructicon_read"
+
+    @property
+    def tool_name(self) -> str:
+        return "contained_python" if self is self.STREAM_JSON_WRITE else "read_file"
+
+    @property
+    def argument_name(self) -> str:
+        return "program" if self is self.STREAM_JSON_WRITE else "path"
+
+    @property
+    def allowed_tool(self) -> str:
+        return f"mcp__{self.server}__{self.tool_name}"
+
+    @property
+    def call_limit(self) -> int:
+        return 8 if self is self.STREAM_JSON_WRITE else 1
+
+    @property
+    def tool(self) -> dict[str, object]:
+        description = ("Execute bounded Python in the contained WRITE workspace."
+                       if self is self.STREAM_JSON_WRITE else "Read one relative workspace file.")
+        return {"name": self.tool_name, "description": description,
+                "inputSchema": {"type": "object",
+                                "properties": {self.argument_name: {"type": "string"}},
+                                "required": [self.argument_name], "additionalProperties": False}}
 
     @property
     def policy(self) -> dict[str, object]:
