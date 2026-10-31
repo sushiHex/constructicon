@@ -403,8 +403,10 @@ async def test_read_admission_cannot_select_login(tmp_path, on_linux, monkeypatc
     )
     assert isinstance(outcome, ExecutorFailure)
     assert "spawn" not in events
-    assert events == ([] if login_command else ["binding", "probe", "binding"])
-    assert closed == ([] if login_command else [733, 734])
+    # The transaction now rejects the wrong selected recipe before acquiring
+    # custody or probing, even when its command happens to be the READ command.
+    assert events == []
+    assert closed == []
 
 
 @pytest.fixture

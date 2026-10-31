@@ -1194,6 +1194,29 @@ async def test_completed_cannot_authorize_a_new_or_buffered_callback(position):
     assert calls == [] and launcher.peer.callback_replies == 0 and launcher.joined
 
 
+async def test_quiet_barrier_refuses_completion_before_any_callback_response():
+    async def worker(path, remaining):
+        raise AssertionError("a quiet barrier has no worker authority")
+
+    transaction = claude_read.ClaudeReadTransaction(
+        TaskSpec(instruction="read the file"), mode=ClaudeAuthMode.SUBSCRIPTION,
+        model="model", effort="high", worker=worker, input_limit=8192,
+        output_limit=512 * 1024, deadline=asyncio.get_running_loop().time() + 5,
+    )
+    transaction._state = "dispatched"
+    transaction._session = SESSION
+    peer = Peer()
+    peer.users = [{"uuid": transaction._user_uuid}]
+    transaction._records = [wire(lifecycle(peer))]
+    refused = None
+    try:
+        await transaction._quiet()
+    except claude_read._Refused as error:
+        refused = error.code
+    assert refused is claude_read.ClaudeReadRefusalCode.LIFECYCLE
+    assert transaction._command_completed and transaction._calls_completed == 0
+
+
 @pytest.mark.parametrize("state", ["completed", "cancelled", "discarded", "refused"])
 @pytest.mark.parametrize("simultaneous", [False, True])
 async def test_terminal_lifecycle_during_worker_cancels_and_joins(state, simultaneous):
