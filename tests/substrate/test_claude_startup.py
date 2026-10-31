@@ -96,8 +96,8 @@ def test_authentic_minimal_settings_and_hooks_accept():
     assert judge_settings(settings()) is startup.ClaudeStartupVerdict.MATCH
     assert judge_hooks(hooks()) is startup.ClaudeStartupVerdict.MATCH
     body = settings()
-    body["effective"]["env"] = {"DISABLE_GROWTHBOOK": "untrusted-ignored"}
-    body["sources"][0]["settings"]["env"] = {"DISABLE_GROWTHBOOK": "untrusted-ignored"}
+    body["effective"]["env"] = {"DISABLE_GROWTHBOOK": "1"}
+    body["sources"][0]["settings"]["env"] = {"DISABLE_GROWTHBOOK": "1"}
     assert judge_settings(body) is startup.ClaudeStartupVerdict.MATCH
 
 
@@ -202,9 +202,9 @@ def test_effective_predicates_keep_exact_acceptance_and_first_failure(reason_nam
     startup.fixed_policy(),
     {**startup.fixed_policy(), "env": {}},
     {**startup.fixed_policy(), "env": startup.fixed_environment()},
-    {**startup.fixed_policy(), "env": {"DISABLE_GROWTHBOOK": "private-value"}},
+    {**startup.fixed_policy(), "env": {"DISABLE_GROWTHBOOK": "1"}},
 ])
-def test_effective_predicate_classifier_accepts_original_permitted_shapes(configuration):
+def test_effective_predicate_classifier_accepts_sealed_permitted_shapes(configuration):
     body = settings()
     body["effective"] = configuration
     body["sources"].append({"source": "flagSettings", "settings": {}})
@@ -212,6 +212,43 @@ def test_effective_predicate_classifier_accepts_original_permitted_shapes(config
         wire(body), expected_request_id="observe-1", model=MODEL, effort=EFFORT,
     ) == (startup.ClaudeStartupVerdict.MATCH, None)
     assert judge_settings(body) is startup.ClaudeStartupVerdict.MATCH
+
+
+@pytest.mark.parametrize("part", ["effective", "policySettings", "userSettings",
+                                  "projectSettings", "localSettings", "flagSettings"])
+@pytest.mark.parametrize("env", [{}, _EXPECTED_ENVIRONMENT, *[
+    {name: value} for name, value in _EXPECTED_ENVIRONMENT.items()
+]])
+def test_settings_accept_empty_full_and_partial_sealed_environment(part, env):
+    body = settings()
+    if part == "effective":
+        body["effective"]["env"] = env
+    elif part == "policySettings":
+        body["sources"][0]["settings"]["env"] = env
+    else:
+        body["sources"].append({"source": part, "settings": {"env": env}})
+    assert judge_settings(body) is startup.ClaudeStartupVerdict.MATCH
+
+
+@pytest.mark.parametrize("part", ["effective", "policySettings", "userSettings",
+                                  "projectSettings", "localSettings", "flagSettings"])
+@pytest.mark.parametrize("name", _EXPECTED_ENVIRONMENT)
+def test_settings_refuse_every_sealed_environment_value_override(part, name):
+    body = settings()
+    env = {name: "synthetic"}
+    if part == "effective":
+        body["effective"]["env"] = env
+    elif part == "policySettings":
+        body["sources"][0]["settings"]["env"] = env
+    else:
+        body["sources"].append({"source": part, "settings": {"env": env}})
+    verdict, reason = startup.classify_settings(
+        wire(body), expected_request_id="observe-1", model=MODEL, effort=EFFORT,
+    )
+    assert verdict is judge_settings(body) is startup.ClaudeStartupVerdict.CONFIGURATION_MISMATCH
+    reasons = startup.ClaudeSettingsMismatchReason
+    assert reason is (reasons.EFFECTIVE_ENV_VALUE if part == "effective"
+                      else reasons.SOURCE_SETTINGS)
 
 
 @pytest.mark.parametrize("raw,expected", [
@@ -412,7 +449,7 @@ def test_hook_catalog_count_and_summary_bounds_bind_without_learning_authority()
                                  "localSettings", "flagSettings"])
 def test_real_additional_source_names_only_admit_protected_env(name):
     body = settings()
-    body["sources"].append({"source": name, "settings": {"env": {"NODE_OPTIONS": "ignored"}}})
+    body["sources"].append({"source": name, "settings": {"env": {"NODE_OPTIONS": ""}}})
     assert judge_settings(body) is startup.ClaudeStartupVerdict.MATCH
     body["sources"][-1]["settings"]["hooks"] = {}
     assert judge_settings(body) is startup.ClaudeStartupVerdict.CONFIGURATION_MISMATCH

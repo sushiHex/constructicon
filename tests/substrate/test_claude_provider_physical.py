@@ -24,7 +24,7 @@ from constructicon.core.native_operator import (
 )
 from constructicon.core.qualification import QualificationAuthorization
 from constructicon.substrate.executors import claude_provider as native
-from constructicon.substrate.executors.claude_protocol import ClaudePlan
+from constructicon.substrate.executors.claude_protocol import ClaudeAuthMode
 from constructicon.substrate.executors.claude_read_worker import READ_WORKER_LIMITS
 from constructicon.substrate.executors.egress import (
     EgressDestination,
@@ -76,7 +76,7 @@ async def test_owned_provider_uses_real_native_worker_relay_and_guard_lifetimes(
     identity = NativeOperatorLaunchIdentityV3(
         **native.identity_fields(launch, worker, workspace_provider=provider,
                                  workspace_capability_id="owned-workspace",
-                                 workspace_revision="test", selected_plan=ClaudePlan.PRO,
+                                 workspace_revision="test", mode=ClaudeAuthMode.SUBSCRIPTION,
                                  expected_base=expected_base),
         profile=profile, store=store_identity,
         egress=NativeEgressIdentityV1(**identity_digests(policy),
@@ -161,7 +161,8 @@ async def test_owned_provider_uses_real_native_worker_relay_and_guard_lifetimes(
             binding_store=HarmlessLockedStore(), closure=provider.closure,
             workspace_provider=provider, workspace_capability_id="owned-workspace",
             workspace_revision="test", acquisition_root=Path(directory), egress=policy,
-            selected_plan=ClaudePlan.PRO, expected_base=expected_base, qualification=authorization,
+            mode=ClaudeAuthMode.SUBSCRIPTION, expected_base=expected_base,
+            qualification=authorization,
         )
         acquired = await executor.acquire(ctx)
         try:

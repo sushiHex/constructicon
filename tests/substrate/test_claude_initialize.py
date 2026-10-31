@@ -13,8 +13,8 @@ from constructicon.core.errors import ContractViolation
 from constructicon.substrate.executors import claude_initialize as initialization
 from constructicon.substrate.executors.claude_protocol import (
     RECORD_BYTES,
+    ClaudeAuthMode,
     ClaudeInitializeVerdict,
-    ClaudePlan,
 )
 from constructicon.substrate.executors.linux import (
     DEFAULT_PROCESS_LIMITS,
@@ -117,22 +117,22 @@ class ScriptedLauncher:
             self.joined = True
 
 
-async def observe(launcher, *, plan=ClaudePlan.PRO):
+async def observe(launcher, *, plan=ClaudeAuthMode.SUBSCRIPTION):
     return await initialization.observe_initialization(
-        launcher, COMMAND, selected_plan=plan, guard_fds=(17,), timeout_s=5,
+        launcher, COMMAND, mode=plan, guard_fds=(17,), timeout_s=5,
     )
 
 
-@pytest.mark.parametrize("plan", list(ClaudePlan))
+@pytest.mark.parametrize("wire_label", [b"Claude Pro", b"Claude Max", b"Claude Team"])
 @pytest.mark.parametrize("fragment", [1, 7, 8192])
-async def test_owned_initialization_accepts_selected_plan_fragmented_eof_and_clean_process(
-    plan, fragment,
+async def test_owned_initialization_accepts_mode_fragmented_eof_and_clean_process(
+    wire_label, fragment,
 ):
     io = ScriptedIO(fragment=fragment, transform=lambda data: data.replace(
-        b"Claude Pro", plan.value.encode(),
+        b"Claude Pro", wire_label,
     ))
     launcher = ScriptedLauncher(io)
-    report = await observe(launcher, plan=plan)
+    report = await observe(launcher)
     assert report.lifecycle is initialization.ClaudeLifecycleVerdict.INITIALIZATION_OBSERVED
     assert report.mode_verdict is ClaudeInitializeVerdict.MODE_MATCH
     assert launcher.joined and io.closed and not io.active
@@ -154,7 +154,7 @@ async def test_host_ids_are_fresh_opaque_and_not_a_caller_argument():
 
 @pytest.mark.parametrize("transform", [
     lambda raw: raw.replace(b'"request_id":"', b'"request_id":"wrong-'),
-    lambda raw: raw.replace(b"Claude Pro", b"Claude Max"),
+    lambda raw: raw.replace(b"Claude Pro", b"Claude API"),
     lambda raw: b'{"type":"control_request","secret":"prompt"}\n',
     lambda raw: b"secret-invalid-json\n",
 ], ids=["wrong-id", "wrong-plan", "callback", "malformed"])
@@ -282,9 +282,9 @@ async def test_clean_peer_result_with_unentered_callback_is_not_positive_evidenc
 
 
 async def test_callback_mode_refusal_is_latched_before_close_or_completion():
-    conversation = initialization.ClaudeInitialization(selected_plan=ClaudePlan.PRO,
+    conversation = initialization.ClaudeInitialization(mode=ClaudeAuthMode.SUBSCRIPTION,
                                                        input_limit=1000)
-    io = ScriptedIO(transform=lambda raw: raw.replace(b"Claude Pro", b"Claude Max"))
+    io = ScriptedIO(transform=lambda raw: raw.replace(b"Claude Pro", b"Claude API"))
     await conversation(io)
     assert conversation._mode is ClaudeInitializeVerdict.MODE_MISMATCH
     assert conversation._state == "refused" and not io.closed
@@ -320,7 +320,7 @@ async def test_cancellation_at_every_await_cannot_publish_or_retry(phase):
 
 @pytest.mark.parametrize("phase", ["write", "read", "close", "drain"])
 async def test_overlapping_reentry_poison_cannot_be_overwritten_after_resume(phase):
-    conversation = initialization.ClaudeInitialization(selected_plan=ClaudePlan.PRO,
+    conversation = initialization.ClaudeInitialization(mode=ClaudeAuthMode.SUBSCRIPTION,
                                                        input_limit=DEFAULT_PROCESS_LIMITS.input_bytes)
     io = ScriptedIO(block=phase)
     first = asyncio.create_task(conversation(io))
@@ -337,7 +337,7 @@ async def test_overlapping_reentry_poison_cannot_be_overwritten_after_resume(pha
 
 
 async def test_completed_conversation_reentry_has_no_second_write_or_reused_success():
-    conversation = initialization.ClaudeInitialization(selected_plan=ClaudePlan.PRO,
+    conversation = initialization.ClaudeInitialization(mode=ClaudeAuthMode.SUBSCRIPTION,
                                                        input_limit=DEFAULT_PROCESS_LIMITS.input_bytes)
     await conversation(ScriptedIO())
     assert conversation._state == "completed"
@@ -449,13 +449,13 @@ def test_affirmative_report_requires_typed_mode_match(mode):
 @pytest.mark.parametrize("limit", [None, True, 0, -1, 1.5])
 def test_callback_input_budget_is_exact_positive_integer(limit):
     with pytest.raises(ValueError, match="invalid Claude initialization parameters"):
-        initialization.ClaudeInitialization(selected_plan=ClaudePlan.PRO, input_limit=limit)
+        initialization.ClaudeInitialization(mode=ClaudeAuthMode.SUBSCRIPTION, input_limit=limit)
 
 
 @pytest.mark.parametrize("plan", [None, True, "Claude Pro"])
-def test_callback_selected_plan_is_exact_host_enum(plan):
+def test_callback_mode_is_exact_host_enum(plan):
     with pytest.raises(ValueError, match="invalid Claude initialization parameters"):
-        initialization.ClaudeInitialization(selected_plan=plan, input_limit=100)
+        initialization.ClaudeInitialization(mode=plan, input_limit=100)
 
 
 @pytest.mark.parametrize("field", ["mode_verdict", "lifecycle"])

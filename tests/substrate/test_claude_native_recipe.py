@@ -363,7 +363,7 @@ def test_each_recipe_accepts_only_its_paired_fixed_command_and_policy(
 @pytest.mark.parametrize("login_command", [False, True])
 async def test_read_admission_cannot_select_login(tmp_path, on_linux, monkeypatch, login_command):
     from constructicon.core.executor import ExecutorFailure, TaskSpec
-    from constructicon.substrate.executors.claude_protocol import ClaudePlan
+    from constructicon.substrate.executors.claude_protocol import ClaudeAuthMode
     from constructicon.substrate.executors.claude_read import run_read_transaction
 
     native = recipe_module()
@@ -396,7 +396,7 @@ async def test_read_admission_cannot_select_login(tmp_path, on_linux, monkeypatc
     outcome = await run_read_transaction(
         subject, native.LOGIN_COMMAND if login_command else subject.claude.command,
         TaskSpec(instruction="Read a fixed file"),
-        selected_plan=ClaudePlan.PRO, model="model", effort="high", worker=None,
+        mode=ClaudeAuthMode.SUBSCRIPTION, model="model", effort="high", worker=None,
         guard_fds=(731,), timeout_s=1,
         native_store=native.ClaudeNativeStoreMount(731, 732, check_binding,
                                                    egress(tmp_path, events)),
@@ -415,10 +415,8 @@ def on_linux(monkeypatch):
     }))
 
 
-@pytest.mark.parametrize("drift", [False, True])
-def test_artifact_check_seals_actual_vendor_bytes_before_native_launch(
-    tmp_path, on_linux, monkeypatch, drift,
-):
+@pytest.fixture
+def artifact_subject(tmp_path, on_linux, monkeypatch):
     native = recipe_module()
     subject = launcher(tmp_path)
     subject.root.mkdir()
@@ -439,6 +437,12 @@ def test_artifact_check_seals_actual_vendor_bytes_before_native_launch(
         linux.BWRAP_SHA256 if path == subject.bubblewrap
         else "0" * 64 if path == subject.policy else actual_sha(path)))
     monkeypatch.setattr(linux.Path, "read_text", lambda self: "1\n")
+    return subject, executable, checked
+
+
+@pytest.mark.parametrize("drift", [False, True])
+def test_artifact_check_seals_actual_vendor_bytes_before_native_launch(artifact_subject, drift):
+    subject, executable, checked = artifact_subject
     if drift:
         executable.write_bytes(b"different nonvendor bytes, never executed")
         with pytest.raises(ContractViolation, match="Claude vendor content"):
@@ -926,3 +930,36 @@ async def test_consumed_readiness_cannot_hide_a_duplicate_frame_during_cleanup(
     assert events[0] == "conversation" and events.count("joined") == 1
     assert set(events) == {"conversation", "stdin-closed", "joined"}
     assert events.index("stdin-closed") < events.index("joined")
+
+
+@pytest.mark.parametrize("name", [".api_key", ".oauth_token"])
+@pytest.mark.parametrize("entry", [None, "file", "directory", "link"])
+def test_native_runtime_refuses_alternate_authentication_even_with_matching_digest(
+    artifact_subject, monkeypatch, name, entry,
+):
+    subject, _, checked = artifact_subject
+    target = subject.root / "home/claude/.claude/remote" / name
+    if entry is not None:
+        target.parent.mkdir(parents=True)
+        if entry == "file":
+            target.write_bytes(b"synthetic noncredential file")
+        elif entry == "directory":
+            target.mkdir()
+        else:
+            try:
+                target.symlink_to("missing-native-auth")
+            except OSError as error:
+                if os.name != "nt" or getattr(error, "winerror", None) != 1314:
+                    raise
+                # Substitute only Windows' unavailable symlink primitive.
+                actual = linux.os.path.lexists
+                monkeypatch.setattr(
+                    linux.os.path, "lexists",
+                    lambda path: Path(path) == target or actual(path),
+                )
+        subject = replace(subject, expected_runtime=linux.runtime_digest(subject.root))
+        with pytest.raises(ContractViolation, match="alternate authentication path"):
+            subject.check_artifacts()
+    else:
+        subject.check_artifacts()
+    assert checked == [True]

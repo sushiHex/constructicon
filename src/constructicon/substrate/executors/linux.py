@@ -596,6 +596,13 @@ class LinuxLauncher:
             raise ContractViolation("launch policy content changed")
         if runtime_digest(self.root) != self.expected_runtime:
             raise ContractViolation("runtime content differs from the admitted identity")
+        if self.claude is not None and any(
+            os.path.lexists(self.root / name) for name in (
+                "home/claude/.claude/remote/.api_key",
+                "home/claude/.claude/remote/.oauth_token",
+            )
+        ):
+            raise ContractViolation("Claude runtime contains an alternate authentication path")
         restriction = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
         if restriction.read_text().strip() != "1":
             raise ContractViolation("the required AppArmor user-namespace restriction is absent")

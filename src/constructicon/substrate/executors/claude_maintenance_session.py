@@ -54,7 +54,7 @@ from constructicon.substrate.executors.claude_operator_io import (
 from constructicon.substrate.executors.claude_operator_io import (
     STDOUT_BYTES as LOGIN_OUTPUT_BYTES,
 )
-from constructicon.substrate.executors.claude_protocol import RECORD_BYTES, ClaudePlan
+from constructicon.substrate.executors.claude_protocol import RECORD_BYTES, ClaudeAuthMode
 from constructicon.substrate.executors.claude_startup_qualification import (
     ClaudeQualificationLifecycle,
     ClaudeStartupQualification,
@@ -169,7 +169,7 @@ def _policy_ok(policy: object, phase: ClaudeMaintenanceSessionPhase) -> bool:
 async def run_maintenance_session(
     custody: StoreMaintenance, launcher: LinuxLauncher, policy: EgressPolicy,
     lane_dir: Path, *, phase: ClaudeMaintenanceSessionPhase,
-    selected_plan: ClaudePlan | None = None,
+    mode: ClaudeAuthMode | None = None,
     operator: PrivateMaintenanceIO | None = None, first_login: bool = False,
     deadline: float | None = None,
 ) -> ClaudeMaintenanceSessionFacts:
@@ -209,9 +209,9 @@ async def run_maintenance_session(
                 or launcher.claude_recipe is not (
                     ClaudeNativeRecipe.LOGIN if login else ClaudeNativeRecipe.STREAM_JSON
                 )
-                or (login and (operator is None or selected_plan is not None))
+                or (login and (operator is None or mode is not None))
                 or (not login and (operator is not None or first_login
-                                   or type(selected_plan) is not ClaudePlan))):
+                                   or type(mode) is not ClaudeAuthMode))):
             raise ValueError("Claude maintenance phase refused")
         initial = custody.check()
         if type(initial) is not BindingCheck:
@@ -254,9 +254,9 @@ async def run_maintenance_session(
                         timeout_s=end - loop.time(), native_store=native_store,
                     )
             elif phase is ClaudeMaintenanceSessionPhase.QUALIFY:
-                assert selected_plan is not None and launcher.claude is not None
+                assert mode is not None and launcher.claude is not None
                 qualification_conversation = ClaudeStartupQualification(
-                    selected_plan=selected_plan, model=launcher.claude.model,
+                    mode=mode, model=launcher.claude.model,
                     effort=launcher.claude.effort,
                     input_limit=launcher.limits.input_bytes,
                     output_limit=launcher.limits.stdout_bytes, deadline=end,
@@ -270,14 +270,14 @@ async def run_maintenance_session(
                         timeout_s=end - loop.time(), native_store=native_store,
                     )
             else:
-                assert selected_plan is not None
+                assert mode is not None
                 async with asyncio.timeout_at(end):
                     observation = await observe_maintenance_mode(
                         launcher, native_store,
                         phase=(ClaudeMaintenancePhase.OBSERVE
                                if phase is ClaudeMaintenanceSessionPhase.OBSERVE
                                else ClaudeMaintenancePhase.RELOAD),
-                        selected_plan=selected_plan, timeout_s=min(
+                        mode=mode, timeout_s=min(
                             MODE_SECONDS, end - loop.time(),
                         ),
                     )

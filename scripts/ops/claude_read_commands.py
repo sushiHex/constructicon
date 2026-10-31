@@ -98,7 +98,7 @@ RESERVED = {
     "__namespace",
     "__controller_workspace",
     "__launch_workspace",
-    "__selected_plan",
+    "__mode",
     "__drift_hex",
     *("__" + key for key in PIN_KEYS),
 } - {"__drift_stdout"}
@@ -297,7 +297,7 @@ class Bindings:
     namespace: str
     controller_workspace: str
     launch_workspace: str
-    selected_plan: str
+    mode: str
     values: Mapping[str, str]
     pins: Mapping[str, str | int]
 
@@ -312,12 +312,12 @@ class Bindings:
                 "namespace",
                 "controller_workspace",
                 "launch_workspace",
-                "selected_plan",
+                "mode",
                 "values",
                 "pins",
             }
         )
-        require(type(record["schema_version"]) is int and record["schema_version"] == 1)
+        require(type(record["schema_version"]) is int and record["schema_version"] == 2)
         require(
             type(record["controller_commit"]) is str
             and COMMIT.fullmatch(record["controller_commit"])
@@ -327,7 +327,7 @@ class Bindings:
             and re.fullmatch(r"[a-z][a-z0-9-]{0,63}", record["namespace"])
         )
         require(all(_absolute(record[key]) for key in ("controller_workspace", "launch_workspace")))
-        require(record["selected_plan"] in ("pro", "max"))
+        require(record["mode"] == "subscription")
         values, pins = record["values"], record["pins"]
         require(
             type(values) is dict
@@ -362,7 +362,7 @@ class Bindings:
             record["namespace"],
             record["controller_workspace"],
             record["launch_workspace"],
-            record["selected_plan"],
+            record["mode"],
             MappingProxyType(dict(values)),
             MappingProxyType(dict(pins)),
         )
@@ -379,7 +379,7 @@ class Bindings:
                 "__namespace": self.namespace,
                 "__controller_workspace": self.controller_workspace,
                 "__launch_workspace": self.launch_workspace,
-                "__selected_plan": self.selected_plan,
+                "__mode": self.mode,
             }
         )
         values.update(
@@ -390,12 +390,12 @@ class Bindings:
 
     def as_dict(self):
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "controller_commit": self.controller_commit,
             "namespace": self.namespace,
             "controller_workspace": self.controller_workspace,
             "launch_workspace": self.launch_workspace,
-            "selected_plan": self.selected_plan,
+            "mode": self.mode,
             "values": dict(self.values),
             "pins": dict(self.pins),
         }
@@ -403,7 +403,7 @@ class Bindings:
 
 INSTALLATION_FIELDS = (
     "schema_version", "controller_commit", "controller_workspace", "launch_workspace",
-    "selected_plan", "pins", "operator_home", "actor",
+    "mode", "pins", "operator_home", "actor",
 )
 LATE_PHASES = {
     "qualify-check": ("Q", "QUAL_RAW_SHA256"),
@@ -441,7 +441,7 @@ def prepare_bindings(installation, namespace, boot=None):
     Physical absence and custody are still checked by the existing parents phase.
     """
     require(type(installation) is dict and set(installation) == set(INSTALLATION_FIELDS))
-    require(type(installation["schema_version"]) is int and installation["schema_version"] == 1)
+    require(type(installation["schema_version"]) is int and installation["schema_version"] == 2)
     home = installation["operator_home"]
     require(type(home) is str and re.fullmatch(r"/home/[A-Za-z0-9_-]+", home))
     require(type(namespace) is str and re.fullmatch(r"[a-z][a-z0-9-]{0,63}", namespace))
@@ -461,7 +461,7 @@ def prepare_bindings(installation, namespace, boot=None):
     bindings = Bindings.from_dict({
         **{key: installation[key] for key in (
             "schema_version", "controller_commit", "controller_workspace", "launch_workspace",
-            "selected_plan", "pins",
+            "mode", "pins",
         )},
         "namespace": namespace,
         "values": values,
@@ -1020,7 +1020,7 @@ def qualification_gate(evidence, values, pins):
     facts, q = (record["facts"], record["facts"]["qualification"])
     require(
         type(record["schema_version"]) is int
-        and record["schema_version"] == 7
+        and record["schema_version"] == 8
         and (record["completed"] is True)
         and (record["qualification_revision"] == str(claude_lane.qualification_revision()))
         and (record["subscription_qualified"] is False)
@@ -1035,7 +1035,7 @@ def qualification_gate(evidence, values, pins):
         )
     )
     require(
-        q["selected_plan"] == values["__selected_plan"]
+        q["mode"] == values["__mode"]
         and q["lifecycle"] == "qualified"
         and (q["initialize_verdict"] == "mode-match")
         and (q["settings_verdict"] == "match")
@@ -1238,7 +1238,7 @@ def reload_gate(evidence, values):
     record = parsed(raw)
     require(
         type(record["schema_version"]) is int
-        and record["schema_version"] == 7
+        and record["schema_version"] == 8
         and (record["completed"] is True)
         and (record["facts"]["phase"] == "reload")
     )
@@ -1595,9 +1595,11 @@ sys.exit(0 if ok else 1)
                 'sudo -n /usr/bin/install -d -o root -g "$SERVICE" -m 0750 "$AUTH"\n'
             )
         else:
-            command = commands[phase].replace(
-                "--selected-plan max", "--selected-plan " + values["__selected_plan"]
-            )
+            command = commands[phase]
+            if phase in ("qualify", "qualify-check", "reload", "reload-check"):
+                # The immutable historical template is superseded for new commands.
+                require(command.count("--selected-plan max") == 1)
+                command = command.replace("--selected-plan max", "--mode " + values["__mode"])
         command = common + byte_guards + command
     guard_doc = _document("guard")
     guard_blocks = packager.fences(packager.section(guard_doc, "G1: private drift boundary"))

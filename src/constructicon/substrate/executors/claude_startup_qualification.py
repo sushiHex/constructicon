@@ -22,9 +22,9 @@ from constructicon.substrate.executors.claude_maintenance_mode import (
 from constructicon.substrate.executors.claude_protocol import (
     RECORD_BYTES,
     ClaudeApiKeySourceCategory,
+    ClaudeAuthMode,
     ClaudeInitializeVerdict,
     ClaudeModeMismatchReason,
-    ClaudePlan,
     ClaudeTokenSourceCategory,
     initialize_diagnostics_valid,
     initialize_request,
@@ -99,11 +99,11 @@ class ClaudeStartupQualification(ClaudeMaintenanceConversation):
     """Single-use three-control qualification over the existing owned reader."""
 
     def __init__(
-        self, *, selected_plan: ClaudePlan, model: str, effort: str,
+        self, *, mode: ClaudeAuthMode, model: str, effort: str,
         input_limit: int, output_limit: int, deadline: float,
         check_control: Callable[[], None] | None = None,
     ) -> None:
-        super().__init__(phase=ClaudeMaintenancePhase.RELOAD, selected_plan=selected_plan,
+        super().__init__(phase=ClaudeMaintenancePhase.RELOAD, mode=mode,
                          input_limit=input_limit, output_limit=output_limit,
                          deadline=deadline)
         if (type(model) is not str or not model or len(model) > 128
@@ -162,7 +162,7 @@ class ClaudeStartupQualification(ClaudeMaintenanceConversation):
                 continue
             if kind == "initialize":
                 observation = observe_initialize(
-                    record, expected_request_id=identifier, selected_plan=self.plan,
+                    record, expected_request_id=identifier, mode=self.auth_mode,
                 )
                 self.initialize_verdict = observation.verdict
                 self.mode_mismatch_reason = observation.reason

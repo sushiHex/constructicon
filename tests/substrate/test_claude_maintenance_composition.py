@@ -30,7 +30,7 @@ from constructicon.substrate.executors.claude_native import (
     LOGIN_COMMAND,
     ClaudeNativeRecipe,
 )
-from constructicon.substrate.executors.claude_protocol import ClaudePlan
+from constructicon.substrate.executors.claude_protocol import ClaudeAuthMode
 from constructicon.substrate.executors.egress import (
     EgressDestination,
     EgressPolicy,
@@ -252,8 +252,9 @@ async def test_separate_joined_phases_require_retained_bytes(
                 tmp_path / f"lane-{index}", phase=phase,
                 operator=operator if phase is ClaudeMaintenanceSessionPhase.LOGIN else None,
                 first_login=phase is ClaudeMaintenanceSessionPhase.LOGIN,
-                selected_plan=(
-                    None if phase is ClaudeMaintenanceSessionPhase.LOGIN else ClaudePlan.PRO
+                mode=(
+                    None if phase is ClaudeMaintenanceSessionPhase.LOGIN
+                    else ClaudeAuthMode.SUBSCRIPTION
                 ),
             )
             assert launcher.joined and Relay.instances[-1].closed
@@ -381,7 +382,7 @@ def test_cli_composes_real_phases_and_publishes_finite_evidence(
     try:
         for index, phase in enumerate(phases):
             selector = (["--first-login"] if phase is ClaudeMaintenanceSessionPhase.LOGIN
-                        else ["--selected-plan", "pro"])
+                        else ["--mode", "subscription"])
             command = args(tmp_path, phase.value, *selector)
             command[command.index("--lane-dir") + 1] = str(tmp_path / f"entry-lane-{index}")
             evidence_path = tmp_path / f"entry-evidence-{index}.json"

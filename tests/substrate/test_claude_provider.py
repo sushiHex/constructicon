@@ -35,7 +35,7 @@ from constructicon.core.qualification import QualificationAuthorization
 from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.executors import claude_provider as native
 from constructicon.substrate.executors.claude_native import ClaudeNativeVendor
-from constructicon.substrate.executors.claude_protocol import ClaudePlan
+from constructicon.substrate.executors.claude_protocol import ClaudeAuthMode
 from constructicon.substrate.executors.claude_read_worker import READ_WORKER_LIMITS
 from constructicon.substrate.executors.egress import (
     EgressDestination,
@@ -106,7 +106,7 @@ async def assembled(provider, monkeypatch, tmp_path):
     identity = NativeOperatorLaunchIdentityV3(
         **native.identity_fields(launcher, worker, workspace_provider=provider,
                                  workspace_capability_id="owned-workspace",
-                                 workspace_revision="test", selected_plan=ClaudePlan.PRO,
+                                 workspace_revision="test", mode=ClaudeAuthMode.SUBSCRIPTION,
                                  expected_base=expected_base),
         profile=profile, store=store_identity,
         egress=NativeEgressIdentityV1(**identity_digests(policy),
@@ -223,7 +223,7 @@ async def assembled(provider, monkeypatch, tmp_path):
                   binding_store=Store(), closure=provider.closure, workspace_provider=provider,
                   workspace_capability_id="owned-workspace", workspace_revision="test",
                   acquisition_root=tmp_path / "native", egress=policy,
-                  selected_plan=ClaudePlan.PRO, expected_base=expected_base,
+                  mode=ClaudeAuthMode.SUBSCRIPTION, expected_base=expected_base,
                   qualification=authorization)
     executor = native.ClaudeOperatorProvider(**kwargs)
     lease = base.run_lease.model_copy(update={"run_id": authorization.run_id})
@@ -600,7 +600,7 @@ def test_protocol_revision_covers_the_closed_observation_law():
         claude_startup,
     )
 
-    expected = digest("claude-read-protocol", 2, {
+    expected = digest("claude-read-protocol", 3, {
         module.__name__: inspect.getsource(module)
         for module in (claude_protocol, claude_startup, claude_read,
                        claude_initialize, claude_native_events, claude_read_observation)

@@ -94,7 +94,7 @@ async def qualified(assembled, tmp_path, monkeypatch):
         **native.identity_fields(
             kwargs["launcher"], kwargs["worker_launcher"], workspace_provider=workspace,
             workspace_capability_id=entry.WORKSPACE_CAPABILITY,
-            workspace_revision=fixture.REVISION, selected_plan=kwargs["selected_plan"],
+            workspace_revision=fixture.REVISION, mode=kwargs["mode"],
             expected_base=fixture.BASE,
         ),
     })

@@ -48,10 +48,10 @@ from constructicon.substrate.executors.claude_native_events import (
 from constructicon.substrate.executors.claude_protocol import (
     RECORD_BYTES,
     ClaudeApiKeySourceCategory,
+    ClaudeAuthMode,
     ClaudeInitializeObservation,
     ClaudeInitializeVerdict,
     ClaudeModeMismatchReason,
-    ClaudePlan,
     ClaudeTokenSourceCategory,
     initialize_request,
     observe_initialize,
@@ -391,12 +391,12 @@ class ClaudeReadTransaction:
     """Single use, one pending read, one dispatch, and at most one READ call."""
 
     def __init__(
-        self, task: TaskSpec, *, selected_plan: ClaudePlan, model: str, effort: str,
+        self, task: TaskSpec, *, mode: ClaudeAuthMode, model: str, effort: str,
         worker: ReadWorker, input_limit: int, output_limit: int, deadline: float,
         before_user: Callable[[], None] | None = None,
         check_control: Callable[[], None] | None = None,
     ) -> None:
-        self._task, self._plan, self._model, self._effort = task, selected_plan, model, effort
+        self._task, self._auth_mode, self._model, self._effort = task, mode, model, effort
         self._worker = worker
         self._before_user, self._check_control = before_user, check_control
         self._input_limit, self._output_limit, self._deadline = input_limit, output_limit, deadline
@@ -772,7 +772,7 @@ class ClaudeReadTransaction:
                     raise self._unsupported(value)
                 if kind == "initialize":
                     observation = observe_initialize(response, expected_request_id=identifier,
-                                                     selected_plan=self._plan)
+                                                     mode=self._auth_mode)
                     self.initialize_observation = observation
                     verdict = observation.verdict
                     if verdict is not ClaudeInitializeVerdict.MODE_MATCH:
@@ -1072,14 +1072,14 @@ class ClaudeReadTransaction:
 
 async def run_read_transaction(
     launcher: LinuxLauncher, command: tuple[str, ...], task: TaskSpec, *,
-    selected_plan: ClaudePlan, model: str, effort: str, worker: ReadWorker,
+    mode: ClaudeAuthMode, model: str, effort: str, worker: ReadWorker,
     guard_fds: tuple[int, ...], timeout_s: float,
     native_store: ClaudeNativeStoreMount | None = None,
     before_user: Callable[[], None] | None = None,
     check_control: Callable[[], None] | None = None,
 ) -> ExecutorOutcome:
     """Publish only after this same exchange and all owned work have joined."""
-    if (type(selected_plan) is not ClaudePlan or not _text(model, 256) or not model
+    if (type(mode) is not ClaudeAuthMode or not _text(model, 256) or not model
             or not _text(effort, 32) or not effort or type(timeout_s) not in (int, float)
             or not math.isfinite(timeout_s)
             or not 0 < timeout_s < 3600 or task.context or task.response_schema is not None):
@@ -1093,7 +1093,7 @@ async def run_read_transaction(
     loop = asyncio.get_running_loop()
     started_at = loop.time()
     conversation = ClaudeReadTransaction(
-        task, selected_plan=selected_plan, model=model, effort=effort, worker=worker,
+        task, mode=mode, model=model, effort=effort, worker=worker,
         input_limit=launcher.limits.input_bytes, output_limit=launcher.limits.stdout_bytes,
         deadline=started_at + timeout_s,
         before_user=before_user, check_control=check_control,

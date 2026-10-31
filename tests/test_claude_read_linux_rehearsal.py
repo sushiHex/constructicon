@@ -223,7 +223,7 @@ def test_generated_phases_carry_actual_receipts_through_withdrawal(
                     "controller_commit": fixture_record["controller_commit"],
                     "controller_workspace": fixture_record["controller_workspace"],
                     "launch_workspace": fixture_record["launch_workspace"],
-                    "selected_plan": fixture_record["selected_plan"],
+                    "mode": fixture_record["mode"],
                     "pins": fixture_record["pins"], "operator_home": "/home/runner",
                     "actor": fixture_record["values"]["ACTOR"]}
     installation_path = tmp_path / "installation.json"

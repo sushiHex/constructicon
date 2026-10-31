@@ -1,7 +1,7 @@
-"""Closed schema-7 Claude phase evidence checker; no login or dispatch authority.
+"""Closed schema-8 Claude phase evidence checker; no login or dispatch authority.
 
 Positive phase validation and observer-refusal diagnosis are separate CLI actions.
-The selected plan for observe/reload remains a reviewed-command input, not an
+The selected mode for observe/reload remains a reviewed-command input, not an
 attestation found in those phase records. Historical schemas are not upgraded.
 """
 
@@ -32,7 +32,7 @@ from constructicon.substrate.executors.claude_protocol import (
     ClaudeApiKeySourceCategory,
     ClaudeInitializeVerdict,
     ClaudeModeMismatchReason,
-    ClaudePlan,
+    ClaudeAuthMode,
     ClaudeTokenSourceCategory,
     initialize_diagnostic_fields_valid,
 )
@@ -43,7 +43,7 @@ from constructicon.substrate.executors.claude_startup import (
 from constructicon.substrate.executors.codex_host import _evidence
 from constructicon.substrate.executors.egress import identity_digests
 
-CHECKER_SCHEMA = 7
+CHECKER_SCHEMA = 8
 _RECORD_FIELDS = frozenset({
     "schema_version", "subscription_qualified", "production_available", "facts",
     "runtime_digest", "vendor_digest", "launch_policy_sha256", "launch_config_sha256",
@@ -77,19 +77,19 @@ def _require(value: bool) -> None:
         raise _Refused()
 
 
-def _arguments(phase, evidence, configuration, selected_plan) -> None:
+def _arguments(phase, evidence, configuration, mode) -> None:
     _require(type(phase) is ClaudeMaintenanceSessionPhase
              and type(configuration) is LaneConfiguration
              and isinstance(evidence, Path) and evidence.is_absolute()
              and ".." not in evidence.parts
              and claude_lane.EVIDENCE_SCHEMA == CHECKER_SCHEMA)
-    _require(selected_plan is None if phase is ClaudeMaintenanceSessionPhase.LOGIN
-             else type(selected_plan) is ClaudePlan)
+    _require(mode is None if phase is ClaudeMaintenanceSessionPhase.LOGIN
+             else type(mode) is ClaudeAuthMode)
 
 
-def _checked_record(phase, evidence, configuration, selected_plan):
+def _checked_record(phase, evidence, configuration, mode):
     """Reuse the bounded reader, closed envelope and installed-input checks."""
-    _arguments(phase, evidence, configuration, selected_plan)
+    _arguments(phase, evidence, configuration, mode)
     _require(phase is not ClaudeMaintenanceSessionPhase.QUALIFY)
     record = _evidence(evidence)
     _require(set(record) == _RECORD_FIELDS)
@@ -158,15 +158,15 @@ def _mode(facts, phase):
 
 def validate_phase_evidence(
     phase: ClaudeMaintenanceSessionPhase, evidence: Path,
-    configuration: LaneConfiguration, selected_plan: ClaudePlan | None,
+    configuration: LaneConfiguration, mode: ClaudeAuthMode | None,
 ) -> Digest:
     """Return only the digest for the existing positive phase requirements."""
-    _arguments(phase, evidence, configuration, selected_plan)
+    _arguments(phase, evidence, configuration, mode)
     if phase is ClaudeMaintenanceSessionPhase.QUALIFY:
-        observed_plan, revision = validate_startup_evidence(evidence, configuration)
-        _require(observed_plan is selected_plan)
+        observed_mode, revision = validate_startup_evidence(evidence, configuration)
+        _require(observed_mode is mode)
         return revision
-    record, facts = _checked_record(phase, evidence, configuration, selected_plan)
+    record, facts = _checked_record(phase, evidence, configuration, mode)
     _require(facts["lifecycle"] == "joined-clean")
     if phase is ClaudeMaintenanceSessionPhase.LOGIN:
         login = facts["login"]
@@ -216,18 +216,18 @@ class RefusedQualificationDiagnostic:
 
 
 def diagnose_refused_qualification(
-    evidence: Path, configuration: LaneConfiguration, selected_plan: ClaudePlan,
+    evidence: Path, configuration: LaneConfiguration, mode: ClaudeAuthMode,
 ) -> RefusedQualificationDiagnostic:
     """Expose only a checked finite refusal, never a positive phase receipt."""
     try:
-        _arguments(ClaudeMaintenanceSessionPhase.QUALIFY, evidence, configuration, selected_plan)
+        _arguments(ClaudeMaintenanceSessionPhase.QUALIFY, evidence, configuration, mode)
         record, revision = checked_startup_evidence(evidence, configuration)
         facts = record["facts"]
         qualification = facts["qualification"]
         _require(facts["lifecycle"] == "refused"
                  and qualification["lifecycle"] == "refused"
-                 and qualification["selected_plan"] == (
-                     "pro" if selected_plan is ClaudePlan.PRO else "max"
+                 and qualification["mode"] == (
+                     mode.value
                  ))
         verdict = qualification["settings_verdict"]
         reason = qualification["settings_mismatch_reason"]
@@ -251,7 +251,7 @@ def diagnose_refused_qualification(
 
 def diagnose_refused_mode(
     phase: ClaudeMaintenanceSessionPhase, evidence: Path,
-    configuration: LaneConfiguration, selected_plan: ClaudePlan,
+    configuration: LaneConfiguration, mode: ClaudeAuthMode,
 ) -> RefusedModeDiagnostic:
     """Report bounded observer refusal, never phase approval or a positive marker.
 
@@ -261,7 +261,7 @@ def diagnose_refused_mode(
     try:
         _require(phase in (ClaudeMaintenanceSessionPhase.OBSERVE,
                            ClaudeMaintenanceSessionPhase.RELOAD))
-        record, facts = _checked_record(phase, evidence, configuration, selected_plan)
+        record, facts = _checked_record(phase, evidence, configuration, mode)
         mode = _mode(facts, phase)
         _require(facts["lifecycle"] == "refused"
                  and mode["lifecycle"] == "refused")
@@ -299,12 +299,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--config-sha256", required=True)
-    parser.add_argument("--selected-plan", choices=("pro", "max"))
+    parser.add_argument("--mode", choices=("subscription",))
     parser.add_argument("--diagnose-refusal", action="store_true")
     try:
         options = parser.parse_args(argv)
         phase = ClaudeMaintenanceSessionPhase(options.phase)
-        plan = {"pro": ClaudePlan.PRO, "max": ClaudePlan.MAX}.get(options.selected_plan)
+        plan = {"subscription": ClaudeAuthMode.SUBSCRIPTION}.get(options.mode)
         configuration = claude_lane.read_configuration(
             options.config, expected_sha256=options.config_sha256,
         )

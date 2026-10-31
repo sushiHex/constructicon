@@ -23,9 +23,9 @@ from constructicon.substrate.executors.claude_native_events import (
 )
 from constructicon.substrate.executors.claude_protocol import (
     ClaudeApiKeySourceCategory,
+    ClaudeAuthMode,
     ClaudeInitializeVerdict,
     ClaudeModeMismatchReason,
-    ClaudePlan,
     ClaudeTokenSourceCategory,
     initialize_request,
 )
@@ -85,7 +85,7 @@ async def test_rejected_system_category_is_closed_before_second_write(subtype, c
     assert system_record_category(value) is category
     raw = json.dumps(value).encode() + b"\n"
     channel = Channel([response("@ID@", "Claude API") + raw])
-    report, launcher, checked = await observe(channel, plan=ClaudePlan.MAX)
+    report, launcher, checked = await observe(channel, plan=ClaudeAuthMode.SUBSCRIPTION)
     assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
     assert report.mode_verdict is ClaudeInitializeVerdict.MODE_MISMATCH
     assert report.mode_mismatch_reason is ClaudeModeMismatchReason.AMBIGUOUS_API
@@ -133,7 +133,7 @@ async def test_recognized_ui_category_does_not_relax_ui_admission(damage):
 
 async def test_system_category_is_atomic_with_first_refusal_and_survives_reentry():
     callback = maintenance.ClaudeMaintenanceConversation(
-        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, selected_plan=ClaudePlan.MAX,
+        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, mode=ClaudeAuthMode.SUBSCRIPTION,
         input_limit=8192, output_limit=512 * 1024, deadline=maintenance._monotonic() + 5,
     )
     channel = Channel([response("@ID@", "Claude API") + b'{"type":"system","subtype":"status"}\n'])
@@ -150,7 +150,7 @@ async def test_system_category_is_atomic_with_first_refusal_and_survives_reentry
     assert len(channel.writes) == 1 and channel.active_readers == 0
 
     other = maintenance.ClaudeMaintenanceConversation(
-        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, selected_plan=ClaudePlan.MAX,
+        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, mode=ClaudeAuthMode.SUBSCRIPTION,
         input_limit=8192, output_limit=512 * 1024, deadline=maintenance._monotonic() + 5,
     )
     with pytest.raises(maintenance._Refused):
@@ -277,7 +277,7 @@ async def observe(
     result: ProcessResult = CLEAN,
     recipe: ClaudeNativeRecipe = ClaudeNativeRecipe.STREAM_JSON,
     check=None, timeout: float = 5, input_bytes: int = 8192,
-    plan: ClaudePlan = ClaudePlan.PRO,
+    plan: ClaudeAuthMode = ClaudeAuthMode.SUBSCRIPTION,
 ) -> tuple[maintenance.ClaudeMaintenanceObservation, Launcher, list[bool]]:
     launcher = Launcher(channel, result=result, recipe=recipe)
     launcher.limits = replace(launcher.limits, input_bytes=input_bytes)
@@ -291,17 +291,17 @@ async def observe(
     mount = ClaudeNativeStoreMount(17, 18, custody)
     report = await maintenance.observe_maintenance_mode(
         launcher, mount, phase=phase or maintenance.ClaudeMaintenancePhase.OBSERVE,
-        selected_plan=plan, timeout_s=timeout,
+        mode=plan, timeout_s=timeout,
     )
     return report, launcher, checked
 
 
 @pytest.mark.parametrize("phase,count", [("OBSERVE", 2), ("RELOAD", 1)])
-@pytest.mark.parametrize("plan", list(ClaudePlan))
+@pytest.mark.parametrize("plan", list(ClaudeAuthMode))
 async def test_first_positive_mode_closes_drains_and_joins_without_second_write(
     phase, count, plan,
 ):
-    channel = Channel([ui() * 4 + response("@ID@", plan.value) + ui() * 4])
+    channel = Channel([ui() * 4 + response("@ID@", "Claude Pro") + ui() * 4])
     report, launcher, checked = await observe(
         channel, phase=maintenance.ClaudeMaintenancePhase[phase], plan=plan,
     )
@@ -329,7 +329,7 @@ async def test_login_recipe_refused_before_store_or_process(phase):
     assert launcher.calls == [] and checked == [] and channel.writes == []
 
 
-@pytest.mark.parametrize("raw", [response("@ID@", "Claude Max"),
+@pytest.mark.parametrize("raw", [response("@ID@", "Claude API"),
                                   response("@ID@", "Claude API", tokenSource="none"),
                                   response("@ID@", "Claude API", email=None),
                                   b'{"type":"control_request"}\n',
@@ -538,7 +538,7 @@ async def test_ambiguous_mode_is_never_a_reload_retry():
     assert report.request_writes == 1 and launcher.joined
 
 
-@pytest.mark.parametrize("plan", list(ClaudePlan))
+@pytest.mark.parametrize("plan", list(ClaudeAuthMode))
 @pytest.mark.parametrize("second,expected_verdict,expected_reason", [
     ("selected", "MODE_MATCH", None),
     ("ambiguous", "MODE_MISMATCH", "AMBIGUOUS_API"),
@@ -554,12 +554,12 @@ async def test_reason_describes_last_classified_reply_after_second_write(
     clock = [0.0]
     monkeypatch.setattr(maintenance, "_monotonic", lambda: clock[0])
     answers = {
-        "selected": response("@ID@", plan.value, email="private-email"),
+        "selected": response("@ID@", "Claude Pro", email="private-email"),
         "ambiguous": response("@ID@", "Claude API", organization="private-organization"),
         "different": response("@ID@", "private-plan"),
         "credential": response("@ID@", "Claude API", tokenSource="private-source"),
         "invalid": b'{"type":"private-invalid"}\n',
-        "write-failed": response("@ID@", plan.value),
+        "write-failed": response("@ID@", "Claude Pro"),
         "read-failed": b"private-partial",
     }
 
@@ -614,7 +614,7 @@ def test_legacy_mismatch_without_diagnostics_is_not_a_schema6_observation():
                                          (b'{"type":"private-invalid"}\n', "RESPONSE_INVALID")])
 async def test_response_state_clears_prior_reason_before_report_validation(raw, expected):
     callback = maintenance.ClaudeMaintenanceConversation(
-        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, selected_plan=ClaudePlan.PRO,
+        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, mode=ClaudeAuthMode.SUBSCRIPTION,
         input_limit=8192, output_limit=512 * 1024, deadline=maintenance._monotonic() + 5,
     )
     callback._state = "running"
@@ -648,7 +648,7 @@ async def test_cancelled_spacing_preserves_last_classified_facts_and_joins_reade
 
     channel = SpacingChannel()
     callback = maintenance.ClaudeMaintenanceConversation(
-        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, selected_plan=ClaudePlan.PRO,
+        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, mode=ClaudeAuthMode.SUBSCRIPTION,
         input_limit=8192, output_limit=512 * 1024, deadline=maintenance._monotonic() + 120,
     )
     task = asyncio.create_task(callback(channel))
@@ -698,7 +698,7 @@ def test_reason_requires_a_mode_mismatch(verdict):
 def test_exact_ambiguous_shape_is_only_one_narrow_mismatch():
     raw = response("fixed-id", "Claude API", email="private", organization="private")
     assert maintenance.exact_ambiguous_api_mode(
-        raw, expected_request_id="fixed-id", selected_plan=ClaudePlan.PRO,
+        raw, expected_request_id="fixed-id", mode=ClaudeAuthMode.SUBSCRIPTION,
     )
     for mutation in ("wrong-id", "provider", "key-source", "unknown", "missing-type",
                      "pending", "running", "wrong-plan", "wrong-version", "optional-type"):
@@ -721,14 +721,14 @@ def test_exact_ambiguous_shape_is_only_one_narrow_mismatch():
         elif mutation == "running":
             body["session_state"] = "running"
         elif mutation == "wrong-plan":
-            account["subscriptionType"] = "Claude Max"
+            account["subscriptionType"] = "Claude Pro"
         elif mutation == "optional-type":
             account["email"] = None
         else:
             body["claude_code_version"] = "other"
         changed = json.dumps(value, separators=(",", ":")).encode() + b"\n"
         assert not maintenance.exact_ambiguous_api_mode(
-            changed, expected_request_id="fixed-id", selected_plan=ClaudePlan.PRO,
+            changed, expected_request_id="fixed-id", mode=ClaudeAuthMode.SUBSCRIPTION,
         ), mutation
 
 
@@ -777,7 +777,7 @@ async def test_ninth_ui_record_refuses_across_prefix_and_tail():
 async def test_ninth_ui_record_refuses_inside_conversation_before_report_validation():
     channel = Channel([ui() * 9 + response("@ID@")])
     callback = maintenance.ClaudeMaintenanceConversation(
-        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, selected_plan=ClaudePlan.PRO,
+        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, mode=ClaudeAuthMode.SUBSCRIPTION,
         input_limit=8192, output_limit=512 * 1024,
         deadline=maintenance._monotonic() + 5,
     )
@@ -835,7 +835,7 @@ async def test_eof_during_spacing_refuses_without_a_second_write():
 
 async def test_spacing_early_eof_uses_typed_refusal_before_reader_assertion():
     callback = maintenance.ClaudeMaintenanceConversation(
-        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, selected_plan=ClaudePlan.PRO,
+        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, mode=ClaudeAuthMode.SUBSCRIPTION,
         input_limit=8192, output_limit=512 * 1024,
         deadline=maintenance._monotonic() + 120,
     )
@@ -894,7 +894,7 @@ async def test_reentry_poison_survives_await_and_cancels_owned_reader():
 
     channel = PausedWrite()
     callback = maintenance.ClaudeMaintenanceConversation(
-        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, selected_plan=ClaudePlan.PRO,
+        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, mode=ClaudeAuthMode.SUBSCRIPTION,
         input_limit=8192, output_limit=512 * 1024,
         deadline=maintenance._monotonic() + 5,
     )
@@ -912,7 +912,7 @@ async def test_reentry_poison_survives_await_and_cancels_owned_reader():
 async def test_reentry_wakes_owner_blocked_on_silent_read_and_joins_it():
     channel = Channel([])
     callback = maintenance.ClaudeMaintenanceConversation(
-        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, selected_plan=ClaudePlan.PRO,
+        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, mode=ClaudeAuthMode.SUBSCRIPTION,
         input_limit=8192, output_limit=512 * 1024,
         deadline=maintenance._monotonic() + 120,
     )
@@ -952,7 +952,7 @@ async def test_reentry_and_concurrent_external_cancel_remain_cancelled_after_joi
     mount = ClaudeNativeStoreMount(17, 18, lambda: binding)
     task = asyncio.create_task(maintenance.observe_maintenance_mode(
         launcher, mount, phase=maintenance.ClaudeMaintenancePhase.OBSERVE,
-        selected_plan=ClaudePlan.PRO, timeout_s=120,
+        mode=ClaudeAuthMode.SUBSCRIPTION, timeout_s=120,
     ))
     for _ in range(100):
         if channel.active_readers == 1 and launcher.calls:
@@ -973,7 +973,7 @@ async def test_reentry_and_concurrent_external_cancel_remain_cancelled_after_joi
 
 async def test_reentry_after_callback_completion_cannot_cancel_later_owner_work():
     callback = maintenance.ClaudeMaintenanceConversation(
-        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, selected_plan=ClaudePlan.PRO,
+        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, mode=ClaudeAuthMode.SUBSCRIPTION,
         input_limit=8192, output_limit=512 * 1024,
         deadline=maintenance._monotonic() + 5,
     )
@@ -1111,7 +1111,7 @@ async def test_phase_and_absolute_lifetime_are_bounded_before_launch():
         with pytest.raises(ValueError):
             await maintenance.observe_maintenance_mode(
                 launcher, mount, phase=maintenance.ClaudeMaintenancePhase.OBSERVE,
-                selected_plan=ClaudePlan.PRO, timeout_s=timeout,
+                mode=ClaudeAuthMode.SUBSCRIPTION, timeout_s=timeout,
             )
     assert launcher.calls == []
 
@@ -1131,7 +1131,7 @@ async def test_initial_binding_must_be_affirmative_before_exchange():
     mount = ClaudeNativeStoreMount(17, 18, wrong_binding)
     report = await maintenance.observe_maintenance_mode(
         launcher, mount, phase=maintenance.ClaudeMaintenancePhase.OBSERVE,
-        selected_plan=ClaudePlan.PRO, timeout_s=5,
+        mode=ClaudeAuthMode.SUBSCRIPTION, timeout_s=5,
     )
     assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
     assert calls == [True] and report.request_writes == 0
@@ -1149,7 +1149,7 @@ async def test_clean_process_without_entered_callback_is_not_mode_evidence():
     mount = ClaudeNativeStoreMount(17, 18, lambda: binding)
     report = await maintenance.observe_maintenance_mode(
         launcher, mount, phase=maintenance.ClaudeMaintenancePhase.OBSERVE,
-        selected_plan=ClaudePlan.PRO, timeout_s=5,
+        mode=ClaudeAuthMode.SUBSCRIPTION, timeout_s=5,
     )
     assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.INCOMPLETE
     assert report.mode_verdict is None and report.request_writes == 0
@@ -1319,7 +1319,7 @@ async def test_read_failure_before_first_classification_keeps_empty_response_fac
 
 async def test_first_known_refusal_is_not_overwritten_and_exceptions_are_unchanged(monkeypatch):
     callback = maintenance.ClaudeMaintenanceConversation(
-        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, selected_plan=ClaudePlan.PRO,
+        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, mode=ClaudeAuthMode.SUBSCRIPTION,
         input_limit=8192, output_limit=512 * 1024, deadline=1.0,
     )
     callback._state = "running"
@@ -1332,7 +1332,7 @@ async def test_first_known_refusal_is_not_overwritten_and_exceptions_are_unchang
     assert callback.refusal_code is Code.READ_CONTRACT
 
     other = maintenance.ClaudeMaintenanceConversation(
-        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, selected_plan=ClaudePlan.PRO,
+        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, mode=ClaudeAuthMode.SUBSCRIPTION,
         input_limit=8192, output_limit=512 * 1024, deadline=1.0,
     )
     other._state = "running"
@@ -1360,7 +1360,7 @@ async def test_read_boundaries_reraise_original_error_and_do_not_label_cancellat
     method, cancelled,
 ):
     callback = maintenance.ClaudeMaintenanceConversation(
-        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, selected_plan=ClaudePlan.PRO,
+        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, mode=ClaudeAuthMode.SUBSCRIPTION,
         input_limit=8192, output_limit=512 * 1024, deadline=maintenance._monotonic() + 5,
     )
     callback._state = "running"

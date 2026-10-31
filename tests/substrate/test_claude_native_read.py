@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from constructicon.core.executor import ExecutorSuccess, TaskSpec, Usage
-from constructicon.substrate.executors.claude_protocol import ClaudePlan
+from constructicon.substrate.executors.claude_protocol import ClaudeAuthMode
 from constructicon.substrate.executors.claude_read import (
     ClaudeReadTransaction,
     _Refused,
@@ -92,7 +92,7 @@ async def test_compiled_fake_peer_completes_the_actual_bounded_read_protocol(wir
             await child.stdin.wait_closed()
 
     transaction = ClaudeReadTransaction(
-        TaskSpec(instruction="Read calc.py literally."), selected_plan=ClaudePlan.PRO,
+        TaskSpec(instruction="Read calc.py literally."), mode=ClaudeAuthMode.SUBSCRIPTION,
         model=model, effort="low", worker=worker, input_limit=1024 * 1024,
         output_limit=1024 * 1024, deadline=asyncio.get_running_loop().time() + 10,
     )
@@ -174,7 +174,7 @@ async def test_compiled_summaries_cannot_replace_the_terminal_result(wire_peer):
             await child.stdin.wait_closed()
 
     transaction = ClaudeReadTransaction(
-        TaskSpec(instruction="Read ready.txt."), selected_plan=ClaudePlan.PRO,
+        TaskSpec(instruction="Read ready.txt."), mode=ClaudeAuthMode.SUBSCRIPTION,
         model="fixture-ready", effort="low", worker=worker, input_limit=1024 * 1024,
         output_limit=1024 * 1024, deadline=asyncio.get_running_loop().time() + 10,
     )
@@ -243,7 +243,7 @@ async def test_maintenance_eof_cannot_complete_a_read(wire_peer):
             child.stdin.close()
 
     transaction = ClaudeReadTransaction(
-        TaskSpec(instruction="Read ready.txt."), selected_plan=ClaudePlan.PRO,
+        TaskSpec(instruction="Read ready.txt."), mode=ClaudeAuthMode.SUBSCRIPTION,
         model="fixture-ready", effort="low", worker=worker, input_limit=1024 * 1024,
         output_limit=1024 * 1024, deadline=asyncio.get_running_loop().time() + 10,
     )
@@ -293,7 +293,7 @@ async def test_actual_native_read_composition_joins_both_zones(
             mount = replace(mount, before_spawn=checked_binding)
             outcome = await run_read_transaction(
                 native, native.claude.command, TaskSpec(instruction="Read calc.py literally."),
-                selected_plan=ClaudePlan.PRO, model=model, effort="low", worker=worker,
+                mode=ClaudeAuthMode.SUBSCRIPTION, model=model, effort="low", worker=worker,
                 guard_fds=(mount.lock_fd,), timeout_s=30, native_store=mount,
             )
             assert isinstance(outcome, ExecutorSuccess), outcome

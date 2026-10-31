@@ -31,8 +31,8 @@ from constructicon.substrate.executors.claude_maintenance_session import (
     ClaudeMaintenanceSessionPhase,
 )
 from constructicon.substrate.executors.claude_protocol import (
+    ClaudeAuthMode,
     ClaudeInitializeVerdict,
-    ClaudePlan,
     initialize_diagnostic_fields_valid,
 )
 from constructicon.substrate.executors.claude_provider import (
@@ -64,19 +64,19 @@ _FACT_FIELDS = frozenset({
 _QUALIFICATION_FIELDS = frozenset({
     "lifecycle", "initialize_verdict", "settings_verdict", "settings_mismatch_reason",
     "hooks_verdict", "mode_mismatch_reason", "token_source_category", "api_key_source_category",
-    "request_writes", "ui_records", "stdin_closed", "eof", "selected_plan", "model", "effort",
+    "request_writes", "ui_records", "stdin_closed", "eof", "mode", "model", "effort",
 })
 
 
-def sealed_plan(
+def sealed_mode(
     store: NativeOperatorStoreIdentityV1, evidence: Path, configuration: LaneConfiguration,
-) -> ClaudePlan:
+) -> ClaudeAuthMode:
     """Bind already-validated startup facts to this published store generation."""
-    plan, revision = validate_startup_evidence(evidence, configuration)
+    mode, revision = validate_startup_evidence(evidence, configuration)
     if (revision != store.subscription_mode_adapter_revision
             or revision != store.store_conformance_revision):
         raise ContractViolation("Claude startup evidence is not sealed by this generation")
-    return plan
+    return mode
 
 
 def checked_startup_evidence(
@@ -148,8 +148,8 @@ def checked_startup_evidence(
         qualification["model"] == configuration.model,
         qualification["effort"] == configuration.effort,
     )
-    plans = {"pro": ClaudePlan.PRO, "max": ClaudePlan.MAX}
-    plan = qualification["selected_plan"]
+    plans = {"subscription": ClaudeAuthMode.SUBSCRIPTION}
+    plan = qualification["mode"]
     if not all(checks) or type(plan) is not str or plan not in plans:
         raise ContractViolation("Claude startup evidence has invalid current facts")
     launcher = configuration.launcher(ClaudeMaintenanceSessionPhase.OBSERVE)
@@ -169,7 +169,7 @@ def checked_startup_evidence(
 
 def validate_startup_evidence(
     evidence: Path, configuration: LaneConfiguration,
-) -> tuple[ClaudePlan, Digest]:
+) -> tuple[ClaudeAuthMode, Digest]:
     """Require positive qualification from the same checked current snapshot."""
     record, revision = checked_startup_evidence(evidence, configuration)
     facts = record["facts"]
@@ -186,7 +186,7 @@ def validate_startup_evidence(
     )
     if not all(checks):
         raise ContractViolation("Claude startup evidence does not affirm complete qualification")
-    return {"pro": ClaudePlan.PRO, "max": ClaudePlan.MAX}[qualification["selected_plan"]], revision
+    return {"subscription": ClaudeAuthMode.SUBSCRIPTION}[qualification["mode"]], revision
 
 
 def read_grants(configuration: LaneConfiguration) -> EffectiveGrants:
@@ -243,7 +243,7 @@ def operator_provider(
         host.configuration, expected_sha256=host.configuration_sha256,
     )
     store = _sealed_file(host.sealed, os.getuid())
-    selected_plan = sealed_plan(store, host.qualification, configuration)
+    mode = sealed_mode(store, host.qualification, configuration)
     launcher = configuration.launcher(ClaudeMaintenanceSessionPhase.OBSERVE)
     policy = configuration.egress["observe"]
     revision = store.store_conformance_revision
@@ -252,7 +252,7 @@ def operator_provider(
         **identity_fields(
             launcher, worker_launcher, workspace_provider=workspace,
             workspace_capability_id=workspace_capability_id,
-            workspace_revision=workspace_revision, selected_plan=selected_plan,
+            workspace_revision=workspace_revision, mode=mode,
             expected_base=expected_base,
         ),
         profile=profile, store=store,
@@ -268,6 +268,6 @@ def operator_provider(
         closure=AcquisitionClosure(workspace.authority), workspace_provider=workspace,
         workspace_capability_id=workspace_capability_id, workspace_revision=workspace_revision,
         expected_base=expected_base,
-        acquisition_root=host.acquisition_root, egress=policy, selected_plan=selected_plan,
+        acquisition_root=host.acquisition_root, egress=policy, mode=mode,
         qualification=authorization,
     )
