@@ -10867,3 +10867,14 @@ precedence uses a non-string value, and exact-string typing uses an equal-valued
 string subclass. Both mutants were assertion-killed against matched passing
 baselines; the complete startup suite and focused Ruff check passed. Production
 code is unchanged by this correction. Final-head CI remains required.
+
+The subsequent foundation run found an introduced migration gap in the Linux
+operator rehearsal: its installation input retained schema 1 after its mode
+field was migrated. Full verification and the other physical lanes passed, but
+the rehearsal correctly refused that obsolete input. The shared rehearsal
+installation helper now emits schema 2, and a portable test drives that same
+helper through the actual isolated prepare-bindings CLI. This exposes profile
+input drift locally instead of depending only on the Linux-only execution.
+Local accepting-path checks passed; the two physical rehearsal cases remain
+unverified locally and require the final-head Linux run. No production code
+changed in this fixture correction.

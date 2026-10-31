@@ -39,6 +39,31 @@ def _cli(*args: str) -> dict:
     return json.loads(result.stdout)
 
 
+def _installation(fixture_record):
+    return {"schema_version": 2,
+            **{key: fixture_record[key] for key in (
+                "controller_commit", "controller_workspace", "launch_workspace", "mode", "pins",
+            )},
+            "operator_home": "/home/runner", "actor": fixture_record["values"]["ACTOR"]}
+
+
+def test_rehearsal_installation_passes_actual_prepare_bindings(tmp_path):
+    from tests.test_claude_read_session import binding_record
+
+    fixture = binding_record()
+    installation = tmp_path / "installation.json"
+    output = tmp_path / "bindings.json"
+    _json(installation, _installation(fixture))
+    assert _cli(
+        "prepare-bindings", "--installation", str(installation),
+        "--namespace", "portable", "--out", str(output),
+        "--operator-revision", commands.operator_revision(),
+    ) == {"bindings_sha256": commands.sha(output.read_bytes())}
+    bindings = commands.Bindings.from_file(output)
+    assert bindings.mode == "subscription"
+    assert bindings.values["EXPECTED_BOOT"] == "UNREVIEWED"
+
+
 def _failure_observation(run: str, run_process) -> dict:
     """Bounded fake-run metadata, with no native transcript or credential bytes."""
     code = r'''
@@ -219,13 +244,7 @@ def test_generated_phases_carry_actual_receipts_through_withdrawal(
     fixture_record = json.loads(Path(fixture).read_bytes())
     case = "abort" if abort_after_activation else "accept"
     revision = commands.operator_revision()
-    installation = {"schema_version": 1,
-                    "controller_commit": fixture_record["controller_commit"],
-                    "controller_workspace": fixture_record["controller_workspace"],
-                    "launch_workspace": fixture_record["launch_workspace"],
-                    "mode": fixture_record["mode"],
-                    "pins": fixture_record["pins"], "operator_home": "/home/runner",
-                    "actor": fixture_record["values"]["ACTOR"]}
+    installation = _installation(fixture_record)
     installation_path = tmp_path / "installation.json"
     _json(installation_path, installation)
     binding_path = tmp_path / "initial-bindings.json"
