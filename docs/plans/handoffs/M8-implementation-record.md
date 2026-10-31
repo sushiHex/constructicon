@@ -10741,3 +10741,20 @@ producer, fallback and managed-policy proof obligations. No production mode
 predicate, accepted plan or live authority changed. Qualification and live READ
 remain incomplete under the replacement contract until it is approved and
 implemented. Issue #40 owns current work and remaining decisions.
+
+### Subscription-mode proposal review corrections
+
+The proposal now specifies the pinned display grammar, mode/profile names,
+qualification evidence 8 and operator configuration 2, and the affected
+maintenance-selector supersession. Helper retry preservation is conditional on
+absent/static-default state; a previously successful helper can fall back and
+change output. Gi and environment-application/reset paths are explicit proof
+gates, not omitted branches.
+
+A reported environment-value bug was reclassified after checking the accepted
+fixed-startup contract: its predicate deliberately checks names/types, not
+equality to process.env. The current implementation follows it. Exact equality
+is proposed compatibility hardening; no live billing bypass was demonstrated.
+A separate uncommitted hardening draft and focused fake evidence are retained,
+but no source change was committed or deployed. The older contract-acceptance
+request is paused pending the revised proposal; no expanded mode is accepted.
