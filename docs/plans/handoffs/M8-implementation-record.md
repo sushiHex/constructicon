@@ -10858,3 +10858,12 @@ Full final-head CI, including existing Linux physical lanes, remains the merge
 gate. This source change does not itself establish live READ success or qualify
 an installed controller; fresh installation, qualification and actual-pin review
 remain required. Issue #40 retains the delivery outcome.
+
+The first full CI inventory exposed two older environment mutants that no
+longer produced assertion kills after the new equality guard: an unknown key
+reached a lookup error, while an invalid type still refused by equality. The
+inventory now targets an independent exact-refusal regression: unknown-name
+precedence uses a non-string value, and exact-string typing uses an equal-valued
+string subclass. Both mutants were assertion-killed against matched passing
+baselines; the complete startup suite and focused Ruff check passed. Production
+code is unchanged by this correction. Final-head CI remains required.

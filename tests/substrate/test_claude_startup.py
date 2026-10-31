@@ -198,6 +198,23 @@ def test_effective_predicates_keep_exact_acceptance_and_first_failure(reason_nam
           startup.ClaudeSettingsMismatchReason.SOURCE_SETTINGS)
 
 
+def test_environment_name_and_exact_type_guards_remain_independent():
+    class StringSubclass(str):
+        pass
+
+    reason = startup.ClaudeSettingsMismatchReason
+    # A non-string unknown value reaches the type refusal if the name guard
+    # disappears, rather than raising in the later sealed-value lookup.
+    assert startup._configuration(
+        {**startup.fixed_policy(), "env": {"UNKNOWN": 1}}, require_policy=True,
+    ) is reason.EFFECTIVE_ENV_KEYS
+    # Equality alone accepts str subclasses; the exact-type guard must refuse.
+    assert startup._configuration(
+        {**startup.fixed_policy(), "env": {"DISABLE_GROWTHBOOK": StringSubclass("1")}},
+        require_policy=True,
+    ) is reason.EFFECTIVE_ENV_VALUE
+
+
 @pytest.mark.parametrize("configuration", [
     startup.fixed_policy(),
     {**startup.fixed_policy(), "env": {}},
