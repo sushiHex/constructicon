@@ -55,7 +55,7 @@ from constructicon.substrate.executors.claude_operator_io import (
 from constructicon.substrate.executors.claude_protocol import (
     CLAUDE_CODE_VERSION,
     RECORD_BYTES,
-    ClaudePlan,
+    ClaudeAuthMode,
 )
 from constructicon.substrate.executors.codex_lane import EvidenceFile, _fsync_directory
 from constructicon.substrate.executors.egress import (
@@ -67,7 +67,7 @@ from constructicon.substrate.executors.linux import BWRAP_SHA256, LinuxLauncher,
 from constructicon.substrate.executors.operator_store import inherit_maintenance
 
 EVIDENCE_DOMAIN = "claude-maintenance-entry-evidence"
-EVIDENCE_SCHEMA = 7
+EVIDENCE_SCHEMA = 8
 CONFIG_BYTES = 8 * 1024
 _HEX = re.compile(r"[0-9a-f]{64}\Z")
 _PHASE_HOSTS = {
@@ -88,6 +88,11 @@ _QUALIFICATION_SOURCES = (
     "constructicon.substrate.executors.claude_startup",
     "constructicon.substrate.executors.claude_protocol",
     "constructicon.substrate.executors.claude_native_events",
+    # These bind the physical launch guard, native recipe/environment, and relay.
+    # The installed supervisor is already covered by the pinned runtime digest.
+    "constructicon.substrate.executors.linux",
+    "constructicon.substrate.executors.claude_native",
+    "constructicon.substrate.executors.egress",
     "constructicon.substrate.executors.claude_initialize",
     "constructicon.substrate._lifetime",
     "constructicon.core.identity",
@@ -113,7 +118,7 @@ def qualification_revision() -> Digest:
     source_hashes["codex._fsync_directory"] = hashlib.sha256(
         inspect.getsource(_fsync_directory).encode("utf-8")
     ).hexdigest()
-    return digest("claude-startup-qualification-source", 2, source_hashes)
+    return digest("claude-startup-qualification-source", 3, source_hashes)
 
 
 class _Parser(argparse.ArgumentParser):
@@ -260,11 +265,11 @@ def read_configuration(path: Path, *, expected_sha256: str) -> LaneConfiguration
 
 
 def _public_facts(
-    facts: ClaudeMaintenanceSessionFacts, *, selected_plan: ClaudePlan | None = None,
+    facts: ClaudeMaintenanceSessionFacts, *, mode: ClaudeAuthMode | None = None,
     configuration: LaneConfiguration | None = None,
 ) -> dict[str, object]:
     login = facts.login_facts
-    mode = facts.mode_observation
+    observation = facts.mode_observation
     public: dict[str, object] = {
         "phase": facts.phase.value,
         "lifecycle": facts.lifecycle.value,
@@ -275,24 +280,26 @@ def _public_facts(
             "stdout_eof": login.stdout_eof,
             "stdout_bytes": login.stdout_bytes,
         },
-        "mode": None if mode is None else {
-            "phase": mode.phase.value,
-            "mode_verdict": None if mode.mode_verdict is None else mode.mode_verdict.value,
-            "mode_mismatch_reason": (None if mode.mode_mismatch_reason is None
-                                     else mode.mode_mismatch_reason.value),
-            "token_source_category": (None if mode.token_source_category is None
-                                      else mode.token_source_category.value),
-            "api_key_source_category": (None if mode.api_key_source_category is None
-                                        else mode.api_key_source_category.value),
-            "classified_responses": mode.classified_responses,
-            "refusal_code": None if mode.refusal_code is None else mode.refusal_code.value,
-            "rejected_system_category": (None if mode.rejected_system_category is None
-                                         else mode.rejected_system_category.value),
-            "lifecycle": mode.lifecycle.value,
-            "request_writes": mode.request_writes,
-            "ui_records": mode.ui_records,
-            "stdin_closed": mode.stdin_closed,
-            "eof": mode.eof,
+        "mode": None if observation is None else {
+            "phase": observation.phase.value,
+            "mode_verdict": (None if observation.mode_verdict is None
+                             else observation.mode_verdict.value),
+            "mode_mismatch_reason": (None if observation.mode_mismatch_reason is None
+                                     else observation.mode_mismatch_reason.value),
+            "token_source_category": (None if observation.token_source_category is None
+                                      else observation.token_source_category.value),
+            "api_key_source_category": (None if observation.api_key_source_category is None
+                                        else observation.api_key_source_category.value),
+            "classified_responses": observation.classified_responses,
+            "refusal_code": (None if observation.refusal_code is None
+                             else observation.refusal_code.value),
+            "rejected_system_category": (None if observation.rejected_system_category is None
+                                         else observation.rejected_system_category.value),
+            "lifecycle": observation.lifecycle.value,
+            "request_writes": observation.request_writes,
+            "ui_records": observation.ui_records,
+            "stdin_closed": observation.stdin_closed,
+            "eof": observation.eof,
         },
         "relay_closed": facts.relay_closed,
         "custody_current": facts.custody_current,
@@ -300,7 +307,7 @@ def _public_facts(
         "process_clean": facts.process_clean,
     }
     if facts.phase is ClaudeMaintenanceSessionPhase.QUALIFY:
-        if type(selected_plan) is not ClaudePlan or configuration is None:
+        if type(mode) is not ClaudeAuthMode or configuration is None:
             raise ValueError("qualification evidence requires sealed selection")
         qualification = facts.qualification
         public["qualification"] = {
@@ -330,7 +337,7 @@ def _public_facts(
             "ui_records": None if qualification is None else qualification.ui_records,
             "stdin_closed": None if qualification is None else qualification.stdin_closed,
             "eof": None if qualification is None else qualification.eof,
-            "selected_plan": "pro" if selected_plan is ClaudePlan.PRO else "max",
+            "mode": mode.value,
             "model": configuration.model,
             "effort": configuration.effort,
         }
@@ -340,7 +347,7 @@ def _public_facts(
 def _record(
     facts: ClaudeMaintenanceSessionFacts, launcher: LinuxLauncher,
     policy: EgressPolicy, configuration: LaneConfiguration,
-    *, selected_plan: ClaudePlan | None = None,
+    *, mode: ClaudeAuthMode | None = None,
 ) -> dict[str, object]:
     if type(facts) is not ClaudeMaintenanceSessionFacts:
         raise ValueError("invalid Claude maintenance session facts")
@@ -348,7 +355,7 @@ def _record(
         "schema_version": EVIDENCE_SCHEMA,
         "subscription_qualified": False,
         "production_available": False,
-        "facts": _public_facts(facts, selected_plan=selected_plan,
+        "facts": _public_facts(facts, mode=mode,
                                configuration=configuration),
         "runtime_digest": str(configuration.runtime_digest),
         "vendor_digest": str(configuration.vendor_digest),
@@ -363,7 +370,7 @@ def _record(
 
 
 async def _run(
-    *, phase: ClaudeMaintenanceSessionPhase, selected_plan: ClaudePlan | None,
+    *, phase: ClaudeMaintenanceSessionPhase, mode: ClaudeAuthMode | None,
     first_login: bool, configuration: LaneConfiguration, store_root: Path,
     key: str, lock_fd: int, floor: int, lane_dir: Path,
 ) -> tuple[ClaudeMaintenanceSessionFacts, LinuxLauncher, EgressPolicy]:
@@ -379,7 +386,7 @@ async def _run(
                              generation_floor=floor, parent=os.getppid()) as custody:
         facts = await run_maintenance_session(
             custody, launcher, policy, lane_dir, phase=phase,
-            selected_plan=selected_plan, operator=operator, first_login=first_login,
+            mode=mode, operator=operator, first_login=first_login,
             deadline=deadline,
         )
     return facts, launcher, policy
@@ -392,7 +399,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--launch-config-sha256", required=True)
     parser.add_argument("--lane-dir", type=Path, required=True)
     parser.add_argument("--evidence", type=Path, required=True)
-    parser.add_argument("--selected-plan", choices=("pro", "max"))
+    parser.add_argument("--mode", choices=("subscription",))
     parser.add_argument("--first-login", action="store_true")
     parser.add_argument("--store-root", type=Path, required=True)
     parser.add_argument("--key", required=True)
@@ -401,8 +408,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--floor", type=int, required=True)
     options = parser.parse_args(argv)
     phase = ClaudeMaintenanceSessionPhase(options.phase)
-    selected_plan = {"pro": ClaudePlan.PRO, "max": ClaudePlan.MAX}.get(options.selected_plan)
-    if ((phase is ClaudeMaintenanceSessionPhase.LOGIN) != (selected_plan is None)
+    mode = {"subscription": ClaudeAuthMode.SUBSCRIPTION}.get(options.mode)
+    if ((phase is ClaudeMaintenanceSessionPhase.LOGIN) != (mode is None)
             or (options.first_login and phase is not ClaudeMaintenanceSessionPhase.LOGIN)
             or options.lock_fd < 0 or options.floor < 0 or not options.key
             or any(not path.is_absolute() or ".." in path.parts for path in (
@@ -416,13 +423,13 @@ def main(argv: list[str] | None = None) -> int:
         reservation = EvidenceFile(options.evidence, domain=EVIDENCE_DOMAIN)
         try:
             facts, launcher, policy = asyncio.run(_run(
-                phase=phase, selected_plan=selected_plan, first_login=options.first_login,
+                phase=phase, mode=mode, first_login=options.first_login,
                 configuration=configuration, store_root=options.store_root,
                 key=options.key, lock_fd=options.lock_fd, floor=options.floor,
                 lane_dir=options.lane_dir,
             ))
             evidence = _record(facts, launcher, policy, configuration,
-                               selected_plan=selected_plan)
+                               mode=mode)
             reservation.publish(evidence)
         except BaseException:
             reservation.abandon()

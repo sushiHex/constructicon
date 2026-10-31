@@ -25,8 +25,8 @@ from constructicon.substrate.executors.claude_maintenance_session import (
 from constructicon.substrate.executors.claude_native import ClaudeNativeRecipe
 from constructicon.substrate.executors.claude_protocol import (
     ClaudeApiKeySourceCategory,
+    ClaudeAuthMode,
     ClaudeInitializeVerdict,
-    ClaudePlan,
     ClaudeTokenSourceCategory,
 )
 from constructicon.substrate.executors.egress import EgressDestination, EgressPolicy, EgressSocket
@@ -162,7 +162,7 @@ async def test_qualification_requires_three_controls_and_joined_lifecycle(
         facts = await run_maintenance_session(
             custody, launcher, policy("platform.claude.com", "api.anthropic.com"),
             tmp_path / "lane", phase=ClaudeMaintenanceSessionPhase.QUALIFY,
-            selected_plan=ClaudePlan.PRO,
+            mode=ClaudeAuthMode.SUBSCRIPTION,
         )
         assert facts.lifecycle is ClaudeMaintenanceSessionLifecycle.JOINED_CLEAN
         assert facts.qualification is not None
@@ -195,7 +195,7 @@ async def test_qualification_custody_change_during_initialize_blocks_later_contr
         facts = await run_maintenance_session(
             custody, launcher, policy("platform.claude.com", "api.anthropic.com"),
             tmp_path / "lane", phase=ClaudeMaintenanceSessionPhase.QUALIFY,
-            selected_plan=ClaudePlan.PRO,
+            mode=ClaudeAuthMode.SUBSCRIPTION,
         )
         assert launcher.native.writes == ["initialize"]
         assert launcher.joined is True
@@ -220,7 +220,7 @@ async def test_qualification_refuses_ambiguity_or_unclean_process(
             facts = await run_maintenance_session(
                 custody, launcher, policy("platform.claude.com", "api.anthropic.com"),
                 tmp_path / "lane", phase=ClaudeMaintenanceSessionPhase.QUALIFY,
-                selected_plan=ClaudePlan.PRO,
+                mode=ClaudeAuthMode.SUBSCRIPTION,
             )
         except ValueError:
             pytest.fail("an unclean process must return finite refusal facts")
@@ -244,7 +244,7 @@ async def test_qualification_policy_refuses_before_store_open(
     custody, launcher = Custody(), QualificationLauncher()
     facts = await run_maintenance_session(
         custody, launcher, policy("platform.claude.com"), tmp_path / "lane",
-        phase=ClaudeMaintenanceSessionPhase.QUALIFY, selected_plan=ClaudePlan.PRO,
+        phase=ClaudeMaintenanceSessionPhase.QUALIFY, mode=ClaudeAuthMode.SUBSCRIPTION,
     )
     assert facts.lifecycle is ClaudeMaintenanceSessionLifecycle.REFUSED
     assert launcher.calls == custody.opened == custody.created == 0
@@ -263,7 +263,7 @@ async def test_qualification_malicious_result_bound_refuses_after_join(
         facts = await run_maintenance_session(
             custody, launcher, policy("platform.claude.com", "api.anthropic.com"),
             tmp_path / "lane", phase=ClaudeMaintenanceSessionPhase.QUALIFY,
-            selected_plan=ClaudePlan.PRO,
+            mode=ClaudeAuthMode.SUBSCRIPTION,
         )
         assert facts.lifecycle is ClaudeMaintenanceSessionLifecycle.REFUSED
         assert facts.qualification is not None
@@ -356,14 +356,14 @@ async def test_mode_observation_is_one_separate_process(
 ) -> None:
     from constructicon.substrate.executors import claude_maintenance_session as session
 
-    calls: list[tuple[ClaudeMaintenancePhase, ClaudePlan]] = []
+    calls: list[tuple[ClaudeMaintenancePhase, ClaudeAuthMode]] = []
 
     async def fake_observe(_launcher: Any, native_store: Any, *,
-                           phase: ClaudeMaintenancePhase, selected_plan: ClaudePlan,
+                           phase: ClaudeMaintenancePhase, mode: ClaudeAuthMode,
                            timeout_s: float) -> ClaudeMaintenanceObservation:
         assert timeout_s > 0
         native_store.before_spawn()
-        calls.append((phase, selected_plan))
+        calls.append((phase, mode))
         return ClaudeMaintenanceObservation(
             phase, ClaudeInitializeVerdict.MODE_MATCH,
             ClaudeMaintenanceLifecycle.OBSERVED, 1, 0, True, True,
@@ -379,13 +379,13 @@ async def test_mode_observation_is_one_separate_process(
         facts = await run_maintenance_session(
             custody, launcher, policy("platform.claude.com", "api.anthropic.com"),
             tmp_path / "lane", phase=ClaudeMaintenanceSessionPhase.RELOAD,
-            selected_plan=ClaudePlan.PRO,
+            mode=ClaudeAuthMode.SUBSCRIPTION,
         )
         assert facts.lifecycle is ClaudeMaintenanceSessionLifecycle.JOINED_CLEAN
         assert facts.process_clean is None
         assert facts.login_facts is None
         assert facts.mode_observation is not None
-        assert calls == [(ClaudeMaintenancePhase.RELOAD, ClaudePlan.PRO)]
+        assert calls == [(ClaudeMaintenancePhase.RELOAD, ClaudeAuthMode.SUBSCRIPTION)]
         assert launcher.calls == custody.created == 0
         assert custody.opened == 1
     finally:

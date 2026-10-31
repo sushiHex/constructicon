@@ -3339,3 +3339,21 @@ The previous all-LF preparation claim was wrong. Exact Git blobs reproduce the
 host's revision; the acceptance guard was correct. No READ or activation occurred,
 and the VM was parked Off/idle. This correction changes no controller or
 qualification law and grants no resumed session or live-success claim.
+
+## Claude subscription-mode successor and consumer migration
+
+PR #337 accepted a successor to exact tier-display identity. The pinned native
+CLI can override a fixed tier spelling with a server display name; generation
+12's recovered refusal was subscription-mismatch, but its exact label/initialize
+ordinal was not observed. The consumer implementation uses subscription mode,
+strict new evidence/operator revisions and one shared bounded judge. Commercial
+tier is not inferred. Historical plan/evidence bytes remain unchanged.
+
+Environment equality is new-profile hardening, not a correction to the old
+accepted string-only predicate. Final settings do not prove whole-process env
+history: relevant authority keys are independently held or excluded by the
+pinned filters. The native runtime explicitly refuses alternate key/token paths.
+The writable credential FD is not an immutable snapshot. Controller Unicode
+tables depend on the verified host/runtime profile; unsupported characters may
+refuse conservatively. No source merge alone proves live provider readiness,
+installation or a successful model attempt.

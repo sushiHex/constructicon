@@ -187,6 +187,8 @@ def _configuration(
             return reason.EFFECTIVE_ENV_KEYS
         if any(type(item) is not str for item in env.values()):
             return reason.EFFECTIVE_ENV_VALUE
+        if any(item != fixed_environment()[name] for name, item in env.items()):
+            return reason.EFFECTIVE_ENV_VALUE
     return None
 
 

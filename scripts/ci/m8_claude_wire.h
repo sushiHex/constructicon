@@ -125,7 +125,7 @@ static void wire_observation(const char *kind, const char *model, int background
     }
     if (!strcmp(kind, "\"subtype\":\"initialize\"")) {
         wire_success(identifier,
-            "{\"account\":{\"apiProvider\":\"firstParty\",\"subscriptionType\":\"Claude Pro\"},"
+            "{\"account\":{\"apiProvider\":\"firstParty\",\"subscriptionType\":\"Claude Team\"},"
             "\"claude_code_version\":\"2.1.296\",\"session_state\":\"idle\"}", 1);
         if (background) wire_background();
     } else if (!strcmp(kind, "\"subtype\":\"get_settings\"")) {
@@ -199,7 +199,7 @@ static int claude_wire(int argc, char **argv) {
         wire_success(identifier, strcmp(model, "fixture-startup-subscribed")
             ? "{\"account\":{\"apiProvider\":\"firstParty\",\"tokenSource\":\"none\"},"
               "\"claude_code_version\":\"2.1.296\",\"session_state\":\"idle\"}"
-            : "{\"account\":{\"apiProvider\":\"firstParty\",\"subscriptionType\":\"Claude Pro\"},"
+            : "{\"account\":{\"apiProvider\":\"firstParty\",\"subscriptionType\":\"Claude Team\"},"
               "\"claude_code_version\":\"2.1.296\",\"session_state\":\"idle\"}", 1);
         WIRE_CHECK(fgetc(stdin) == EOF && !ferror(stdin));
         if (ui) {

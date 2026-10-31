@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from enum import StrEnum
+from unicodedata import category
 
 from constructicon.core.identity import parse_json_value
 
@@ -21,9 +22,8 @@ RECORD_BYTES = 256 * 1024
 CLAUDE_CODE_VERSION = "2.1.296"
 
 
-class ClaudePlan(StrEnum):
-    PRO = "Claude Pro"
-    MAX = "Claude Max"
+class ClaudeAuthMode(StrEnum):
+    SUBSCRIPTION = "subscription"
 
 
 class ClaudeInitializeVerdict(StrEnum):
@@ -175,8 +175,23 @@ def initialize_request(request_id: str) -> bytes:
     return record
 
 
+def _subscription_display(value: object) -> bool:
+    """Producer grammar using the pinned Python runtime's Unicode categories.
+
+    Newer, unassigned code points refuse conservatively; no tier is inferred.
+    """
+    if type(value) is not str or not value.startswith("Claude "):
+        return False
+    name = value[7:]
+    if not 1 <= len(name) <= 40 or category(name[0])[0] not in ("L", "N"):
+        return False
+    if len(name) > 1 and category(name[-1])[0] not in ("L", "N") and name[-1] != "+":
+        return False
+    return all(category(char)[0] in ("L", "N") or char in " .+-" for char in name[1:-1])
+
+
 def _classify_initialize(
-    record: bytes, *, expected_request_id: str, selected_plan: ClaudePlan
+    record: bytes, *, expected_request_id: str, mode: ClaudeAuthMode
 ) -> ClaudeInitializeObservation:
     """Return one finite mode verdict, never the vendor's fields or exceptions.
 
@@ -197,8 +212,8 @@ def _classify_initialize(
         )
 
     _require_id(expected_request_id)
-    if type(selected_plan) is not ClaudePlan:
-        raise ValueError("invalid selected Claude plan")
+    if type(mode) is not ClaudeAuthMode:
+        raise ValueError("invalid Claude authentication mode")
     verdict = ClaudeInitializeVerdict
     if type(record) is not bytes:
         return observed(verdict.RECORD_INVALID)
@@ -285,37 +300,37 @@ def _classify_initialize(
         return observed(reason.ACCOUNT_VALUE_TYPE)
     if account.get("apiProvider") != "firstParty":
         return observed(reason.PROVIDER_MISMATCH)
-    if account.get("subscriptionType") != selected_plan.value:
-        if account.get("subscriptionType") == "Claude API":
-            return observed(reason.AMBIGUOUS_API)
+    if account.get("subscriptionType") == "Claude API":
+        return observed(reason.AMBIGUOUS_API)
+    if not _subscription_display(account.get("subscriptionType")):
         return observed(reason.SUBSCRIPTION_MISMATCH)
     return observed(verdict.MODE_MATCH)
 
 
 def observe_initialize(
-    record: bytes, *, expected_request_id: str, selected_plan: ClaudePlan,
+    record: bytes, *, expected_request_id: str, mode: ClaudeAuthMode,
 ) -> ClaudeInitializeObservation:
     """Classify once for the mode and qualification conversation consumers."""
     return _classify_initialize(
-        record, expected_request_id=expected_request_id, selected_plan=selected_plan,
+        record, expected_request_id=expected_request_id, mode=mode,
     )
 
 
 def classify_initialize(
-    record: bytes, *, expected_request_id: str, selected_plan: ClaudePlan,
+    record: bytes, *, expected_request_id: str, mode: ClaudeAuthMode,
 ) -> tuple[ClaudeInitializeVerdict, ClaudeModeMismatchReason | None]:
     """Classify once, retaining only a closed reported-mode mismatch reason."""
     result = _classify_initialize(
-        record, expected_request_id=expected_request_id, selected_plan=selected_plan,
+        record, expected_request_id=expected_request_id, mode=mode,
     )
     return result.verdict, result.reason
 
 
 def judge_initialize(
-    record: bytes, *, expected_request_id: str, selected_plan: ClaudePlan,
+    record: bytes, *, expected_request_id: str, mode: ClaudeAuthMode,
 ) -> ClaudeInitializeVerdict:
     """Preserve the original finite verdict projection, without account data."""
     verdict, _ = classify_initialize(
-        record, expected_request_id=expected_request_id, selected_plan=selected_plan,
+        record, expected_request_id=expected_request_id, mode=mode,
     )
     return verdict

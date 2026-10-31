@@ -35,7 +35,7 @@ from constructicon.substrate.executors.claude_native import (
     ClaudeNativeStoreMount,
     ClaudeNativeVendor,
 )
-from constructicon.substrate.executors.claude_protocol import ClaudePlan, initialize_request
+from constructicon.substrate.executors.claude_protocol import ClaudeAuthMode, initialize_request
 from constructicon.substrate.executors.claude_startup import (
     ClaudeStartupVerdict,
     _body,
@@ -119,7 +119,7 @@ class SettingsConversation(ClaudeMaintenanceConversation):
 
     def __init__(self, *, deadline: float, input_limit: int, output_limit: int) -> None:
         # The base owns framing only here; no plan classifier is invoked.
-        super().__init__(phase=ClaudeMaintenancePhase.OBSERVE, selected_plan=ClaudePlan.PRO,
+        super().__init__(phase=ClaudeMaintenancePhase.OBSERVE, mode=ClaudeAuthMode.SUBSCRIPTION,
                          deadline=deadline, input_limit=input_limit,
                          output_limit=min(output_limit, startup.OUTPUT_BYTES))
         self.initialize_observed = self.settings_observed = self.reader_joined = False

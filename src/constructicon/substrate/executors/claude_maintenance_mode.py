@@ -32,9 +32,9 @@ from constructicon.substrate.executors.claude_native_events import (
 from constructicon.substrate.executors.claude_protocol import (
     RECORD_BYTES,
     ClaudeApiKeySourceCategory,
+    ClaudeAuthMode,
     ClaudeInitializeVerdict,
     ClaudeModeMismatchReason,
-    ClaudePlan,
     ClaudeTokenSourceCategory,
     classify_initialize,
     initialize_diagnostics_valid,
@@ -142,7 +142,7 @@ def _monotonic() -> float:
 
 
 def exact_ambiguous_api_mode(
-    record: bytes, *, expected_request_id: str, selected_plan: ClaudePlan,
+    record: bytes, *, expected_request_id: str, mode: ClaudeAuthMode,
 ) -> bool:
     """Recognize only an idle, correlated first-party Claude API projection.
 
@@ -150,7 +150,7 @@ def exact_ambiguous_api_mode(
     idle and account check before identifying this exact ambiguity.
     """
     _, reason = classify_initialize(
-        record, expected_request_id=expected_request_id, selected_plan=selected_plan,
+        record, expected_request_id=expected_request_id, mode=mode,
     )
     return reason is ClaudeModeMismatchReason.AMBIGUOUS_API
 
@@ -159,15 +159,15 @@ class ClaudeMaintenanceConversation:
     """Single-use owner of one continuously active read task and serial writes."""
 
     def __init__(
-        self, *, phase: ClaudeMaintenancePhase, selected_plan: ClaudePlan,
+        self, *, phase: ClaudeMaintenancePhase, mode: ClaudeAuthMode,
         input_limit: int, output_limit: int, deadline: float,
     ) -> None:
-        if (type(phase) is not ClaudeMaintenancePhase or type(selected_plan) is not ClaudePlan
+        if (type(phase) is not ClaudeMaintenancePhase or type(mode) is not ClaudeAuthMode
                 or type(input_limit) is not int or input_limit <= 0
                 or type(output_limit) is not int or output_limit <= 0
                 or type(deadline) is not float or not math.isfinite(deadline)):
             raise ValueError("invalid Claude maintenance parameters")
-        self.phase, self.plan = phase, selected_plan
+        self.phase, self.auth_mode = phase, mode
         self.input_limit = min(input_limit, INPUT_BYTES)
         self.output_limit = min(output_limit, OUTPUT_BYTES)
         self.deadline = deadline
@@ -293,7 +293,7 @@ class ClaudeMaintenanceConversation:
             if self._ui(record):
                 continue
             observation = observe_initialize(
-                record, expected_request_id=identifier, selected_plan=self.plan,
+                record, expected_request_id=identifier, mode=self.auth_mode,
             )
             self.mode_verdict, self.mode_mismatch_reason = observation.verdict, observation.reason
             self.token_source_category = observation.token_source_category
@@ -436,17 +436,17 @@ class ClaudeMaintenanceConversation:
 
 async def observe_maintenance_mode(
     launcher: LinuxLauncher, native_store: ClaudeNativeStoreMount, *,
-    phase: ClaudeMaintenancePhase, selected_plan: ClaudePlan, timeout_s: float = LIFETIME_SECONDS,
+    phase: ClaudeMaintenancePhase, mode: ClaudeAuthMode, timeout_s: float = LIFETIME_SECONDS,
 ) -> ClaudeMaintenanceObservation:
     """Observe one process with existing store custody and joined teardown."""
-    if (type(phase) is not ClaudeMaintenancePhase or type(selected_plan) is not ClaudePlan
+    if (type(phase) is not ClaudeMaintenancePhase or type(mode) is not ClaudeAuthMode
             or type(timeout_s) not in (int, float) or not math.isfinite(timeout_s)
             or not 0 < timeout_s <= LIFETIME_SECONDS):
         raise ValueError("invalid Claude maintenance parameters")
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_s
     conversation = ClaudeMaintenanceConversation(
-        phase=phase, selected_plan=selected_plan,
+        phase=phase, mode=mode,
         input_limit=launcher.limits.input_bytes, output_limit=launcher.limits.stdout_bytes,
         deadline=_monotonic() + timeout_s,
     )

@@ -18,7 +18,7 @@ from constructicon.substrate.executors.claude_native import (
     ClaudeNativeStoreMount,
     ClaudeNativeVendor,
 )
-from constructicon.substrate.executors.claude_protocol import ClaudePlan
+from constructicon.substrate.executors.claude_protocol import ClaudeAuthMode
 from constructicon.substrate.executors.linux import (
     DEFAULT_PROCESS_LIMITS,
     ProcessExchangeError,
@@ -91,7 +91,8 @@ def classifier_sideband(kind="post_turn_summary", **changes):
 
 
 class Peer:
-    def __init__(self, *, plan=ClaudePlan.PRO, callback=True, fragment=8192, defect=None):
+    def __init__(self, *, plan="Claude Pro", callback=True, fragment=8192,
+                 defect=None):
         self.plan, self.callback, self.fragment, self.defect = plan, callback, fragment, defect
         self.output = bytearray()
         self.ready = asyncio.Event()
@@ -226,7 +227,7 @@ class Peer:
         if subtype == "initialize":
             self.registration = "sdkMcpServers" in request
             self.success(identifier, {"account": {"apiProvider": "firstParty",
-                                                  "subscriptionType": self.plan.value,
+                                                  "subscriptionType": self.plan,
                                                   "email": "private-account"},
                                       "claude_code_version": "2.1.296", "session_state": "idle"},
                          initialize=True)
@@ -283,7 +284,7 @@ class Launcher:
             self.joined = True
 
 
-async def run(launcher, *, worker=None, plan=ClaudePlan.PRO, timeout=5):
+async def run(launcher, *, worker=None, plan=ClaudeAuthMode.SUBSCRIPTION, timeout=5):
     calls = []
 
     async def read_file(path, remaining):
@@ -292,7 +293,7 @@ async def run(launcher, *, worker=None, plan=ClaudePlan.PRO, timeout=5):
 
     outcome = await claude_read.run_read_transaction(
         launcher, ("fixed-nonvendor-peer",), TaskSpec(instruction="read the file"),
-        selected_plan=plan, model="model", effort="high", worker=worker or read_file,
+        mode=plan, model="model", effort="high", worker=worker or read_file,
         guard_fds=(), timeout_s=timeout,
     )
     return outcome, calls
@@ -612,7 +613,8 @@ async def test_thinking_progress_cannot_hide_worker_obstructions(obstruction):
 
 def test_thinking_progress_requires_dispatch_and_never_mutates_metadata():
     transaction = claude_read.ClaudeReadTransaction(
-        TaskSpec(instruction="read"), selected_plan=ClaudePlan.PRO, model="model", effort="high",
+        TaskSpec(instruction="read"), mode=ClaudeAuthMode.SUBSCRIPTION,
+        model="model", effort="high",
         worker=None, input_limit=1000, output_limit=1000, deadline=100,
     )
     transaction._startup_session = SESSION
@@ -1251,7 +1253,8 @@ async def test_lifecycle_exact_shape_and_correlation_refuse_without_private_valu
 
 def test_lifecycle_before_dispatch_refuses_even_with_exact_correlation():
     transaction = claude_read.ClaudeReadTransaction(
-        TaskSpec(instruction="read"), selected_plan=ClaudePlan.PRO, model="model", effort="high",
+        TaskSpec(instruction="read"), mode=ClaudeAuthMode.SUBSCRIPTION,
+        model="model", effort="high",
         worker=None, input_limit=1000, output_limit=1000, deadline=100,
     )
     transaction._state = "ready"
@@ -1743,7 +1746,7 @@ async def test_before_user_hook_is_after_startup_and_immediately_before_one_user
 
     outcome = await claude_read.run_read_transaction(
         launcher, ("fixed-nonvendor-peer",), TaskSpec(instruction="read the file"),
-        selected_plan=ClaudePlan.PRO, model="model", effort="high", worker=worker,
+        mode=ClaudeAuthMode.SUBSCRIPTION, model="model", effort="high", worker=worker,
         guard_fds=(), timeout_s=5, before_user=before_user,
     )
     assert isinstance(outcome, ExecutorFailure if refuse else ExecutorSuccess)
@@ -1766,7 +1769,7 @@ async def test_control_check_refuses_at_read_resume_before_any_user_write():
 
     outcome = await claude_read.run_read_transaction(
         launcher, ("fixed-nonvendor-peer",), TaskSpec(instruction="read the file"),
-        selected_plan=ClaudePlan.PRO, model="model", effort="high", worker=worker,
+        mode=ClaudeAuthMode.SUBSCRIPTION, model="model", effort="high", worker=worker,
         guard_fds=(), timeout_s=5, check_control=control,
     )
     assert isinstance(outcome, ExecutorFailure)
@@ -1801,7 +1804,7 @@ async def test_native_read_binding_is_checked_before_dispatch_and_after_join(def
 
     outcome = await claude_read.run_read_transaction(
         launcher, ("/wrong",) if defect == "command" else launcher.claude.command,
-        TaskSpec(instruction="read the file"), selected_plan=ClaudePlan.PRO,
+        TaskSpec(instruction="read the file"), mode=ClaudeAuthMode.SUBSCRIPTION,
         model="wrong" if defect == "model" else "model",
         effort="low" if defect == "effort" else "high", worker=worker,
         guard_fds=() if defect == "guard" else (42,), timeout_s=5, native_store=store,
@@ -1847,7 +1850,7 @@ async def test_native_binding_is_pinned_across_async_probe_and_terminal_join(seq
 
     outcome = await claude_read.run_read_transaction(
         launcher, launcher.claude.command, TaskSpec(instruction="read the file"),
-        selected_plan=ClaudePlan.PRO, model="model", effort="high", worker=worker,
+        mode=ClaudeAuthMode.SUBSCRIPTION, model="model", effort="high", worker=worker,
         guard_fds=(42,), timeout_s=5, native_store=store,
     )
     assert isinstance(outcome, ExecutorSuccess if sequence == "same" else ExecutorFailure)
@@ -1910,7 +1913,7 @@ async def test_joined_exchange_failure_still_checks_binding_and_preserves_contro
     try:
         outcome = await claude_read.run_read_transaction(
             launcher, launcher.claude.command, TaskSpec(instruction="read the file"),
-            selected_plan=ClaudePlan.PRO, model="model", effort="high", worker=worker,
+            mode=ClaudeAuthMode.SUBSCRIPTION, model="model", effort="high", worker=worker,
             guard_fds=(42,), timeout_s=5, native_store=store,
         )
     except BaseException as error:
@@ -1927,11 +1930,11 @@ async def test_joined_exchange_failure_still_checks_binding_and_preserves_contro
         assert outcome.usage == Usage(input_tokens=1, output_tokens=1)
 
 
-@pytest.mark.parametrize("plan", list(ClaudePlan))
+@pytest.mark.parametrize("plan", ["Claude Pro", "Claude Max", "Claude Team"])
 @pytest.mark.parametrize("fragment", [1, 8192])
 async def test_accepting_one_read_joins_native_and_worker_with_fresh_checks(plan, fragment):
     launcher = Launcher(Peer(plan=plan, fragment=fragment))
-    outcome, calls = await run(launcher, plan=plan)
+    outcome, calls = await run(launcher)
     assert isinstance(outcome, ExecutorSuccess)
     assert outcome.raw_reply == "task output" and outcome.requested_model == "model"
     assert outcome.served_model is None and outcome.usage == Usage(input_tokens=1, output_tokens=1)
@@ -2352,7 +2355,8 @@ async def test_worker_gets_remaining_absolute_deadline_without_renewal(monkeypat
         return "file text"
 
     transaction = claude_read.ClaudeReadTransaction(
-        TaskSpec(instruction="read"), selected_plan=ClaudePlan.PRO, model="model", effort="high",
+        TaskSpec(instruction="read"), mode=ClaudeAuthMode.SUBSCRIPTION,
+        model="model", effort="high",
         worker=worker, input_limit=1000, output_limit=1000, deadline=110,
     )
     transaction._state = "dispatched"
@@ -2477,7 +2481,7 @@ async def test_host_instruction_is_literal_with_no_command_or_attachment_expansi
         pytest.fail("the literal zero-callback task grants no worker")
 
     outcome = await claude_read.run_read_transaction(
-        Launcher(peer), ("fixed-nonvendor-peer",), task, selected_plan=ClaudePlan.PRO,
+        Launcher(peer), ("fixed-nonvendor-peer",), task, mode=ClaudeAuthMode.SUBSCRIPTION,
         model="model", effort="high", worker=worker, guard_fds=(), timeout_s=5,
     )
     assert isinstance(outcome, ExecutorSuccess)
@@ -2924,7 +2928,8 @@ def test_every_pinned_driver_family_reaches_the_closed_reader_context():
         raise AssertionError("diagnostic projection must not execute work")
 
     transaction = claude_read.ClaudeReadTransaction(
-        TaskSpec(instruction="read"), selected_plan=ClaudePlan.PRO, model="model", effort="high",
+        TaskSpec(instruction="read"), mode=ClaudeAuthMode.SUBSCRIPTION,
+        model="model", effort="high",
         worker=worker, input_limit=1000, output_limit=1000, deadline=1,
     )
     # Exercise the actual first-failure binder and public grammar for all labels,

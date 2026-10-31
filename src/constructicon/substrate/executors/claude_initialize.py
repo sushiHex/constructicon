@@ -19,8 +19,8 @@ from constructicon.core.grants import Posture
 from constructicon.core.process import ProcessIO
 from constructicon.substrate.executors.claude_protocol import (
     RECORD_BYTES,
+    ClaudeAuthMode,
     ClaudeInitializeVerdict,
-    ClaudePlan,
     initialize_request,
     judge_initialize,
 )
@@ -52,11 +52,11 @@ class ClaudeInitializationObservation:
 class ClaudeInitialization:
     """Single-use callback; no process, task, public gate latch or retry owner."""
 
-    def __init__(self, *, selected_plan: ClaudePlan, input_limit: int) -> None:
-        if (type(selected_plan) is not ClaudePlan or type(input_limit) is not int
+    def __init__(self, *, mode: ClaudeAuthMode, input_limit: int) -> None:
+        if (type(mode) is not ClaudeAuthMode or type(input_limit) is not int
                 or input_limit <= 0):
             raise ValueError("invalid Claude initialization parameters")
-        self._selected_plan = selected_plan
+        self._auth_mode = mode
         self._input_limit = input_limit
         self._state: Literal["new", "incomplete", "refused", "completed"] = "new"
         self._mode: ClaudeInitializeVerdict | None = None
@@ -99,7 +99,7 @@ class ClaudeInitialization:
                 return
         self._mode = judge_initialize(
             bytes(buffered[:end]), expected_request_id=request_id,
-            selected_plan=self._selected_plan,
+            mode=self._auth_mode,
         )
         if self._mode is not ClaudeInitializeVerdict.MODE_MATCH or end != len(buffered):
             self._state = "refused"
@@ -134,7 +134,7 @@ def _clean(result: ProcessResult) -> bool:
 
 
 async def observe_initialization(
-    launcher: LinuxLauncher, command: tuple[str, ...], *, selected_plan: ClaudePlan,
+    launcher: LinuxLauncher, command: tuple[str, ...], *, mode: ClaudeAuthMode,
     guard_fds: tuple[int, ...], timeout_s: float,
 ) -> ClaudeInitializationObservation:
     """Judge only this joined exchange; never accept a supplied result or latch.
@@ -144,7 +144,7 @@ async def observe_initialization(
     """
     cancelled = False
     try:
-        conversation = ClaudeInitialization(selected_plan=selected_plan,
+        conversation = ClaudeInitialization(mode=mode,
                                               input_limit=launcher.limits.input_bytes)
         result = await launcher.exchange(
             command, workspace=None, posture=Posture.READ, guard_fds=guard_fds,

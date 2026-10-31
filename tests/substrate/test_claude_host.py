@@ -14,7 +14,7 @@ from constructicon.substrate.executors import claude_host, claude_lane
 from constructicon.substrate.executors.claude_maintenance_session import (
     ClaudeMaintenanceSessionPhase,
 )
-from constructicon.substrate.executors.claude_protocol import ClaudePlan
+from constructicon.substrate.executors.claude_protocol import ClaudeAuthMode
 from constructicon.substrate.executors.egress import identity_digests
 from tests.substrate.test_claude_lane import configuration
 
@@ -41,7 +41,7 @@ def case(tmp_path):
                 "settings_verdict": "match", "settings_mismatch_reason": None,
                 "hooks_verdict": "match",
                 "request_writes": 3, "ui_records": 0, "stdin_closed": True, "eof": True,
-                "selected_plan": "max", "model": config.model, "effort": config.effort,
+                "mode": "subscription", "model": config.model, "effort": config.effort,
             },
         },
         "runtime_digest": str(config.runtime_digest), "vendor_digest": str(config.vendor_digest),
@@ -64,15 +64,15 @@ def seal(record, path):
     )
 
 
-@pytest.mark.parametrize("name,expected", [("pro", ClaudePlan.PRO), ("max", ClaudePlan.MAX)])
+@pytest.mark.parametrize("name,expected", [("subscription", ClaudeAuthMode.SUBSCRIPTION)])
 def test_complete_sealed_startup_permits_compatible_subscription(case, name, expected):
     config, record, path = case
-    record["facts"]["qualification"]["selected_plan"] = name
+    record["facts"]["qualification"]["mode"] = name
     path.write_text(canonical_json(record), encoding="utf-8")
     assert claude_host.validate_startup_evidence(path, config) == (
         expected, digest(claude_lane.EVIDENCE_DOMAIN, 1, record),
     )
-    assert claude_host.sealed_plan(seal(record, path), path, config) is expected
+    assert claude_host.sealed_mode(seal(record, path), path, config) is expected
     profile, grants = claude_host.read_profile(config), claude_host.read_grants(config)
     assert profile.grant_faults(grants) == ()
     assert grants.allowed_tools == ("read_file",)
@@ -81,7 +81,8 @@ def test_complete_sealed_startup_permits_compatible_subscription(case, name, exp
 
 
 @pytest.mark.parametrize("scope,field,value", [
-    ("record", "schema_version", True), ("record", "completed", False),
+    ("record", "schema_version", True), ("record", "schema_version", 7),
+    ("record", "completed", False),
     ("record", "subscription_qualified", True), ("record", "production_available", True),
     ("facts", "phase", "observe"), ("facts", "lifecycle", "incomplete"),
     ("facts", "login", {}), ("facts", "mode", {}),
@@ -97,7 +98,8 @@ def test_complete_sealed_startup_permits_compatible_subscription(case, name, exp
     *(('qualification', 'request_writes', value) for value in (0, 2, 4, 3.0, True)),
     *(('qualification', 'ui_records', value) for value in (-1, 9, False, 0.0)),
     ("qualification", "stdin_closed", False), ("qualification", "eof", False),
-    ("qualification", "selected_plan", "api"), ("qualification", "selected_plan", None),
+    ("qualification", "mode", "pro"), ("qualification", "mode", "api"),
+    ("qualification", "mode", None),
     ("qualification", "model", "other-model"), ("qualification", "effort", "high"),
     *(('record', field, 'changed') for field in (
         "runtime_digest", "vendor_digest", "launch_policy_sha256", "launch_config_sha256",
@@ -114,7 +116,7 @@ def test_each_affirmative_fact_is_required_even_when_record_is_sealed(case, scop
     with pytest.raises(ContractViolation):
         claude_host.validate_startup_evidence(path, config)
     with pytest.raises(ContractViolation):
-        claude_host.sealed_plan(seal(record, path), path, config)
+        claude_host.sealed_mode(seal(record, path), path, config)
 
 
 def test_sealed_validation_reads_one_snapshot_and_reuses_its_digest(case, monkeypatch):
@@ -129,7 +131,7 @@ def test_sealed_validation_reads_one_snapshot_and_reuses_its_digest(case, monkey
         return original(candidate)
 
     monkeypatch.setattr(claude_host, "_evidence", read)
-    assert claude_host.sealed_plan(store, path, config) is ClaudePlan.MAX
+    assert claude_host.sealed_mode(store, path, config) is ClaudeAuthMode.SUBSCRIPTION
     assert reads == [path]
 
 
@@ -141,11 +143,11 @@ def test_new_or_missing_evidence_fields_refuse(case, scope):
         target = target["qualification"]
     target["unreviewed"] = True
     with pytest.raises(ContractViolation):
-        claude_host.sealed_plan(seal(record, path), path, config)
+        claude_host.sealed_mode(seal(record, path), path, config)
     del target["unreviewed"]
     del target[next(iter(target))]
     with pytest.raises(ContractViolation):
-        claude_host.sealed_plan(seal(record, path), path, config)
+        claude_host.sealed_mode(seal(record, path), path, config)
 
 
 @pytest.mark.parametrize("field", [
@@ -155,7 +157,7 @@ def test_both_sealed_revisions_name_exact_evidence(case, field):
     config, record, path = case
     store = seal(record, path).model_copy(update={field: digest("other", 1, {})})
     with pytest.raises(ContractViolation, match="sealed"):
-        claude_host.sealed_plan(store, path, config)
+        claude_host.sealed_mode(store, path, config)
 
 
 def test_duplicate_json_does_not_become_a_passing_record(case):
@@ -165,7 +167,7 @@ def test_duplicate_json_does_not_become_a_passing_record(case):
     path.write_text('{"completed":false,' + raw[1:], encoding="utf-8")
     assert json.loads(path.read_text(encoding="utf-8"))["completed"] is True
     with pytest.raises(ContractViolation):
-        claude_host.sealed_plan(store, path, config)
+        claude_host.sealed_mode(store, path, config)
 
 
 def test_operator_provider_orders_exact_config_store_and_evidence_inputs(
@@ -196,7 +198,7 @@ def test_operator_provider_orders_exact_config_store_and_evidence_inputs(
 
     def evidence(actual_store: object, path: Path, actual_config: object):
         trace.append(("evidence", actual_store, path, actual_config))
-        return ClaudePlan.MAX
+        return ClaudeAuthMode.SUBSCRIPTION
 
     def provider(**kwargs: object):
         trace.append(("provider", kwargs))
@@ -204,7 +206,7 @@ def test_operator_provider_orders_exact_config_store_and_evidence_inputs(
 
     monkeypatch.setattr(claude_lane, "read_configuration", read)
     monkeypatch.setattr(claude_host, "_sealed_file", sealed)
-    monkeypatch.setattr(claude_host, "sealed_plan", evidence)
+    monkeypatch.setattr(claude_host, "sealed_mode", evidence)
     monkeypatch.setattr(claude_host, "identity_fields", lambda *args, **kwargs: {})
     monkeypatch.setattr(claude_host, "NativeOperatorLaunchIdentityV3", lambda **kwargs: kwargs)
     monkeypatch.setattr(claude_host, "BindingStore", lambda *args: args)
@@ -228,7 +230,7 @@ def test_operator_provider_orders_exact_config_store_and_evidence_inputs(
     assert result["workspace_provider"] is workspace
     assert result["binding_store"] == (host.store_root, host.store_key, store)
     assert result["closure"] is workspace.authority
-    assert result["selected_plan"] is ClaudePlan.MAX
+    assert result["mode"] is ClaudeAuthMode.SUBSCRIPTION
     assert result["qualification"] is authorization
     assert result["launcher"] == config.launcher(ClaudeMaintenanceSessionPhase.OBSERVE)
     assert result["egress"] == config.egress["observe"]
@@ -258,7 +260,7 @@ def test_operator_provider_refuses_before_downstream_reads_or_construction(
 
     monkeypatch.setattr(claude_lane, "read_configuration", read)
     monkeypatch.setattr(claude_host, "_sealed_file", sealed)
-    monkeypatch.setattr(claude_host, "sealed_plan", lambda *args: calls.append("evidence"))
+    monkeypatch.setattr(claude_host, "sealed_mode", lambda *args: calls.append("evidence"))
     monkeypatch.setattr(claude_host, "ClaudeOperatorProvider",
                         lambda **kwargs: calls.append("provider"))
     arguments = dict(workspace=SimpleNamespace(authority=object()),
@@ -293,7 +295,7 @@ def test_operator_provider_refuses_before_downstream_reads_or_construction(
         raise ContractViolation("not qualified")
 
     monkeypatch.setattr(claude_host, "_sealed_file", sealed)
-    monkeypatch.setattr(claude_host, "sealed_plan", bad_evidence)
+    monkeypatch.setattr(claude_host, "sealed_mode", bad_evidence)
     with pytest.raises(ContractViolation, match="not qualified"):
         claude_host.operator_provider(host, **arguments)
     assert calls == ["config", "sealed", "evidence"]

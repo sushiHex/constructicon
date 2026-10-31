@@ -299,7 +299,7 @@ def main():
             "operator_revision": commands.operator_revision(),
             "preparation": {
                 "installation_fields": list(commands.INSTALLATION_FIELDS),
-                "installation_schema_version": 1,
+                "installation_schema_version": 2,
                 "installation_pin_fields": sorted(commands.PIN_KEYS),
                 "operator_home": "/home/OPERATOR",
                 "actor": "trusted transport actor",

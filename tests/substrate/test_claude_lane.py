@@ -36,9 +36,9 @@ from constructicon.substrate.executors.claude_native import ClaudeNativeRecipe
 from constructicon.substrate.executors.claude_native_events import ClaudeSystemRecordCategory
 from constructicon.substrate.executors.claude_protocol import (
     ClaudeApiKeySourceCategory,
+    ClaudeAuthMode,
     ClaudeInitializeVerdict,
     ClaudeModeMismatchReason,
-    ClaudePlan,
     ClaudeTokenSourceCategory,
 )
 from constructicon.substrate.executors.claude_startup import (
@@ -152,8 +152,8 @@ def test_closed_config_selects_only_paired_launcher_and_phase_egress(tmp_path):
     )
 
 
-@pytest.mark.parametrize("name,expected", [("pro", ClaudePlan.PRO), ("max", ClaudePlan.MAX)])
-def test_actual_qualification_record_seals_for_exact_plan(tmp_path, name, expected):
+@pytest.mark.parametrize("name,expected", [("subscription", ClaudeAuthMode.SUBSCRIPTION)])
+def test_actual_qualification_record_seals_subscription_mode(tmp_path, name, expected):
     from constructicon.substrate.executors import claude_host
     from tests.substrate.test_claude_host import seal
 
@@ -162,19 +162,20 @@ def test_actual_qualification_record_seals_for_exact_plan(tmp_path, name, expect
         path, expected_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
     )
     phase = ClaudeMaintenanceSessionPhase.QUALIFY
-    plan = ClaudePlan.PRO if name == "pro" else ClaudePlan.MAX
+    plan = expected
     record = claude_lane._record(
         facts(phase), loaded.launcher(phase), loaded.egress["observe"], loaded,
-        selected_plan=plan,
+        mode=plan,
     )
     record["completed"] = True
     evidence = tmp_path / "actual-qualification.json"
-    assert claude_host.sealed_plan(seal(record, evidence), evidence, loaded) is expected
+    assert record["facts"]["qualification"]["mode"] == expected.value
+    assert claude_host.sealed_mode(seal(record, evidence), evidence, loaded) is expected
 
 
 @pytest.mark.parametrize("source", [
     "claude_startup_qualification.py", "claude_initialize.py",
-    "identity.py", "_lifetime.py",
+    "identity.py", "_lifetime.py", "linux.py", "claude_native.py", "egress.py",
 ])
 def test_qualification_revision_binds_actual_source_bytes(monkeypatch, source):
     initial = claude_lane.qualification_revision()
@@ -211,7 +212,7 @@ def test_refused_qualification_retains_bounded_partial_facts(tmp_path):
                       process_clean=False)
     record = claude_lane._record(
         partial, loaded.launcher(phase), loaded.egress["observe"], loaded,
-        selected_plan=ClaudePlan.PRO,
+        mode=ClaudeAuthMode.SUBSCRIPTION,
     )
     assert record["facts"]["lifecycle"] == "refused"
     assert record["facts"]["process_clean"] is False
@@ -411,8 +412,8 @@ def test_main_reserves_evidence_and_publishes_only_finite_unqualified_facts(
         remaining = kwargs["deadline"] - asyncio.get_running_loop().time()
         assert 0 < remaining <= (600 if phase is ClaudeMaintenanceSessionPhase.LOGIN else 120)
         assert (kwargs["operator"] is not None) == (phase is ClaudeMaintenanceSessionPhase.LOGIN)
-        assert kwargs["selected_plan"] == (
-            None if phase is ClaudeMaintenanceSessionPhase.LOGIN else ClaudePlan.PRO
+        assert kwargs["mode"] == (
+            None if phase is ClaudeMaintenanceSessionPhase.LOGIN else ClaudeAuthMode.SUBSCRIPTION
         )
         assert launcher.claude_recipe is (
             ClaudeNativeRecipe.LOGIN if phase is ClaudeMaintenanceSessionPhase.LOGIN
@@ -438,7 +439,7 @@ def test_main_reserves_evidence_and_publishes_only_finite_unqualified_facts(
     monkeypatch.setattr(claude_lane, "ClaudeOperatorFDIO", PrivateIO)
     monkeypatch.setattr(claude_lane, "run_maintenance_session", engine)
     monkeypatch.setattr(claude_lane.EvidenceFile, "publish", publish)
-    selector = [] if phase is ClaudeMaintenanceSessionPhase.LOGIN else ["--selected-plan", "pro"]
+    selector = [] if phase is ClaudeMaintenanceSessionPhase.LOGIN else ["--mode", "subscription"]
     assert claude_lane.main(args(tmp_path, phase.value, *selector)) == 0
     assert capsys.readouterr().out == ""
     first = "private" if phase is ClaudeMaintenanceSessionPhase.LOGIN else "custody"
@@ -497,10 +498,12 @@ def test_main_failure_abandons_reservation_without_leaking_private_exception(
 
 
 @pytest.mark.parametrize(("phase", "extra"), [
-    ("observe", ("--first-login", "--selected-plan", "pro")),
+    ("observe", ("--first-login", "--mode", "subscription")),
     ("observe", ()),
+    ("observe", ("--selected-plan", "pro")),
+    ("observe", ("--mode", "pro")),
     ("reload", ()),
-    ("login", ("--selected-plan", "max")),
+    ("login", ("--mode", "subscription")),
     ("login", ("--command", "/bin/sh")),
 ])
 def test_cli_rejects_invalid_phase_options_with_static_text_before_effects(
@@ -529,7 +532,7 @@ def test_existing_evidence_refuses_before_store_or_engine(tmp_path, monkeypatch,
         raise AssertionError("store and engine must not be entered")
 
     monkeypatch.setattr(claude_lane, "inherit_maintenance", no_entry)
-    assert claude_lane.main(args(tmp_path, "observe", "--selected-plan", "pro")) == 1
+    assert claude_lane.main(args(tmp_path, "observe", "--mode", "subscription")) == 1
     assert capsys.readouterr().err == "Claude maintenance entry refused\n"
     assert (tmp_path / "evidence.json").read_text(encoding="utf-8") == "existing"
     assert entered == []
@@ -547,7 +550,7 @@ def test_wrong_reviewed_config_digest_refuses_before_reservation_or_store(
         raise AssertionError("store must not be entered")
 
     monkeypatch.setattr(claude_lane, "inherit_maintenance", no_entry)
-    command = args(tmp_path, "observe", "--selected-plan", "pro")
+    command = args(tmp_path, "observe", "--mode", "subscription")
     command[command.index("--launch-config-sha256") + 1] = "0" * 64
     assert claude_lane.main(command) == 1
     assert capsys.readouterr().err == "Claude maintenance entry refused\n"
@@ -566,7 +569,8 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
         facts(phase), loaded.launcher(phase),
         loaded.egress["observe" if phase is ClaudeMaintenanceSessionPhase.QUALIFY
                       else phase.value], loaded,
-        selected_plan=ClaudePlan.PRO if phase is ClaudeMaintenanceSessionPhase.QUALIFY else None,
+        mode=(ClaudeAuthMode.SUBSCRIPTION
+              if phase is ClaudeMaintenanceSessionPhase.QUALIFY else None),
     )
     published = tmp_path / "bounded-evidence.json"
     claude_lane.EvidenceFile(published, domain=claude_lane.EVIDENCE_DOMAIN).publish(record)
@@ -577,7 +581,7 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
         "launch_revision", "egress", "completed",
     } | ({"qualification_revision"} if phase is ClaudeMaintenanceSessionPhase.QUALIFY else set())
     assert record["completed"] is True
-    assert type(record["schema_version"]) is int and record["schema_version"] == 7
+    assert type(record["schema_version"]) is int and record["schema_version"] == 8
     assert record["subscription_qualified"] is record["production_available"] is False
     for key in ("runtime_digest", "vendor_digest", "launch_revision", *(
         ("qualification_revision",) if phase is ClaudeMaintenanceSessionPhase.QUALIFY else ()
@@ -623,7 +627,7 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
                              "settings_mismatch_reason", "mode_mismatch_reason",
                              "token_source_category", "api_key_source_category",
                              "hooks_verdict", "request_writes", "ui_records",
-                             "stdin_closed", "eof", "selected_plan", "model", "effort"}
+                             "stdin_closed", "eof", "mode", "model", "effort"}
         assert qual["lifecycle"] in {item.value for item in ClaudeQualificationLifecycle}
         assert qual["initialize_verdict"] in {
             item.value for item in ClaudeInitializeVerdict
@@ -639,7 +643,7 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
         assert type(qual["request_writes"]) is int and 0 <= qual["request_writes"] <= 3
         assert type(qual["ui_records"]) is int and 0 <= qual["ui_records"] <= 8
         assert type(qual["stdin_closed"]) is type(qual["eof"]) is bool
-        assert qual["selected_plan"] in {"pro", "max"}
+        assert qual["mode"] == "subscription"
         assert qual["model"] == loaded.model and qual["effort"] == loaded.effort
     else:
         assert public["login"] is None
@@ -794,7 +798,7 @@ def test_public_qualification_reason_has_only_its_declared_finite_value(tmp_path
         replace(original, lifecycle=ClaudeMaintenanceSessionLifecycle.REFUSED,
                 qualification=qualification),
         config.launcher(ClaudeMaintenanceSessionPhase.QUALIFY), config.egress["observe"],
-        config, selected_plan=ClaudePlan.MAX,
+        config, mode=ClaudeAuthMode.SUBSCRIPTION,
     )
     public = record["facts"]["qualification"]
     assert public["settings_mismatch_reason"] == reason.value
@@ -802,6 +806,6 @@ def test_public_qualification_reason_has_only_its_declared_finite_value(tmp_path
         "lifecycle", "initialize_verdict", "settings_verdict", "settings_mismatch_reason",
         "mode_mismatch_reason", "token_source_category", "api_key_source_category",
         "hooks_verdict", "request_writes", "ui_records", "stdin_closed", "eof",
-        "selected_plan", "model", "effort",
+        "mode", "model", "effort",
     }
     assert len(public["settings_mismatch_reason"]) <= 24

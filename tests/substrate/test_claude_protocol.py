@@ -32,14 +32,14 @@ def wire(value):
     return json.dumps(value, ensure_ascii=True, separators=(",", ":")).encode() + b"\n"
 
 
-def judge(record, plan=None):
+def judge(record, mode=protocol.ClaudeAuthMode.SUBSCRIPTION):
     try:
         return protocol.judge_initialize(
             record, expected_request_id="initialize-1",
-            selected_plan=protocol.ClaudePlan.PRO if plan is None else plan,
+            mode=mode,
         )
     except Exception:
-        if plan is not None and type(plan) is not protocol.ClaudePlan:
+        if type(mode) is not protocol.ClaudeAuthMode:
             raise
         raise AssertionError("valid codec arguments must return a finite verdict") from None
 
@@ -51,17 +51,76 @@ def classify(record, **kwargs):
         raise AssertionError("valid codec arguments must return finite diagnostics") from None
 
 
-@pytest.mark.parametrize("plan", ["PRO", "MAX"])
-def test_selected_plan_permits_exact_current_initialize(plan):
-    selected = protocol.ClaudePlan[plan]
-    result = judge(wire(reply(selected.value)), selected)
+@pytest.mark.parametrize("display", [
+    "Claude Pro", "Claude Max", "Claude Team", "Claude Enterprise", "Claude Custom",
+    "Claude A", "Claude 1", "Claude A+", "Claude A B", "Claude A.B", "Claude A+B",
+    "Claude A-B", "Claude A .+- B", "Claude API+", "Claude \u00c9", "Claude \u4e2d",
+    "Claude \u0661", "Claude \u2160", "Claude \u00b2", "Claude \U00010400",
+    "Claude A\u4e2dB", "Claude A\u2160B", "Claude A\u00b2B", "Claude A\U00010400B",
+    "Claude " + "A" * 40, "Claude " + "\U00010400" * 40,
+])
+def test_subscription_mode_accepts_native_display_grammar_without_inferred_tier(display):
+    result = judge(wire(reply(display)))
+    assert result is protocol.ClaudeInitializeVerdict.MODE_MATCH
+
+
+@pytest.mark.parametrize("display", [
+    "", "unknown", "Pro", "Claude", "Claude ", "ClaudeAPI", "Claude  Pro", "claude Pro",
+    "Claude\u00a0Pro", "Claude Pro ", "Claude Pro.", "Claude Pro-", "Claude +",
+    "Claude .", "Claude -", "Claude +A", "Claude .A", "Claude -A", "Claude A\tB",
+    "Claude A\nB", "Claude A\rB", "Claude A\u00a0B", "Claude A_B", "Claude A/B",
+    "Claude A\u2010B", "Claude A\uff0bB", "Claude A\u0301B", "Claude \u0301A",
+    "Claude A\u0301", "Claude A\u200dB", "Claude \U0001f600", "Claude A\U0001f600B",
+    "Claude A\uff0b", "Claude " + "A" * 41, "Claude " + "\U00010400" * 41,
+])
+def test_subscription_mode_refuses_forged_nonproducer_display_shapes(display):
+    raw = wire(reply(display))
+    assert judge(raw) is protocol.ClaudeInitializeVerdict.MODE_MISMATCH
+    assert classify(
+        raw, expected_request_id="initialize-1", mode=protocol.ClaudeAuthMode.SUBSCRIPTION,
+    ) == (protocol.ClaudeInitializeVerdict.MODE_MISMATCH,
+          protocol.ClaudeModeMismatchReason.SUBSCRIPTION_MISMATCH)
+
+
+def test_api_display_collision_always_refuses():
+    raw = wire(reply("Claude API"))
+    assert judge(raw) is protocol.ClaudeInitializeVerdict.MODE_MISMATCH
+    assert classify(
+        raw, expected_request_id="initialize-1", mode=protocol.ClaudeAuthMode.SUBSCRIPTION,
+    ) == (protocol.ClaudeInitializeVerdict.MODE_MISMATCH,
+          protocol.ClaudeModeMismatchReason.AMBIGUOUS_API)
+
+
+@pytest.mark.parametrize("display", ["Claude Pro", "Claude Max", "Claude Team",
+                                     "Claude Enterprise", "Claude Custom+"])
+@pytest.mark.parametrize("changes,reason", [
+    ({"apiProvider": "bedrock"}, protocol.ClaudeModeMismatchReason.PROVIDER_MISMATCH),
+    ({"tokenSource": None}, protocol.ClaudeModeMismatchReason.CREDENTIAL_SOURCE_PRESENT),
+    ({"apiKeySource": None}, protocol.ClaudeModeMismatchReason.CREDENTIAL_SOURCE_PRESENT),
+    ({"email": None}, protocol.ClaudeModeMismatchReason.ACCOUNT_VALUE_TYPE),
+    ({"new_native_field": "private-value"},
+     protocol.ClaudeModeMismatchReason.UNSUPPORTED_ACCOUNT_FIELD),
+])
+def test_compatible_displays_do_not_exempt_independent_account_guards(display, changes, reason):
+    value = reply(display)
+    value["response"]["response"]["account"].update(changes)
+    assert classify(
+        wire(value), expected_request_id="initialize-1", mode=protocol.ClaudeAuthMode.SUBSCRIPTION,
+    ) == (protocol.ClaudeInitializeVerdict.MODE_MISMATCH, reason)
+
+
+@pytest.mark.parametrize("display", ["Claude Pro", "Claude Max", "Claude Team",
+                                     "Claude Enterprise"])
+def test_shared_classifier_permits_compatible_subscription_displays(display):
+    selected = protocol.ClaudeAuthMode.SUBSCRIPTION
+    result = judge(wire(reply(display)), selected)
     assert result is protocol.ClaudeInitializeVerdict.MODE_MATCH
     assert classify(
-        wire(reply(selected.value)), expected_request_id="initialize-1", selected_plan=selected,
+        wire(reply(display)), expected_request_id="initialize-1", mode=selected,
     ) == (result, None)
 
 
-@pytest.mark.parametrize("plan", list(protocol.ClaudePlan))
+@pytest.mark.parametrize("mode", list(protocol.ClaudeAuthMode))
 @pytest.mark.parametrize("account,expected", [
     (None, "ACCOUNT_SHAPE"),
     ([], "ACCOUNT_SHAPE"),
@@ -76,16 +135,16 @@ def test_selected_plan_permits_exact_current_initialize(plan):
     ({"apiProvider": "firstParty", "subscriptionType": "Claude API",
       "email": "private-identity", "organization": "private-organization"}, "AMBIGUOUS_API"),
 ])
-def test_shared_classifier_preserves_refusal_categories_and_precedence(plan, account, expected):
+def test_shared_classifier_preserves_refusal_categories_and_precedence(mode, account, expected):
     value = reply()
     value["response"]["response"]["account"] = account
     raw = wire(value)
     result = classify(
-        raw, expected_request_id="initialize-1", selected_plan=plan,
+        raw, expected_request_id="initialize-1", mode=mode,
     )
     assert result == (protocol.ClaudeInitializeVerdict.MODE_MISMATCH,
                       protocol.ClaudeModeMismatchReason[expected])
-    assert judge(raw, plan) is result[0]
+    assert judge(raw, mode) is result[0]
     assert "private" not in repr(result)
 
 
@@ -117,7 +176,7 @@ def test_non_mode_refusals_never_publish_account_reason(damage, expected):
     elif damage == "bound":
         raw = b" " * protocol.RECORD_BYTES + raw
     result = classify(
-        raw, expected_request_id="initialize-1", selected_plan=protocol.ClaudePlan.PRO,
+        raw, expected_request_id="initialize-1", mode=protocol.ClaudeAuthMode.SUBSCRIPTION,
     )
     assert result == (protocol.ClaudeInitializeVerdict[expected], None)
     assert judge(raw) is result[0]
@@ -138,19 +197,19 @@ def test_builder_and_judgment_argument_types_are_strict_and_static():
     class StringSubclass(str):
         pass
 
-    class OtherPlan(StrEnum):
-        PRO = "Claude Pro"
+    class OtherMode(StrEnum):
+        SUBSCRIPTION = "subscription"
 
     with pytest.raises(ValueError, match=r"^invalid initialize request id$"):
         protocol.initialize_request(StringSubclass("initialize-1"))
-    with pytest.raises(ValueError, match=r"^invalid selected Claude plan$"):
-        judge(wire(reply()), OtherPlan.PRO)
-    with pytest.raises(ValueError, match=r"^invalid selected Claude plan$"):
-        judge(wire(reply()), "Claude Pro")
+    with pytest.raises(ValueError, match=r"^invalid Claude authentication mode$"):
+        judge(wire(reply()), OtherMode.SUBSCRIPTION)
+    with pytest.raises(ValueError, match=r"^invalid Claude authentication mode$"):
+        judge(wire(reply()), "subscription")
     with pytest.raises(ValueError, match=r"^invalid initialize request id$"):
         protocol.judge_initialize(
             wire(reply()), expected_request_id="secret\ud800",
-            selected_plan=protocol.ClaudePlan.PRO,
+            mode=protocol.ClaudeAuthMode.SUBSCRIPTION,
         )
 
 
@@ -165,10 +224,12 @@ def test_request_invalid_arguments_have_static_errors(request_id):
     assert caught.value.__cause__ is None
 
 
-def test_other_subscription_plan_is_not_a_fallback():
-    assert judge(wire(reply("Claude Max"))) is protocol.ClaudeInitializeVerdict.MODE_MISMATCH
-    result = judge(wire(reply()), protocol.ClaudePlan.MAX)
-    assert result is protocol.ClaudeInitializeVerdict.MODE_MISMATCH
+@pytest.mark.parametrize("mode", [None, True, 1, "subscription", "unknown", [], {}])
+@pytest.mark.parametrize("entrypoint", [protocol.judge_initialize, protocol.classify_initialize,
+                                       protocol.observe_initialize])
+def test_unknown_authentication_modes_refuse_before_classification(mode, entrypoint):
+    with pytest.raises(ValueError, match=r"^invalid Claude authentication mode$"):
+        entrypoint(wire(reply()), expected_request_id="initialize-1", mode=mode)
 
 
 @pytest.mark.parametrize("provider", ["bedrock", "vertex", "foundry", "anthropicAws",
@@ -179,9 +240,11 @@ def test_every_other_provider_refuses(provider):
     assert judge(wire(value)) is protocol.ClaudeInitializeVerdict.MODE_MISMATCH
 
 
-@pytest.mark.parametrize("plan", ["Claude Team", "Claude Enterprise", "Claude API", "", "unknown"])
-def test_every_unselected_plan_refuses(plan):
-    assert judge(wire(reply(plan))) is protocol.ClaudeInitializeVerdict.MODE_MISMATCH
+@pytest.mark.parametrize("entrypoint", [protocol.judge_initialize, protocol.classify_initialize,
+                                       protocol.observe_initialize])
+def test_legacy_selected_plan_keyword_is_not_accepted(entrypoint):
+    with pytest.raises(TypeError, match="selected_plan"):
+        entrypoint(wire(reply()), expected_request_id="initialize-1", selected_plan="Claude Pro")
 
 
 @pytest.mark.parametrize("field", ["tokenSource", "apiKeySource"])
@@ -414,4 +477,5 @@ def test_every_published_verdict_is_finite_and_privacy_safe():
         "request-mismatch", "initialize-error", "initialize-busy", "mode-mismatch",
     }
     assert max(len(item.value.encode()) for item in protocol.ClaudeInitializeVerdict) <= 16
-    assert {item.value for item in protocol.ClaudePlan} == {"Claude Pro", "Claude Max"}
+    assert {item.value for item in protocol.ClaudeAuthMode} == {"subscription"}
+    assert not hasattr(protocol, "ClaudePlan")

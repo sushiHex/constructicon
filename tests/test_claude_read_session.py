@@ -34,12 +34,12 @@ def binding_record():
         AUTHORIZATION_ID="fixture-read",
     )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "controller_commit": "4adb8298bb933c4fac1894308ad9b4e39823c19d",
         "namespace": "fixture-read-session",
         "controller_workspace": "/home/fixture/controller",
         "launch_workspace": "/home/fixture/launch",
-        "selected_plan": "pro",
+        "mode": "subscription",
         "values": values,
         "pins": {
             "launch_commit": "1" * 40,
@@ -159,12 +159,14 @@ def test_isolated_real_entry_compiles_exclusive_package(tmp_path):
     )
     assert pins["controller_commit"] == record["controller_commit"]
     assert pins["operator_revision"] == commands.operator_revision()
-    assert bound.selected_plan == "pro" and pins["controller_commit"] != pins["operator_revision"]
+    assert bound.mode == "subscription" and pins["controller_commit"] != pins["operator_revision"]
     repeated = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, check=False)
     assert repeated.returncode == 1
 
 
-@pytest.mark.parametrize("fault", ["extra", "size-bool", "unsafe-path", "plan", "drift"])
+@pytest.mark.parametrize(
+    "fault", ["extra", "size-bool", "unsafe-path", "plan", "legacy-field", "schema", "drift"],
+)
 def test_binding_shape_refuses_unknown_or_unsafe_data(fault):
     record = binding_record()
     if fault == "extra":
@@ -174,7 +176,11 @@ def test_binding_shape_refuses_unknown_or_unsafe_data(fault):
     elif fault == "unsafe-path":
         record["controller_workspace"] = "/home/fixture/../other"
     elif fault == "plan":
-        record["selected_plan"] = "unknown"
+        record["mode"] = "pro"
+    elif fault == "legacy-field":
+        record["selected_plan"] = record.pop("mode")
+    elif fault == "schema":
+        record["schema_version"] = 1
     else:
         record["pins"]["drift_stdout"] = "unbounded\nextra\n"
     with pytest.raises(commands.Refused):
@@ -189,7 +195,10 @@ def test_phase_owns_producer_and_consumer_marker(consumer_world):
     assert record["pins"]["checker_sha256"].encode() in checker
     assert b"0o444" in checker and b"0o555" in checker
     assert "installed_checker_custody" not in commands.PHASES["checker-verify"].checks
-    assert b" reload " in commands.compile_phase(bindings, "reload", evidence)
+    reload_script = commands.compile_phase(bindings, "reload", evidence)
+    assert b" reload " in reload_script
+    assert b"--mode subscription" in reload_script
+    assert b"--selected-plan" not in reload_script
     with pytest.raises(TypeError):
         commands.phase_receipt(
             evidence, bindings.expanded(), "controller-verify", expected_stdout=b""
@@ -518,11 +527,11 @@ def _prepare_cli(*args):
 
 def _installation(record):
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "controller_commit": record["controller_commit"],
         "controller_workspace": record["controller_workspace"],
         "launch_workspace": record["launch_workspace"],
-        "selected_plan": record["selected_plan"],
+        "mode": record["mode"],
         "pins": record["pins"],
         "operator_home": "/home/fixture",
         "actor": record["values"]["ACTOR"],

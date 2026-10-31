@@ -64,7 +64,7 @@ from constructicon.substrate.executors.claude_native import (
     ClaudeNativeRecipe,
     ClaudeNativeStoreMount,
 )
-from constructicon.substrate.executors.claude_protocol import ClaudePlan
+from constructicon.substrate.executors.claude_protocol import ClaudeAuthMode
 from constructicon.substrate.executors.claude_read_worker import (
     READ_WORKER_LIMITS,
     ClaudeReadWorker,
@@ -103,14 +103,14 @@ class _LocalClose(ContractViolation):
 def identity_fields(
     launcher: LinuxLauncher, worker_launcher: LinuxLauncher, *,
     workspace_provider: ContainedWorkspaceProvider, workspace_capability_id: str,
-    workspace_revision: str, selected_plan: ClaudePlan,
+    workspace_revision: str, mode: ClaudeAuthMode,
     expected_base: GitSha,
 ) -> dict[str, Digest]:
     """Actual recipe facts; conformance remains an independent assembly input."""
     fields = _recipe_fields(
         launcher, worker_launcher, workspace_provider=workspace_provider,
         workspace_capability_id=workspace_capability_id, workspace_revision=workspace_revision,
-        selected_plan=selected_plan,
+        mode=mode,
         expected_base=expected_base,
     )
     assert launcher.claude is not None
@@ -124,7 +124,7 @@ def identity_fields(
 def _recipe_fields(
     launcher: LinuxLauncher, worker_launcher: LinuxLauncher, *,
     workspace_provider: ContainedWorkspaceProvider, workspace_capability_id: str,
-    workspace_revision: str, selected_plan: ClaudePlan,
+    workspace_revision: str, mode: ClaudeAuthMode,
     expected_base: GitSha,
 ) -> dict[str, Digest]:
     vendor = launcher.claude
@@ -142,7 +142,7 @@ def _recipe_fields(
                                      (launcher.revision, worker_launcher.revision,
                                       workspace_provider.launcher.revision)),
         "configuration_digest": digest("claude-read-configuration", 1, {
-            "command": vendor.command, "plan": selected_plan.value,
+            "command": vendor.command, "mode": mode.value,
             "workspace_capability_id": workspace_capability_id,
             "workspace_revision": workspace_revision,
             "workspace_provider_id": workspace_provider.provider_id,
@@ -166,12 +166,12 @@ class ClaudeOperatorProvider:
         binding_store: BindingStore, closure: AcquisitionClosure,
         workspace_provider: ContainedWorkspaceProvider, workspace_capability_id: str,
         workspace_revision: str, acquisition_root: Path, egress: EgressPolicy,
-        selected_plan: ClaudePlan, expected_base: GitSha,
+        mode: ClaudeAuthMode, expected_base: GitSha,
         qualification: QualificationAuthorization | None = None,
     ) -> None:
         if (type(launcher) is not LinuxLauncher or type(worker_launcher) is not LinuxLauncher
                 or type(workspace_provider) is not ContainedWorkspaceProvider
-                or type(selected_plan) is not ClaudePlan
+                or type(mode) is not ClaudeAuthMode
                 or launcher.claude is None or launcher.vendor is not None
                 or launcher.claude_recipe is not ClaudeNativeRecipe.STREAM_JSON
                 or worker_launcher.vendor is not None or worker_launcher.claude is not None
@@ -208,7 +208,7 @@ class ClaudeOperatorProvider:
             workspace_capability_id, workspace_revision,
         )
         self.acquisition_root = acquisition_root
-        self.egress, self.selected_plan = egress, selected_plan
+        self.egress, self.mode = egress, mode
         self.expected_base = expected_base
         if qualification is not None:
             try:
@@ -234,7 +234,7 @@ class ClaudeOperatorProvider:
         fields = identity_fields(
             launcher, worker_launcher, workspace_provider=workspace_provider,
             workspace_capability_id=workspace_capability_id, workspace_revision=workspace_revision,
-            selected_plan=selected_plan,
+            mode=mode,
             expected_base=expected_base,
         )
         if any(getattr(identity, name) != value for name, value in fields.items()):
@@ -263,7 +263,7 @@ class ClaudeOperatorProvider:
                 workspace, workspace.root, workspace.authority, workspace.authority._repo,
                 workspace.launcher,
                 workspace.closure, workspace.closure.authority, self.acquisition_root,
-                self.qualification, self.egress, self.selected_plan, self.expected_base)
+                self.qualification, self.egress, self.mode, self.expected_base)
 
     def _check_sealed(self) -> None:
         if self._custody_facts() != self._custody:
@@ -271,7 +271,7 @@ class ClaudeOperatorProvider:
         fields = _recipe_fields(
             self.launcher, self.worker_launcher, workspace_provider=self.workspace_provider,
             workspace_capability_id=self.workspace_capability_id,
-            workspace_revision=self.workspace_revision, selected_plan=self.selected_plan,
+            workspace_revision=self.workspace_revision, mode=self.mode,
             expected_base=self.expected_base,
         )
         if (self.profile != self.identity.profile
@@ -635,7 +635,7 @@ class ClaudeOperatorHandle:
                 )
                 outcome = await claude_read.run_read_transaction(
                     self.provider.launcher, vendor.command, task,
-                    selected_plan=self.provider.selected_plan, model=vendor.model,
+                    mode=self.provider.mode, model=vendor.model,
                     effort=vendor.effort, worker=read,
                     guard_fds=(self._guard_fd, self._held.lock_fd),
                     timeout_s=self._deadline - asyncio.get_running_loop().time(),
@@ -764,7 +764,7 @@ class ClaudeOperatorHandle:
 
 def _protocol_revision() -> Digest:
     """Bind the complete decoder and closed observation vocabulary."""
-    return digest("claude-read-protocol", 2, {
+    return digest("claude-read-protocol", 3, {
         module.__name__: inspect.getsource(module)
         for module in (claude_protocol, claude_startup, claude_read,
                        claude_initialize, claude_native_events, claude_read_observation)
@@ -772,7 +772,7 @@ def _protocol_revision() -> Digest:
 
 
 PROTOCOL_REVISION = _protocol_revision()
-ADAPTER_REVISION = digest("claude-read-owned-adapter", 2, {
+ADAPTER_REVISION = digest("claude-read-owned-adapter", 3, {
     module.__name__: inspect.getsource(module)
     for module in (sys.modules[__name__], claude_read_worker, claude_native,
                    attempt_record, qualification_law)

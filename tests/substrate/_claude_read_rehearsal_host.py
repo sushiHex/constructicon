@@ -402,9 +402,9 @@ def provision() -> None:
     # Parents are deliberately left absent: the generated parents phase creates them.
     provision_drift()
     from scripts.ops import claude_read_commands as commands
-    record = {"schema_version": 1, "controller_commit": commit, "namespace": "read-rehearsal",
+    record = {"schema_version": 2, "controller_commit": commit, "namespace": "read-rehearsal",
               "controller_workspace": str(CONTROLLER), "launch_workspace": str(LAUNCH),
-              "selected_plan": "pro", "values": {
+              "mode": "subscription", "values": {
                   **{key: "UNREVIEWED" for key in commands.LATE},
                   "EXPECTED_BOOT": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
                   "R": str(CAPTURE), "RUN": str(RUN), "AUTH": str(AUTH), "ACQ": str(ACQ),

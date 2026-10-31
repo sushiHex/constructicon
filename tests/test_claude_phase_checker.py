@@ -22,7 +22,7 @@ from constructicon.substrate.executors.claude_maintenance_session import (
     ClaudeMaintenanceSessionPhase,
 )
 from constructicon.substrate.executors.claude_native_events import ClaudeSystemRecordCategory
-from constructicon.substrate.executors.claude_protocol import ClaudePlan
+from constructicon.substrate.executors.claude_protocol import ClaudeAuthMode
 from tests.substrate.test_claude_lane import configuration, facts
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/check_claude_phase.py"
@@ -33,7 +33,8 @@ def sample(tmp_path: Path, phase: ClaudeMaintenanceSessionPhase) -> tuple[Path, 
     loaded = claude_lane.read_configuration(
         config, expected_sha256=hashlib.sha256(config.read_bytes()).hexdigest(),
     )
-    selection = None if phase is ClaudeMaintenanceSessionPhase.LOGIN else ClaudePlan.MAX
+    selection = (None if phase is ClaudeMaintenanceSessionPhase.LOGIN
+                 else ClaudeAuthMode.SUBSCRIPTION)
     launcher = loaded.launcher(phase)
     observed = facts(phase)
     if observed.mode_observation is not None:
@@ -43,7 +44,7 @@ def sample(tmp_path: Path, phase: ClaudeMaintenanceSessionPhase) -> tuple[Path, 
     record = claude_lane._record(
         observed, launcher, loaded.egress["observe" if phase is
                                   ClaudeMaintenanceSessionPhase.QUALIFY else phase.value],
-        loaded, selected_plan=selection,
+        loaded, mode=selection,
     )
     record["completed"] = True
     evidence = tmp_path / "evidence.json"
@@ -78,7 +79,7 @@ def cli(
 @pytest.mark.parametrize("phase", list(ClaudeMaintenanceSessionPhase))
 def test_real_subprocess_positive_cli_only_prints_digest(tmp_path: Path, phase):
     config, evidence, loaded = sample(tmp_path, phase)
-    extra = () if phase is ClaudeMaintenanceSessionPhase.LOGIN else ("--selected-plan", "max")
+    extra = () if phase is ClaudeMaintenanceSessionPhase.LOGIN else ("--mode", "subscription")
     result = cli(config, evidence, phase.value, *extra)
     assert result.returncode == 0 and result.stderr == b""
     assert result.stdout.splitlines() == [str(digest(
@@ -86,14 +87,14 @@ def test_real_subprocess_positive_cli_only_prints_digest(tmp_path: Path, phase):
     )).encode()]
     assert checker.validate_phase_evidence(
         phase, evidence, loaded, None if phase is ClaudeMaintenanceSessionPhase.LOGIN
-        else ClaudePlan.MAX,
+        else ClaudeAuthMode.SUBSCRIPTION,
     )
 
 
 @pytest.mark.parametrize("code", ["partial-record", None])
 def test_refusal_cli_is_bounded_diagnostic_never_positive(tmp_path: Path, code):
     config, evidence, loaded = refused(tmp_path, code)
-    result = cli(config, evidence, "observe", "--selected-plan", "max",
+    result = cli(config, evidence, "observe", "--mode", "subscription",
                  "--diagnose-refusal")
     assert result.returncode == 0 and result.stderr == b""
     diagnostic = json.loads(result.stdout)
@@ -110,10 +111,10 @@ def test_refusal_cli_is_bounded_diagnostic_never_positive(tmp_path: Path, code):
         claude_lane.EVIDENCE_DOMAIN, 1, json.loads(evidence.read_text()),
     ))
     observed = checker.diagnose_refused_mode(
-        ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudePlan.MAX,
+        ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudeAuthMode.SUBSCRIPTION,
     )
     assert (None if observed.refusal_code is None else observed.refusal_code.value) == code
-    positive = cli(config, evidence, "observe", "--selected-plan", "max")
+    positive = cli(config, evidence, "observe", "--mode", "subscription")
     assert positive.returncode == 1 and positive.stdout == b""
 
 
@@ -138,20 +139,20 @@ def test_generic_observer_refusal_before_or_after_classification(
                 api_key_source_category=("absent" if verdict == "mode-match" else None))
     evidence.write_text(json.dumps(record), encoding="utf-8")
     diagnostic = checker.diagnose_refused_mode(
-        ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudePlan.MAX,
+        ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudeAuthMode.SUBSCRIPTION,
     )
     assert (None if diagnostic.mode_verdict is None else diagnostic.mode_verdict.value) == verdict
     assert diagnostic.reason is None
     assert (None if diagnostic.refusal_code is None else diagnostic.refusal_code.value) == code
     assert diagnostic.classified_responses == classified
     assert diagnostic.request_writes == writes
-    result = cli(config, evidence, "observe", "--selected-plan", "max",
+    result = cli(config, evidence, "observe", "--mode", "subscription",
                  "--diagnose-refusal")
     assert result.returncode == 0 and result.stderr == b""
     published = json.loads(result.stdout)
     assert published["mode_verdict"] == verdict
     assert published["reason"] is None and published["refusal_code"] == code
-    positive = cli(config, evidence, "observe", "--selected-plan", "max")
+    positive = cli(config, evidence, "observe", "--mode", "subscription")
     assert positive.returncode == 1 and positive.stdout == b""
 
 
@@ -171,7 +172,7 @@ def test_generic_diagnostic_rejects_inconsistent_classification(
         classified_responses=classified,
     )
     evidence.write_text(json.dumps(record), encoding="utf-8")
-    result = cli(config, evidence, "observe", "--selected-plan", "max",
+    result = cli(config, evidence, "observe", "--mode", "subscription",
                  "--diagnose-refusal")
     assert result.returncode == 1 and result.stdout == b""
 
@@ -180,18 +181,18 @@ def test_generic_diagnostic_rejects_inconsistent_classification(
 def test_each_refusal_code_is_closed_and_never_a_positive_receipt(tmp_path: Path, code):
     _, evidence, loaded = refused(tmp_path, code.value)
     observed = checker.diagnose_refused_mode(
-        ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudePlan.MAX,
+        ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudeAuthMode.SUBSCRIPTION,
     )
     assert observed.refusal_code is code
     with pytest.raises(checker._Refused):
         checker.validate_phase_evidence(
-            ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudePlan.MAX,
+            ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudeAuthMode.SUBSCRIPTION,
         )
 
 
 def test_diagnostic_switch_cannot_approve_positive(tmp_path: Path):
     config, evidence, _ = sample(tmp_path, ClaudeMaintenanceSessionPhase.OBSERVE)
-    result = cli(config, evidence, "observe", "--selected-plan", "max",
+    result = cli(config, evidence, "observe", "--mode", "subscription",
                  "--diagnose-refusal")
     assert result.returncode == 1 and result.stdout == b""
     assert result.stderr.splitlines() == [b"Claude phase evidence refused"]
@@ -202,7 +203,7 @@ def test_positive_mode_with_refusal_code_cannot_publish(tmp_path: Path):
     record = json.loads(evidence.read_text())
     record["facts"]["mode"]["refusal_code"] = "partial-record"
     evidence.write_text(json.dumps(record), encoding="utf-8")
-    result = cli(config, evidence, "observe", "--selected-plan", "max")
+    result = cli(config, evidence, "observe", "--mode", "subscription")
     assert result.returncode == 1 and result.stdout == b""
 
 
@@ -225,18 +226,19 @@ def test_refusal_rejects_old_or_unbounded_or_wrong_identity(tmp_path: Path, dama
     else:
         record["launch_revision"] = "private-sentinel"
     evidence.write_text(json.dumps(record), encoding="utf-8")
-    result = cli(config, evidence, "observe", "--selected-plan", "max",
+    result = cli(config, evidence, "observe", "--mode", "subscription",
                  "--diagnose-refusal")
     assert result.returncode == 1 and result.stdout == b""
     assert result.stderr.splitlines() == [b"Claude phase evidence refused"]
     assert b"private-sentinel" not in result.stderr
 
 
-def test_cli_rejects_missing_or_wrong_selected_plan(tmp_path: Path):
+def test_cli_rejects_missing_or_wrong_mode(tmp_path: Path):
     config, evidence, _ = sample(tmp_path, ClaudeMaintenanceSessionPhase.OBSERVE)
-    for extra in ((), ("--selected-plan", "pro"), ("--selected-plan", "max", "--other")):
+    for extra in ((), ("--selected-plan", "pro"), ("--mode", "pro"),
+                  ("--mode", "subscription"), ("--mode", "subscription", "--other")):
         result = cli(config, evidence, "observe", *extra)
-        if extra == ("--selected-plan", "pro"):
+        if extra == ("--mode", "subscription"):
             # Observe has no plan attestation in the record; the reviewed command owns it.
             assert result.returncode == 0
         else:
@@ -260,7 +262,7 @@ def refused_qualification(tmp_path, reason="effort-mismatch", process_clean=True
 @pytest.mark.parametrize("process_clean", [True, False])
 def test_refused_qualification_cli_is_finite_and_never_positive(tmp_path, reason, process_clean):
     config, evidence, loaded = refused_qualification(tmp_path, reason.value, process_clean)
-    result = cli(config, evidence, "qualify", "--selected-plan", "max", "--diagnose-refusal")
+    result = cli(config, evidence, "qualify", "--mode", "subscription", "--diagnose-refusal")
     assert result.returncode == 0 and result.stderr == b""
     assert json.loads(result.stdout) == {
         "settings_verdict": "configuration-mismatch", "reason": reason.value,
@@ -272,9 +274,9 @@ def test_refused_qualification_cli_is_finite_and_never_positive(tmp_path, reason
     }
     with pytest.raises(ContractViolation):
         checker.validate_phase_evidence(
-            ClaudeMaintenanceSessionPhase.QUALIFY, evidence, loaded, ClaudePlan.MAX,
+            ClaudeMaintenanceSessionPhase.QUALIFY, evidence, loaded, ClaudeAuthMode.SUBSCRIPTION,
         )
-    positive = cli(config, evidence, "qualify", "--selected-plan", "max")
+    positive = cli(config, evidence, "qualify", "--mode", "subscription")
     assert positive.returncode == 1 and positive.stdout == b""
 
 
@@ -318,14 +320,14 @@ def test_qualification_diagnostic_requires_closed_current_consistent_evidence(tm
     elif damage == "missing-initialize":
         qualification["initialize_verdict"] = None
     elif damage == "wrong-plan":
-        qualification["selected_plan"] = "pro"
+        qualification["mode"] = "pro"
     elif damage == "extra":
         qualification["private-sentinel"] = "secret"
     else:
         facts["lifecycle"] = "joined-clean"
         qualification["lifecycle"] = "qualified"
     evidence.write_text(json.dumps(record), encoding="utf-8")
-    result = cli(config, evidence, "qualify", "--selected-plan", "max", "--diagnose-refusal")
+    result = cli(config, evidence, "qualify", "--mode", "subscription", "--diagnose-refusal")
     assert result.returncode == 1 and result.stdout == b""
     assert result.stderr.splitlines() == [b"Claude phase evidence refused"]
     assert b"private-sentinel" not in result.stderr
@@ -340,7 +342,7 @@ def test_qualification_diagnostic_keeps_unobserved_settings_absent(tmp_path):
         request_writes=1,
     )
     evidence.write_text(json.dumps(record), encoding="utf-8")
-    result = cli(config, evidence, "qualify", "--selected-plan", "max", "--diagnose-refusal")
+    result = cli(config, evidence, "qualify", "--mode", "subscription", "--diagnose-refusal")
     assert result.returncode == 0 and result.stderr == b""
     diagnostic = json.loads(result.stdout)
     assert diagnostic["settings_verdict"] is diagnostic["reason"] is None
@@ -361,7 +363,7 @@ def test_historical_qualification_is_preserved_without_invented_reason(tmp_path,
     legacy = json.dumps(record, separators=(",", ":")).encode()
     evidence.write_bytes(legacy)
     for extra in ((), ("--diagnose-refusal",)):
-        result = cli(config, evidence, "qualify", "--selected-plan", "max", *extra)
+        result = cli(config, evidence, "qualify", "--mode", "subscription", *extra)
         assert result.returncode == 1 and result.stdout == b""
         assert result.stderr.splitlines() == [b"Claude phase evidence refused"]
         assert evidence.read_bytes() == legacy
@@ -379,7 +381,7 @@ def test_qualification_initialize_refusal_has_exact_closed_reason_and_source_cat
         request_writes=1, stdin_closed=False, eof=False,
     )
     evidence.write_text(json.dumps(record), encoding="utf-8")
-    result = cli(config, evidence, "qualify", "--selected-plan", "max", "--diagnose-refusal")
+    result = cli(config, evidence, "qualify", "--mode", "subscription", "--diagnose-refusal")
     assert result.returncode == 0 and result.stderr == b""
     published = json.loads(result.stdout)
     assert published == {
@@ -388,12 +390,12 @@ def test_qualification_initialize_refusal_has_exact_closed_reason_and_source_cat
         "settings_verdict": None, "reason": None, "process_clean": True,
         "evidence_digest": str(digest(claude_lane.EVIDENCE_DOMAIN, 1, record)),
     }
-    observed = checker.diagnose_refused_qualification(evidence, loaded, ClaudePlan.MAX)
+    observed = checker.diagnose_refused_qualification(evidence, loaded, ClaudeAuthMode.SUBSCRIPTION)
     assert observed.mode_mismatch_reason.value == "credential-source-present"
     assert observed.token_source_category.value == "none"
     with pytest.raises(ContractViolation):
         checker.validate_phase_evidence(
-            ClaudeMaintenanceSessionPhase.QUALIFY, evidence, loaded, ClaudePlan.MAX,
+            ClaudeMaintenanceSessionPhase.QUALIFY, evidence, loaded, ClaudeAuthMode.SUBSCRIPTION,
         )
 
 
@@ -414,8 +416,8 @@ def test_strict_current_diagnostics_reject_unknown_cross_key_or_incoherent_tags(
     branch[field] = value
     evidence.write_text(json.dumps(record), encoding="utf-8")
     with pytest.raises((checker._Refused, ContractViolation)):
-        checker.validate_phase_evidence(selected, evidence, loaded, ClaudePlan.MAX)
-    result = cli(config, evidence, phase, "--selected-plan", "max")
+        checker.validate_phase_evidence(selected, evidence, loaded, ClaudeAuthMode.SUBSCRIPTION)
+    result = cli(config, evidence, phase, "--mode", "subscription")
     assert result.returncode == 1 and result.stdout == b""
     assert b"private-source-sentinel" not in result.stderr
 
@@ -430,7 +432,7 @@ def test_historical_mode_schema5_is_not_silently_upgraded(tmp_path):
     evidence.write_bytes(raw)
     with pytest.raises(checker._Refused):
         checker.validate_phase_evidence(
-            ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudePlan.MAX,
+            ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudeAuthMode.SUBSCRIPTION,
         )
     assert evidence.read_bytes() == raw
 
@@ -442,10 +444,10 @@ def test_rejected_system_category_survives_strict_mode_checker_and_cli(tmp_path,
     record["facts"]["mode"]["rejected_system_category"] = category.value
     evidence.write_text(json.dumps(record), encoding="utf-8")
     diagnostic = checker.diagnose_refused_mode(
-        ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudePlan.MAX,
+        ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudeAuthMode.SUBSCRIPTION,
     )
     assert diagnostic.rejected_system_category is category
-    result = cli(config, evidence, "observe", "--selected-plan", "max", "--diagnose-refusal")
+    result = cli(config, evidence, "observe", "--mode", "subscription", "--diagnose-refusal")
     assert result.returncode == 0 and result.stderr == b""
     public = json.loads(result.stdout)
     assert public["rejected_system_category"] == category.value
@@ -455,7 +457,7 @@ def test_rejected_system_category_survives_strict_mode_checker_and_cli(tmp_path,
     assert "private" not in result.stdout.decode()
     with pytest.raises(checker._Refused):
         checker.validate_phase_evidence(
-            ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudePlan.MAX,
+            ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudeAuthMode.SUBSCRIPTION,
         )
 
 
@@ -481,10 +483,10 @@ def test_rejected_category_requires_closed_current_same_fault_evidence(tmp_path,
     evidence.write_text(json.dumps(record), encoding="utf-8")
     with pytest.raises(checker._Refused):
         checker.diagnose_refused_mode(
-            ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudePlan.MAX,
+            ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudeAuthMode.SUBSCRIPTION,
         )
     for extra in ((), ("--diagnose-refusal",)):
-        result = cli(config, evidence, "observe", "--selected-plan", "max", *extra)
+        result = cli(config, evidence, "observe", "--mode", "subscription", *extra)
         assert result.returncode == 1 and result.stdout == b""
         assert result.stderr.splitlines() == [b"Claude phase evidence refused"]
 
@@ -498,7 +500,7 @@ def test_schema6_is_preserved_and_refused_without_inventing_system_category(tmp_
         del record["facts"]["mode"]["rejected_system_category"]
     raw = json.dumps(record, separators=(",", ":")).encode()
     evidence.write_bytes(raw)
-    selection = () if phase is ClaudeMaintenanceSessionPhase.LOGIN else ("--selected-plan", "max")
+    selection = () if phase is ClaudeMaintenanceSessionPhase.LOGIN else ("--mode", "subscription")
     for extra in ((), ("--diagnose-refusal",)):
         result = cli(config, evidence, phase.value, *selection, *extra)
         assert result.returncode == 1 and result.stdout == b""

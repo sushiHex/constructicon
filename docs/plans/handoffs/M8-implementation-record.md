@@ -10758,3 +10758,123 @@ is proposed compatibility hardening; no live billing bypass was demonstrated.
 A separate uncommitted hardening draft and focused fake evidence are retained,
 but no source change was committed or deployed. The older contract-acceptance
 request is paused pending the revised proposal; no expanded mode is accepted.
+
+## Subscription-mode implementation of the accepted successor
+
+PR #337 merged as fa0ffdde0a08352946a7929001a4d2358e58e2a8 after the owner
+accepted head 73c6919. Its accepted bytes remain unchanged. This implementation
+uses one ClaudeAuthMode.SUBSCRIPTION judge and producer-bounded display grammar,
+retains every independent account/source/provider/framing guard, and always
+refuses Claude API. Pro, Max, Team, Enterprise and valid custom display labels
+supply no inferred commercial-tier telemetry.
+
+Qualification evidence is schema 8; operator bindings and installation records
+are schema 2. The mode field and required --mode subscription replace the old
+tier selector. Legacy schemas/fields/flags refuse, rather than being re-certified.
+Protocol and adapter revisions advance, and qualification source revision v3
+binds launcher, native recipe and egress sources as well as the prior inventory.
+The preserved operator template is explicitly composed with the successor's
+selector; its historical bytes are not edited.
+
+The new profile deliberately tightens emitted env compatibility: absent keys
+remain permitted, while present values must equal their fixed values. The old
+names/types-only code matched its frozen contract. This is accepted hardening,
+not a demonstrated historical billed-key bypass and not proof of process-wide
+environment immutability. Launch artifact checking also refuses the native
+alternate key/token paths even when runtime content matches its admitted digest.
+Tests cover absent/file/directory/link entries. On Windows without symlink
+privilege, only that unavailable primitive is substituted; Linux exercises the
+real link.
+
+### Finite environment and policy proof
+
+A raw policy may apply an ordinary env key before helper fallback hides that key
+from get_settings. Do not infer assignment history from the final sources view.
+For the inspected authentication/routing/protected startup paths, the pinned
+2.1.296 source instead provides these independent restrictions:
+
+- Both safe/full application use filterSettingsEnv (B@211245795) before assign.
+  M checks V before ordinary/byoc acceptance (B@2112364xx); the only Ee exception
+  is false policy CLAUDE_CODE_TRANSCRIPT_LOCAL_GC (B@211235947).
+- V incorporates enn's OAuth/API/gateway/websocket/agent-proxy FD names
+  (B@208765832), q3e's Unix-socket/provider/host-auth selectors (B@208768227), and
+  explicit session/background/credential-file selectors. H removes additional
+  entrypoint/remote/SDK-refresh selectors.
+- y (B@211237006) case-folds and drops all initially held auth, provider,
+  base-URL, header, proxy/TLS and config-locator names. O.reset's only callback
+  is in a private unread registry (B@211252938, B@208662553); it is unreachable
+  in production. The separate pre-settings snapshot reset is not this latch.
+  Later special Kdt assignments reuse the filtered entries.
+- No new empty-valued FD/ingress flags are introduced: some absence predicates
+  use ?? rather than truthiness. Existing exclusions close these paths without
+  changing their semantics. Unrelated ordinary keys may remain in the process.
+- Account projection and model-client selection share enabled OAuth plus
+  user:inference (B@210441977, B@211113589); sSs selects apiKey=null for that
+  branch (B@211113673). Scope loss cannot obtain an alternate key/header from
+  the closed recipe. A both-null client refuses before sending. Fresh global
+  config/HOME/SDK directories and the explicit runtime-path guard close file
+  sources; primaryApiKey is written by login completion, not the READ input set.
+- Initial policy load and retained-hook replay precede the gate. The first actual
+  ordinary poll is at least one hour after timer creation, beyond the independent
+  nonrenewable supervisor deadline. Short helper retries cannot publish new
+  helper output without new process execution; absent/static-default state is
+  preserved on failure. Previously successful helper-serving state is not
+  silently included in that preservation claim. Null-state Gi also requires It
+  success before applying output.
+- Routine token refresh has no Nhn remote-policy reload. Other reload callers
+  are startup, explicit login and interactive sibling adoption. The fixed print
+  route returns through prepared-headless into runHeadless before REPL; its
+  private controller is never constructed (B@225736793, B@225708910,
+  B@238623477, B@239972131, export B@240000929).
+
+These are finite source facts for the pinned recipe, not universal guarantees
+about environment variables, future native builds or arbitrary managed policy.
+The driver keeps its two initializations, settings/hooks gates, MCP handshake,
+callback bounds, terminal checks and physical worker isolation.
+
+### Evidence and limits
+
+Focused shared-judge, consumer, schema/operator and actual isolated checker CLI
+tests passed in a checkout-local Python environment. Public accepting/refusing
+tests cover source-independent guards across display variants and matching-digest
+alternate runtime entries. All mutation targets and killing tests resolve and
+collect. Thirteen selected changed/new mutants were assertion-killed with matched
+baseline collection and stable source snapshots. Ruff and strict mypy for all
+147 source files passed after a test-import ordering correction.
+
+One independent Astra boundary review reproduced no consequential introduced
+defect and ran credential-free focused tests. Unicode L/N uses the executing
+controller Python's Unicode database; later unassigned code points refuse
+conservatively. Runtime digest alone does not identify that interpreter: the
+reviewed host/runtime installation verification compares the copied Python and
+library closure. Local tests used Python 3.11/UCD 14, not a claim about the
+installed Ubuntu Python 3.12 profile.
+
+The original foreign-editable interpreter attempt and the unsupported default
+free-threaded Python/Windows dependency setup failed before testing; they are
+not counted. The checkout-local Python 3.11 environment supplied the completed
+integration evidence. No vendor binary, credentials or model calls ran locally.
+Full final-head CI, including existing Linux physical lanes, remains the merge
+gate. This source change does not itself establish live READ success or qualify
+an installed controller; fresh installation, qualification and actual-pin review
+remain required. Issue #40 retains the delivery outcome.
+
+The first full CI inventory exposed two older environment mutants that no
+longer produced assertion kills after the new equality guard: an unknown key
+reached a lookup error, while an invalid type still refused by equality. The
+inventory now targets an independent exact-refusal regression: unknown-name
+precedence uses a non-string value, and exact-string typing uses an equal-valued
+string subclass. Both mutants were assertion-killed against matched passing
+baselines; the complete startup suite and focused Ruff check passed. Production
+code is unchanged by this correction. Final-head CI remains required.
+
+The subsequent foundation run found an introduced migration gap in the Linux
+operator rehearsal: its installation input retained schema 1 after its mode
+field was migrated. Full verification and the other physical lanes passed, but
+the rehearsal correctly refused that obsolete input. The shared rehearsal
+installation helper now emits schema 2, and a portable test drives that same
+helper through the actual isolated prepare-bindings CLI. This exposes profile
+input drift locally instead of depending only on the Linux-only execution.
+Local accepting-path checks passed; the two physical rehearsal cases remain
+unverified locally and require the final-head Linux run. No production code
+changed in this fixture correction.

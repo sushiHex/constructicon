@@ -12,7 +12,7 @@ from constructicon.core.errors import ContractViolation
 from constructicon.substrate.executors.claude_maintenance_mode import _Refused as _ModeRefused
 from constructicon.substrate.executors.claude_protocol import (
     ClaudeApiKeySourceCategory,
-    ClaudePlan,
+    ClaudeAuthMode,
     ClaudeTokenSourceCategory,
 )
 from constructicon.substrate.executors.claude_startup import (
@@ -110,7 +110,7 @@ class Channel:
 async def test_three_observations_accept_without_dispatch() -> None:
     channel = Channel()
     conversation = ClaudeStartupQualification(
-        selected_plan=ClaudePlan.PRO, model="claude-sonnet-4-6", effort="low",
+        mode=ClaudeAuthMode.SUBSCRIPTION, model="claude-sonnet-4-6", effort="low",
         input_limit=8192, output_limit=512 * 1024,
         deadline=asyncio.get_running_loop().time() + 5,
     )
@@ -131,7 +131,7 @@ async def test_three_observations_accept_without_dispatch() -> None:
 async def test_exact_ui_after_first_response_is_consumed_before_next_write() -> None:
     channel = Channel(ui_after_initialize=True)
     conversation = ClaudeStartupQualification(
-        selected_plan=ClaudePlan.PRO, model="claude-sonnet-4-6", effort="low",
+        mode=ClaudeAuthMode.SUBSCRIPTION, model="claude-sonnet-4-6", effort="low",
         input_limit=8192, output_limit=512 * 1024,
         deadline=asyncio.get_running_loop().time() + 5,
     )
@@ -150,7 +150,7 @@ async def test_exact_ui_after_first_response_is_consumed_before_next_write() -> 
 async def test_mode_ambiguity_and_tail_refuse(mode: str, tail: bytes) -> None:
     channel = Channel(mode=mode, tail=tail)
     conversation = ClaudeStartupQualification(
-        selected_plan=ClaudePlan.PRO, model="claude-sonnet-4-6", effort="low",
+        mode=ClaudeAuthMode.SUBSCRIPTION, model="claude-sonnet-4-6", effort="low",
         input_limit=8192, output_limit=512 * 1024,
         deadline=asyncio.get_running_loop().time() + 5,
     )
@@ -175,7 +175,7 @@ async def test_wrong_correlated_id_refuses_before_next_control() -> None:
 
     channel = WrongID()
     conversation = ClaudeStartupQualification(
-        selected_plan=ClaudePlan.PRO, model="claude-sonnet-4-6", effort="low",
+        mode=ClaudeAuthMode.SUBSCRIPTION, model="claude-sonnet-4-6", effort="low",
         input_limit=8192, output_limit=512 * 1024,
         deadline=asyncio.get_running_loop().time() + 5,
     )
@@ -201,7 +201,7 @@ async def test_each_startup_judge_must_match(kind: str) -> None:
 
     channel = Mismatch()
     conversation = ClaudeStartupQualification(
-        selected_plan=ClaudePlan.PRO, model="claude-sonnet-4-6", effort="low",
+        mode=ClaudeAuthMode.SUBSCRIPTION, model="claude-sonnet-4-6", effort="low",
         input_limit=8192, output_limit=512 * 1024,
         deadline=asyncio.get_running_loop().time() + 5,
     )
@@ -232,7 +232,7 @@ async def test_effective_predicate_reason_survives_the_fake_conversation(
 
     channel = Mismatch()
     conversation = ClaudeStartupQualification(
-        selected_plan=ClaudePlan.PRO, model="claude-sonnet-4-6", effort="low",
+        mode=ClaudeAuthMode.SUBSCRIPTION, model="claude-sonnet-4-6", effort="low",
         input_limit=8192, output_limit=512 * 1024,
         deadline=asyncio.get_running_loop().time() + 5,
     )
@@ -249,7 +249,7 @@ async def test_effective_predicate_reason_survives_the_fake_conversation(
 
 def test_incomplete_and_mismatched_settings_reasons_are_truthful():
     conversation = ClaudeStartupQualification(
-        selected_plan=ClaudePlan.PRO, model="claude-sonnet-4-6", effort="low",
+        mode=ClaudeAuthMode.SUBSCRIPTION, model="claude-sonnet-4-6", effort="low",
         input_limit=8192, output_limit=512 * 1024, deadline=10.0,
     )
     facts = conversation.facts
@@ -277,7 +277,7 @@ async def test_partial_frame_before_next_control_refuses_without_next_write() ->
 
     channel = Partial()
     conversation = ClaudeStartupQualification(
-        selected_plan=ClaudePlan.PRO, model="claude-sonnet-4-6", effort="low",
+        mode=ClaudeAuthMode.SUBSCRIPTION, model="claude-sonnet-4-6", effort="low",
         input_limit=8192, output_limit=512 * 1024,
         deadline=asyncio.get_running_loop().time() + 5,
     )
@@ -296,7 +296,7 @@ async def test_reentry_aborts_silent_owner_and_joins_reader() -> None:
 
     channel.write = silent_write  # type: ignore[method-assign]
     conversation = ClaudeStartupQualification(
-        selected_plan=ClaudePlan.PRO, model="claude-sonnet-4-6", effort="low",
+        mode=ClaudeAuthMode.SUBSCRIPTION, model="claude-sonnet-4-6", effort="low",
         input_limit=8192, output_limit=512 * 1024,
         deadline=asyncio.get_running_loop().time() + 5,
     )
@@ -326,7 +326,7 @@ async def test_cleanup_failure_after_matching_settings_never_invents_a_reason():
             raise OSError("private-sentinel")
     channel = CloseFailure()
     conversation = ClaudeStartupQualification(
-        selected_plan=ClaudePlan.PRO, model="claude-sonnet-4-6", effort="low",
+        mode=ClaudeAuthMode.SUBSCRIPTION, model="claude-sonnet-4-6", effort="low",
         input_limit=8192, output_limit=512 * 1024,
         deadline=asyncio.get_running_loop().time() + 5,
     )

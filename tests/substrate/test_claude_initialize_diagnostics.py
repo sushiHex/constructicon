@@ -30,7 +30,7 @@ API_LABELS = {"ANTHROPIC_API_KEY": "anthropic-api-key", "apiKeyHelper": "api-key
 def observed(raw):
     try:
         return protocol.observe_initialize(
-            raw, expected_request_id="initialize-1", selected_plan=protocol.ClaudePlan.PRO,
+            raw, expected_request_id="initialize-1", mode=protocol.ClaudeAuthMode.SUBSCRIPTION,
         )
     except Exception:
         raise AssertionError("bounded initialization must return a closed observation") from None
@@ -56,7 +56,7 @@ def test_per_key_reported_labels_are_finite_and_never_normalized_to_absence(key,
     assert (token.value if key == "tokenSource" else api_key.value) == expected
     assert (api_key.value if key == "tokenSource" else token.value) == "absent"
     assert protocol.classify_initialize(
-        wire(native), expected_request_id="initialize-1", selected_plan=protocol.ClaudePlan.PRO,
+        wire(native), expected_request_id="initialize-1", mode=protocol.ClaudeAuthMode.SUBSCRIPTION,
     ) == (result.verdict, result.reason)
     assert "private-sentinel" not in json.dumps(asdict(result))
     assert protocol.initialize_diagnostics_valid(result.verdict, result.reason, token, api_key)
@@ -77,6 +77,25 @@ def test_absent_is_affirmative_only_after_account_classification():
     assert invalid.token_source_category is invalid.api_key_source_category is None
 
 
+@pytest.mark.parametrize("display", ["Claude Pro", "Claude Max", "Claude Team",
+                                     "Claude Enterprise", "Claude Private-custom+"])
+def test_compatible_display_observations_never_publish_account_or_tier(display):
+    native = reply(display)
+    native["response"]["response"]["account"].update({
+        "email": "private-identity", "organization": "private-organization",
+    })
+    result = observed(wire(native))
+    assert asdict(result) == {
+        "verdict": protocol.ClaudeInitializeVerdict.MODE_MATCH,
+        "reason": None,
+        "token_source_category": protocol.ClaudeTokenSourceCategory.ABSENT,
+        "api_key_source_category": protocol.ClaudeApiKeySourceCategory.ABSENT,
+    }
+    public = json.dumps(asdict(result))
+    assert display not in public
+    assert "private" not in public.lower()
+
+
 @pytest.mark.parametrize("kind", ["mode", "qualification"])
 @pytest.mark.parametrize("account,reason,token,api_key", [
     ({"tokenSource": "none"}, "credential-source-present", "none", "absent"),
@@ -90,7 +109,7 @@ async def test_both_owned_conversations_capture_the_actual_observation_before_re
 ):
     raw = response("@ID@", **account)
     channel = Channel([raw])
-    limits = {"selected_plan": protocol.ClaudePlan.PRO, "input_limit": 8192,
+    limits = {"mode": protocol.ClaudeAuthMode.SUBSCRIPTION, "input_limit": 8192,
               "output_limit": 512 * 1024, "deadline": asyncio.get_running_loop().time() + 5}
     if kind == "mode":
         conversation = maintenance.ClaudeMaintenanceConversation(
@@ -123,7 +142,7 @@ async def test_both_owned_conversations_capture_the_actual_observation_before_re
 
 @pytest.mark.parametrize("kind", ["mode", "qualification"])
 async def test_unclassified_conversations_do_not_invent_absent_sources(kind):
-    limits = {"selected_plan": protocol.ClaudePlan.MAX, "input_limit": 8192,
+    limits = {"mode": protocol.ClaudeAuthMode.SUBSCRIPTION, "input_limit": 8192,
               "output_limit": 512 * 1024, "deadline": asyncio.get_running_loop().time() + 5}
     conversation = (maintenance.ClaudeMaintenanceConversation(
         phase=maintenance.ClaudeMaintenancePhase.OBSERVE, **limits,

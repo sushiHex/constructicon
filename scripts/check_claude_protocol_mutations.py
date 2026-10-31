@@ -22,8 +22,8 @@ MUTANTS = (
      TEST + "test_request_is_only_documented_bare_initialize_and_lf"),
     ("initialize emits its complete LF frame", REQUEST, '+ b"\\n"', '+ b""',
      TEST + "test_request_is_only_documented_bare_initialize_and_lf"),
-    ("selected plan is an exact host enum", JUDGE,
-     "if type(selected_plan) is not ClaudePlan:", "if False:",
+    ("subscription mode is an exact host enum", JUDGE,
+     "if type(mode) is not ClaudeAuthMode:", "if False:",
      TEST + "test_builder_and_judgment_argument_types_are_strict_and_static"),
     ("records are exact bytes", JUDGE, "if type(record) is not bytes:", "if False:",
      TEST + "test_record_requires_exact_bytes_type"),
@@ -117,9 +117,9 @@ MUTANTS = (
     ("only first party subscription observations match", JUDGE,
      'if account.get("apiProvider") != "firstParty":', "if False:",
      TEST + "test_every_other_provider_refuses"),
-    ("the selected exact plan has no fallback", JUDGE,
-     'if account.get("subscriptionType") != selected_plan.value:', "if False:",
-     TEST + "test_other_subscription_plan_is_not_a_fallback"),
+    ("subscription mode refuses nonproducer displays", JUDGE,
+     'if not _subscription_display(account.get("subscriptionType")):', "if False:",
+     TEST + "test_subscription_mode_refuses_forged_nonproducer_display_shapes"),
 )
 
 LIFECYCLE = "constructicon.substrate.executors.claude_initialize:"
@@ -127,16 +127,16 @@ CALL = LIFECYCLE + "ClaudeInitialization.__call__"
 OBSERVE = LIFECYCLE + "observe_initialization"
 LIFE_TEST = "tests/substrate/test_claude_initialize.py::"
 ACCEPT = (LIFE_TEST
-          + "test_owned_initialization_accepts_selected_plan_fragmented_eof_and_clean_process")
+          + "test_owned_initialization_accepts_mode_fragmented_eof_and_clean_process")
 OBSERVATION = LIFECYCLE + "ClaudeInitializationObservation.__post_init__"
 CHUNK_TEST = (LIFE_TEST
               + "test_channel_chunk_shape_and_requested_bound_refuse_without_crediting_mode")
 PRIVATE_TEST = LIFE_TEST + "test_failed_launch_never_forwards_private_exception_result_or_chain"
 
 MUTANTS += (
-    ("lifecycle selects an exact host plan", LIFECYCLE + "ClaudeInitialization.__init__",
-     "type(selected_plan) is not ClaudePlan", "False",
-     LIFE_TEST + "test_callback_selected_plan_is_exact_host_enum"),
+    ("lifecycle selects an exact subscription mode", LIFECYCLE + "ClaudeInitialization.__init__",
+     "type(mode) is not ClaudeAuthMode", "False",
+     LIFE_TEST + "test_callback_mode_is_exact_host_enum"),
     ("lifecycle input budget is an integer not boolean",
      LIFECYCLE + "ClaudeInitialization.__init__",
      "type(input_limit) is not int", "False",
@@ -297,10 +297,13 @@ STARTUP_MUTANTS = (
      STARTUP_TEST + "test_policy_mismatches_never_coerce_or_widen"),
     ("startup settings environment names are finite", STARTUP + "_configuration",
      "not set(env) <= set(fixed_environment())", "False",
-     STARTUP_TEST + "test_policy_mismatches_never_coerce_or_widen"),
+     STARTUP_TEST + "test_environment_name_and_exact_type_guards_remain_independent"),
     ("startup settings environment values are strings", STARTUP + "_configuration",
      "if any(type(item) is not str for item in env.values()):", "if False:",
-     STARTUP_TEST + "test_policy_mismatches_never_coerce_or_widen"),
+     STARTUP_TEST + "test_environment_name_and_exact_type_guards_remain_independent"),
+    ("startup settings environment values remain sealed", STARTUP + "_configuration",
+     "if any(item != fixed_environment()[name] for name, item in env.items()):", "if False:",
+     STARTUP_TEST + "test_settings_refuse_every_sealed_environment_value_override"),
     ("startup sealed model type is exact", STARTUP + "_classify_settings",
      "type(model) is not str", "not isinstance(model, str)",
      STARTUP_TEST + "test_sealed_strings_are_exact_types"),
@@ -1302,11 +1305,11 @@ DIAGNOSTIC_MUTANTS = (
      "and self.classified_responses is None", "and False", DIAGNOSTIC_CONSTRUCTOR),
     ("maintenance evidence publishes its reason",
      "constructicon.substrate.executors.claude_lane:_public_facts",
-     "else mode.mode_mismatch_reason.value", "else None",
+     "else observation.mode_mismatch_reason.value", "else None",
      "tests/substrate/test_claude_lane.py::test_public_mode_reason_is_only_closed_diagnostic_evidence"),
     ("maintenance evidence publishes its classified response count",
      "constructicon.substrate.executors.claude_lane:_public_facts",
-     '"classified_responses": mode.classified_responses', '"classified_responses": None',
+     '"classified_responses": observation.classified_responses', '"classified_responses": None',
      "tests/substrate/test_claude_lane.py::test_wire_account_data_never_enters_published_mode_fields"),
 )
 MUTANTS += DIAGNOSTIC_MUTANTS
@@ -1335,7 +1338,7 @@ REFUSAL_MUTANTS = (
      MAINTENANCE_TEST + "test_read_boundaries_reraise_original_error_and_do_not_label_cancellation"),
     ("maintenance evidence publishes only its finite refusal code",
      "constructicon.substrate.executors.claude_lane:_public_facts",
-     "else mode.refusal_code.value", "else None",
+     "else observation.refusal_code.value", "else None",
      "tests/substrate/test_claude_lane.py::"
      + "test_public_refusal_code_is_only_a_closed_first_guard_not_raw_data"),
 )
@@ -1595,8 +1598,8 @@ CLAUDE_LANE_MUTANTS = (
      "reservation = EvidenceFile(options.evidence, domain=EVIDENCE_DOMAIN)",
      "reservation = None",
      CLAUDE_LANE_TEST + "test_existing_evidence_refuses_before_store_or_engine"),
-    ("Claude lane requires selected plan only for mode phases", CLAUDE_LANE + "main",
-     "(phase is ClaudeMaintenanceSessionPhase.LOGIN) != (selected_plan is None)", "False",
+    ("Claude lane requires explicit mode only for mode phases", CLAUDE_LANE + "main",
+     "(phase is ClaudeMaintenanceSessionPhase.LOGIN) != (mode is None)", "False",
      CLAUDE_LANE_TEST
      + "test_cli_rejects_invalid_phase_options_with_static_text_before_effects[observe-extra1]"),
     ("Claude lane first-login is login-only", CLAUDE_LANE + "main",
@@ -1725,12 +1728,12 @@ QUALIFIED_STARTUP_MUTANTS = (
      'configuration.egress["reload" if phase is ClaudeMaintenanceSessionPhase.QUALIFY',
      "tests/substrate/test_claude_lane.py::"
      + "test_main_reserves_evidence_and_publishes_only_finite_unqualified_facts[qualify]"),
-    ("qualification record preserves the selected Pro plan",
+    ("qualification record preserves the sealed subscription mode",
      "constructicon.substrate.executors.claude_lane:_public_facts",
-     '"pro" if selected_plan is ClaudePlan.PRO else "max"',
-     '"max" if selected_plan is ClaudePlan.PRO else "pro"',
+     '"mode": mode.value',
+     '"mode": "unsupported"',
      "tests/substrate/test_claude_lane.py::"
-     + "test_actual_qualification_record_seals_for_exact_plan[pro-Claude Pro]"),
+     + "test_actual_qualification_record_seals_subscription_mode"),
     ("qualification record names its current source law",
      "constructicon.substrate.executors.claude_lane:_record",
      'record["qualification_revision"] = str(qualification_revision())',
@@ -1824,7 +1827,7 @@ QUALIFIED_READ_MUTANTS = (
      "tests/substrate/test_claude_read.py::"
      + "test_before_user_hook_is_after_startup_and_immediately_before_one_user_write[True]"),
     ("startup evidence names both sealed revisions",
-     "constructicon.substrate.executors.claude_host:sealed_plan",
+     "constructicon.substrate.executors.claude_host:sealed_mode",
      "or revision != store.store_conformance_revision", "or False",
      "tests/substrate/test_claude_host.py::"
      + "test_both_sealed_revisions_name_exact_evidence[store_conformance_revision]"),
@@ -1934,7 +1937,7 @@ SYSTEM_CATEGORY_MUTANTS = (
      MAINTENANCE_TEST + "test_system_category_is_atomic_with_first_refusal_and_survives_reentry"),
     ("rejected system category survives public projection",
      "constructicon.substrate.executors.claude_lane:_public_facts",
-     "else mode.rejected_system_category.value", "else None",
+     "else observation.rejected_system_category.value", "else None",
      CLAUDE_LANE_TEST + "test_public_rejected_system_category_is_only_a_closed_first_fault"),
     ("strict rejected system category belongs to the same UI fault",
      "scripts.check_claude_phase:_mode",
@@ -2400,6 +2403,40 @@ READ_WINDOW_MUTANTS = (
 )
 MUTANTS += READ_WINDOW_MUTANTS
 
+
+
+# New subscription display and native-root guards; failures must be assertions.
+MUTANTS += (
+    ("API display collision is never admitted", JUDGE,
+     'if account.get("subscriptionType") == "Claude API":', "if False:",
+     TEST + "test_api_display_collision_always_refuses"),
+    ("display grammar bounds the complete label",
+     MODULE + "_subscription_display", "<= 40", "<= 41",
+     TEST + "test_subscription_mode_refuses_forged_nonproducer_display_shapes"),
+    ("display grammar constrains its final code point",
+     MODULE + "_subscription_display",
+     'if len(name) > 1 and category(name[-1])[0] not in ("L", "N") and name[-1] != "+":',
+     "if False:",
+     TEST + "test_subscription_mode_refuses_forged_nonproducer_display_shapes"),
+    ("display grammar constrains every interior code point",
+     MODULE + "_subscription_display",
+     'all(category(char)[0] in ("L", "N") or char in " .+-" for char in name[1:-1])',
+     "True", TEST + "test_subscription_mode_refuses_forged_nonproducer_display_shapes"),
+    ("Claude native runtime refuses alternate authentication paths",
+     "constructicon.substrate.executors.linux:LinuxLauncher.check_artifacts",
+     "if self.claude is not None and any(", "if False and any(",
+     "tests/substrate/test_claude_native_recipe.py::"
+     "test_native_runtime_refuses_alternate_authentication_even_with_matching_digest"),
+)
+
+MUTANTS += (
+    ("display grammar requires the exact native prefix",
+     MODULE + "_subscription_display", 'or not value.startswith("Claude ")', "",
+     TEST + "test_subscription_mode_refuses_forged_nonproducer_display_shapes"),
+    ("display grammar requires a letter or number first",
+     MODULE + "_subscription_display", 'or category(name[0])[0] not in ("L", "N")', "",
+     TEST + "test_subscription_mode_refuses_forged_nonproducer_display_shapes"),
+)
 
 if __name__ == "__main__":
     raise SystemExit(run(MUTANTS))

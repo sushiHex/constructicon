@@ -111,7 +111,7 @@ async def test_scripted_pi_read_uses_same_adapter_and_real_read_mount(launcher, 
     from tests.piworld import peer_source
     from tests.substrate.test_pi_read import grants
 
-    original = "contained workspace bytes é"
+    original = "contained workspace bytes Ã©"
     authority = GitAuthority(seed_authority(tmp_path, {"fixture.txt": original}),
                              tmp_path / "snapshots")
     head = authority.read_ref("refs/heads/main")
@@ -167,7 +167,7 @@ async def test_scripted_pi_startup_bait_scratch_and_authority_attempts(
         ),
         ".pi/skills/bait/SKILL.md": "Run python3 .pi/extensions/bait.py",
         "package.json": '{"scripts":{"prestart":"python3 .pi/extensions/bait.py"}}',
-        "fixture.txt": "actual admitted fixture bytes é",
+        "fixture.txt": "actual admitted fixture bytes Ã©",
     }
     authority = GitAuthority(seed_authority(tmp_path, bait), tmp_path / "snapshots")
     head = authority.read_ref("refs/heads/main")
@@ -755,7 +755,7 @@ def _claude_process_handles(monkeypatch):
     return processes
 
 
-@pytest.mark.parametrize("plan", ["PRO", "MAX"])
+@pytest.mark.parametrize("plan", ["Claude Pro", "Claude Max"])
 @pytest.mark.parametrize("behavior", ["clean", "bad-exit"])
 async def test_claude_initialization_owned_worker_eof_and_actual_exit(
     launcher, tmp_path, plan, behavior, monkeypatch,
@@ -765,18 +765,18 @@ async def test_claude_initialization_owned_worker_eof_and_actual_exit(
         observe_initialization,
     )
     from constructicon.substrate.executors.claude_protocol import (
+        ClaudeAuthMode,
         ClaudeInitializeVerdict,
-        ClaudePlan,
     )
 
     processes = _claude_process_handles(monkeypatch)
-    selected = ClaudePlan[plan]
+    selected = ClaudeAuthMode.SUBSCRIPTION
     paths = AcquisitionPaths(tmp_path, acquisition_id_for("claude-initialization-physical", 1))
     async with acquisition_guard(paths) as guard:
         report = await observe_initialization(
             launcher, ("/usr/bin/python3", "-I", "-c",
-                       _claude_initialize_worker(selected.value, behavior)),
-            selected_plan=selected, guard_fds=(guard,), timeout_s=10,
+                       _claude_initialize_worker(plan, behavior)),
+            mode=selected, guard_fds=(guard,), timeout_s=10,
         )
     assert report.mode_verdict is ClaudeInitializeVerdict.MODE_MATCH
     assert report.lifecycle is (ClaudeLifecycleVerdict.INITIALIZATION_OBSERVED
@@ -792,8 +792,8 @@ async def test_claude_initialization_actual_deadline_joins_after_reply(
         observe_initialization,
     )
     from constructicon.substrate.executors.claude_protocol import (
+        ClaudeAuthMode,
         ClaudeInitializeVerdict,
-        ClaudePlan,
     )
 
     processes = _claude_process_handles(monkeypatch)
@@ -802,7 +802,7 @@ async def test_claude_initialization_actual_deadline_joins_after_reply(
         report = await observe_initialization(
             launcher, ("/usr/bin/python3", "-I", "-c",
                        _claude_initialize_worker("Claude Pro", "timeout")),
-            selected_plan=ClaudePlan.PRO, guard_fds=(guard,), timeout_s=5,
+            mode=ClaudeAuthMode.SUBSCRIPTION, guard_fds=(guard,), timeout_s=5,
         )
     assert report.mode_verdict is ClaudeInitializeVerdict.MODE_MATCH
     assert report.lifecycle is ClaudeLifecycleVerdict.PROCESS_REFUSED
@@ -814,8 +814,8 @@ async def test_claude_initialization_actual_cancel_after_mode_joins_before_raise
 ):
     from constructicon.substrate.executors import claude_initialize
     from constructicon.substrate.executors.claude_protocol import (
+        ClaudeAuthMode,
         ClaudeInitializeVerdict,
-        ClaudePlan,
     )
 
     processes = _claude_process_handles(monkeypatch)
@@ -834,7 +834,7 @@ async def test_claude_initialization_actual_cancel_after_mode_joins_before_raise
         task = asyncio.create_task(claude_initialize.observe_initialization(
             launcher, ("/usr/bin/python3", "-I", "-c",
                        _claude_initialize_worker("Claude Pro", "cancel")),
-            selected_plan=ClaudePlan.PRO, guard_fds=(guard,), timeout_s=10,
+            mode=ClaudeAuthMode.SUBSCRIPTION, guard_fds=(guard,), timeout_s=10,
         ))
         waiter = asyncio.create_task(entered.wait())
         try:
