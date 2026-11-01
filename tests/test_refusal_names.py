@@ -5,11 +5,14 @@ messages such as ``"Claude READ refused"``. A generic refusal hides its cause:
 the week-long M8 READ blocker was a closed reason (``subscription-mismatch``)
 that one such message collapsed into ``read_contract_refused``.
 
-The allowlist below is the reviewed debt as it stands. A new generic refusal
-fails this test; give it a closed code or detail instead. Naming an existing
-one lowers its count, and the allowlist must then be lowered to match, so the
-ledger never overstates the debt. Raising a count needs a stated reason in the
-same change, in the ``reason`` column, reviewed like any other code.
+The allowlist below is the reviewed debt as it stands, as per-file counts. Any
+change to a file's count fails this test: adding a generic refusal needs a
+closed code or detail instead, and naming one needs the allowlist lowered, so
+the ledger never overstates the debt. It is a count ratchet, not site tracking:
+removing one generic refusal and adding another in the same file keeps the
+count and passes. Review covers that case. A deliberately generic refusal (for
+example to withhold private vendor data) may stay, with its reason stated in
+the ``reason`` column.
 """
 
 from __future__ import annotations
@@ -43,8 +46,13 @@ ALLOWED: dict[str, tuple[int, int, str]] = {
 
 def _census(path: Path) -> tuple[int, int]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    # f-string fragments interpolate a value, so they are not whole messages.
+    fragments = {id(part) for node in ast.walk(tree) if isinstance(node, ast.JoinedStr)
+                 for part in node.values}
     bare = generic = 0
     for node in ast.walk(tree):
+        if id(node) in fragments:
+            continue
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                 and node.func.id == "_Refused" and not node.args and not node.keywords):
             bare += 1
@@ -79,7 +87,7 @@ def test_every_allowance_states_its_reason() -> None:
     assert all(reason.strip() for _, _, reason in ALLOWED.values())
 
 
-def test_census_counts_what_it_claims() -> None:
+def test_census_counts_what_it_claims(tmp_path: Path) -> None:
     source = (
         "class _Refused(Exception): ...\n"
         "def f():\n"
@@ -88,10 +96,8 @@ def test_census_counts_what_it_claims() -> None:
         "    raise ValueError('Claude READ refused')\n"
         "    raise ValueError('Claude READ refused: settings')\n"
         "    raise ValueError(f'{name} worker refused')\n"
+        "    raise ValueError(f'{prefix}Claude READ refused')\n"
     )
-    probe = SRC.parent.parent / "tests" / "_refusal_probe_tmp.py"
-    try:
-        probe.write_text(source, encoding="utf-8")
-        assert _census(probe) == (1, 1)
-    finally:
-        probe.unlink(missing_ok=True)
+    probe = tmp_path / "probe.py"
+    probe.write_text(source, encoding="utf-8")
+    assert _census(probe) == (1, 1)
