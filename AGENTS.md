@@ -91,6 +91,15 @@ docs/adr/        history by reference — why things are the way they are
   caller-controlled identity fields to tools.
 - **Registration never propagates.** Only promotion moves a pointer, and only
   with a journal-minted attestation whose baseline still equals current stable.
+- **Name the refusal; verify at the producer.** When something refuses, make
+  it say why: a closed code, stage or field that survives into the evidence an
+  operator can collect, never a bare generic message. Then check the
+  assumption behind the guard against the code that produces the value, not
+  against what the value usually looks like. Any guard comparing a vendor- or
+  peer-emitted value cites that value's producer (source `file:line` or pinned
+  binary offset) in a comment or design record. Fix a wrong assumption; never
+  loosen the guard, manipulate vendor state, or retry a variant to make a
+  refusal go away. `tests/test_refusal_names.py` ratchets generic refusals.
 - **Truthful telemetry and contracts.** `None` over inferred; partial over
   dropped; legacy opaque over invented completeness; simulated over false
   committed; demoted over false-ok.
