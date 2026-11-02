@@ -104,6 +104,7 @@ class Peer:
         self.post = False
         self.callback_replies = 0
         self.registration = False
+        self.reply_text = "file text"
 
     def emit(self, value):
         if self.defect == "terminal-session" and value.get("type") == "result":
@@ -213,8 +214,9 @@ class Peer:
             else:
                 assert response["request_id"] == "outer-tools/call"
                 assert message["id"] == 19
-                assert message["result"] == {"content": [{"type": "text", "text": "file text"}],
-                                             "isError": False}
+                assert message["result"] == {
+                    "content": [{"type": "text", "text": self.reply_text}], "isError": False,
+                }
                 self.callback_replies += 1
                 if self.defect == "callback-write":
                     raise OSError("private response drain")
@@ -2238,6 +2240,46 @@ async def test_cumulative_native_and_per_worker_bounds_bind(limit):
                 if json.loads(raw).get("response", {}).get("request_id") == "outer-tools/call"]
     if limit == "input":
         assert launcher.peer.writes == []
+
+
+@pytest.mark.parametrize("budget", ["task", "startup-only"])
+async def test_lawful_callback_reply_fits_the_assembled_stdin_budget(budget):
+    # A full TEXT_BYTES reply was refused at STREAM_BOUND under the shared 8 KiB
+    # maintenance budget only after the worker had run and spent the attempt.
+    launcher = Launcher()
+    launcher.limits = replace(launcher.limits, input_bytes=(
+        claude_read.task_input_bytes(ClaudeNativeRecipe.STREAM_JSON) if budget == "task"
+        else claude_read.STARTUP_INPUT_BYTES))
+    ran = False
+    text = launcher.peer.reply_text = ("x" * 63 + "\n") * (claude_read.TEXT_BYTES // 64)
+
+    async def worker(path, remaining):
+        nonlocal ran
+        ran = True
+        return text
+
+    outcome, _ = await run(launcher, worker=worker)
+    assert ran and launcher.joined
+    if budget == "task":
+        assert isinstance(outcome, ExecutorSuccess), outcome
+        assert launcher.peer.callback_replies == 1
+    else:
+        assert isinstance(outcome, ExecutorFailure) and launcher.peer.callback_replies == 0
+        assert outcome.error.detail.startswith("Claude READ refused [known_refusal=stream-bound;")
+
+
+async def test_startup_conversation_cannot_spend_the_callback_reserve():
+    launcher = Launcher()
+    launcher.limits = replace(launcher.limits, input_bytes=claude_read.task_input_bytes(
+        ClaudeNativeRecipe.STREAM_JSON))
+    outcome = await claude_read.run_read_transaction(
+        launcher, ("fixed-nonvendor-peer",),
+        TaskSpec(instruction="x" * claude_read.STARTUP_INPUT_BYTES),
+        mode=ClaudeAuthMode.SUBSCRIPTION, model="model", effort="high",
+        worker=lambda path, remaining: asyncio.sleep(0, "file text"), guard_fds=(), timeout_s=5,
+    )
+    assert isinstance(outcome, ExecutorFailure) and launcher.peer.users == []
+    assert outcome.error.detail.startswith("Claude READ refused [known_refusal=stream-bound;")
 
 
 @pytest.mark.parametrize("phase", ["user-write", "worker", "close", "join"])

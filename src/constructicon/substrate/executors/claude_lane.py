@@ -24,9 +24,6 @@ from constructicon.substrate.executors.claude_maintenance_login import (
     LIFETIME_SECONDS as LOGIN_SECONDS,
 )
 from constructicon.substrate.executors.claude_maintenance_mode import (
-    INPUT_BYTES as MODE_INPUT_BYTES,
-)
-from constructicon.substrate.executors.claude_maintenance_mode import (
     LIFETIME_SECONDS as MODE_SECONDS,
 )
 from constructicon.substrate.executors.claude_maintenance_mode import (
@@ -57,6 +54,7 @@ from constructicon.substrate.executors.claude_protocol import (
     RECORD_BYTES,
     ClaudeAuthMode,
 )
+from constructicon.substrate.executors.claude_read import task_input_bytes
 from constructicon.substrate.executors.codex_lane import EvidenceFile, _fsync_directory
 from constructicon.substrate.executors.egress import (
     EgressDestination,
@@ -198,7 +196,8 @@ class LaneConfiguration:
             policy=self.launch_policy,
             expected_policy_sha256=self.launch_policy_sha256,
             limits=ProcessLimits(
-                input_bytes=LOGIN_INPUT_BYTES if login else MODE_INPUT_BYTES,
+                # Maintenance and qualification conversations self-cap at MODE_INPUT_BYTES.
+                input_bytes=LOGIN_INPUT_BYTES if login else task_input_bytes(recipe),
                 stdout_bytes=LOGIN_OUTPUT_BYTES if login else MODE_OUTPUT_BYTES,
                 record_bytes=RECORD_BYTES, stderr_bytes=STDERR_BYTES,
             ),

@@ -152,6 +152,26 @@ def test_closed_config_selects_only_paired_launcher_and_phase_egress(tmp_path):
     )
 
 
+def test_task_launchers_reserve_stdin_for_every_lawful_callback_reply(tmp_path):
+    from constructicon.substrate.executors import claude_read
+
+    path = configuration(tmp_path)
+    loaded = claude_lane.read_configuration(
+        path, expected_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
+    write = ClaudeNativeRecipe.STREAM_JSON_WRITE
+    for launcher, recipe in (
+        (loaded.launcher(ClaudeMaintenanceSessionPhase.OBSERVE), ClaudeNativeRecipe.STREAM_JSON),
+        (loaded.launcher(ClaudeMaintenanceSessionPhase.QUALIFY), ClaudeNativeRecipe.STREAM_JSON),
+        (loaded.launcher(ClaudeMaintenanceSessionPhase.QUALIFY, recipe=write), write),
+    ):
+        assert launcher.limits.input_bytes == claude_read.task_input_bytes(recipe) == (
+            claude_read.STARTUP_INPUT_BYTES
+            + recipe.call_limit * claude_read.CALLBACK_REPLY_BYTES
+        )
+    assert loaded.launcher(ClaudeMaintenanceSessionPhase.LOGIN).limits.input_bytes == 4096
+
+
 @pytest.mark.parametrize("name,expected", [("subscription", ClaudeAuthMode.SUBSCRIPTION)])
 def test_actual_qualification_record_seals_subscription_mode(tmp_path, name, expected):
     from constructicon.substrate.executors import claude_host
@@ -419,8 +439,10 @@ def test_main_reserves_evidence_and_publishes_only_finite_unqualified_facts(
             ClaudeNativeRecipe.LOGIN if phase is ClaudeMaintenanceSessionPhase.LOGIN
             else ClaudeNativeRecipe.STREAM_JSON
         )
+        # Maintenance conversations self-cap at 8 KiB inside the task launcher's budget.
         assert launcher.limits.input_bytes == (
-            4096 if phase is ClaudeMaintenanceSessionPhase.LOGIN else 8192
+            4096 if phase is ClaudeMaintenanceSessionPhase.LOGIN
+            else 8192 + 256 * 1024
         )
         assert launcher.limits.stdout_bytes == (
             256 * 1024 if phase is ClaudeMaintenanceSessionPhase.LOGIN else 512 * 1024

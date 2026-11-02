@@ -741,7 +741,7 @@ class ClaudeOperatorHandle:
         self._check()
         assert outcome is not None
         if (not self.relay_closed or self.relay_denied
-                or not (1 <= self._callback_started <= (8 if self.provider.write else 1))
+                or not (1 <= self._callback_started <= self.provider.recipe.call_limit)
                 or self._callback_completed != self._callback_started):
             detail = (claude_read.known_refusal_detail(outcome.error.detail)
                       if isinstance(outcome, ExecutorFailure) and outcome.error.kind == "exit"

@@ -210,7 +210,13 @@ def test_closed_native_recipes_never_enable_builtin_tools(tmp_path):
     assert write[write.index("--tools") + 1] == ""
     assert write[write.index("--allowedTools") + 1] == WRITE.allowed_tool
     assert sum(a != b for a, b in zip(read, write, strict=True)) == 1
-    assert ClaudeNativeRecipe.STREAM_JSON.tool == claude_read.READ_TOOL
+    # Independent wire pin: claude_read.READ_TOOL is derived from the recipe.
+    assert ClaudeNativeRecipe.STREAM_JSON.tool == claude_read.READ_TOOL == {
+        "name": "read_file", "description": "Read one relative workspace file.",
+        "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}},
+                        "required": ["path"], "additionalProperties": False},
+    }
+    assert claude_read.SERVER == "constructicon_read"
 
 
 @pytest.mark.parametrize("selected", [ClaudeNativeRecipe.STREAM_JSON, WRITE])
