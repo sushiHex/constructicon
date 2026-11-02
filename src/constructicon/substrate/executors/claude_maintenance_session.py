@@ -27,9 +27,6 @@ from constructicon.substrate.executors.claude_maintenance_login import (
     PrivateLoginIO,
 )
 from constructicon.substrate.executors.claude_maintenance_mode import (
-    INPUT_BYTES as MODE_INPUT_BYTES,
-)
-from constructicon.substrate.executors.claude_maintenance_mode import (
     LIFETIME_SECONDS as MODE_SECONDS,
 )
 from constructicon.substrate.executors.claude_maintenance_mode import (
@@ -55,6 +52,7 @@ from constructicon.substrate.executors.claude_operator_io import (
     STDOUT_BYTES as LOGIN_OUTPUT_BYTES,
 )
 from constructicon.substrate.executors.claude_protocol import RECORD_BYTES, ClaudeAuthMode
+from constructicon.substrate.executors.claude_read import task_input_bytes
 from constructicon.substrate.executors.claude_startup_qualification import (
     ClaudeQualificationLifecycle,
     ClaudeStartupQualification,
@@ -145,11 +143,19 @@ class ClaudeMaintenanceSessionFacts:
                 raise ValueError("joined mode needs affirmative observation")
 
 
-def _limits_ok(limits: object, *, login: bool) -> bool:
+def _limits_ok(limits: object, *, login: bool, recipe: object) -> bool:
     if type(limits) is not ProcessLimits:
         return False
+    if login:
+        input_bound = LOGIN_INPUT_BYTES
+    elif recipe is ClaudeNativeRecipe.STREAM_JSON or recipe is ClaudeNativeRecipe.STREAM_JSON_WRITE:
+        # The shared task launcher reserves callback replies; every maintenance
+        # conversation on it still self-caps at MODE_INPUT_BYTES.
+        input_bound = task_input_bytes(recipe)
+    else:
+        return False
     return (
-        limits.input_bytes <= (LOGIN_INPUT_BYTES if login else MODE_INPUT_BYTES)
+        limits.input_bytes <= input_bound
         and limits.stdout_bytes <= (LOGIN_OUTPUT_BYTES if login else MODE_OUTPUT_BYTES)
         and limits.record_bytes <= RECORD_BYTES
         and limits.stderr_bytes <= STDERR_BYTES
@@ -204,7 +210,7 @@ async def run_maintenance_session(
                 or type(end) is not float or not math.isfinite(end)
                 or not now < end <= now + maximum
                 or not _policy_ok(policy, phase)
-                or not _limits_ok(launcher.limits, login=login)
+                or not _limits_ok(launcher.limits, login=login, recipe=launcher.claude_recipe)
                 or launcher.claude is None
                 or launcher.claude_recipe not in (
                     (ClaudeNativeRecipe.LOGIN,) if login else

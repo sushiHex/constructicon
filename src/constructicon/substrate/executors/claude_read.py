@@ -34,6 +34,9 @@ from constructicon.core.grants import Posture
 from constructicon.core.identity import parse_json_value
 from constructicon.core.process import ProcessIO
 from constructicon.substrate.executors.claude_initialize import _cancelled, _clean
+from constructicon.substrate.executors.claude_maintenance_mode import (
+    INPUT_BYTES as MODE_INPUT_BYTES,
+)
 from constructicon.substrate.executors.claude_native import (
     ClaudeNativeRecipe,
     ClaudeNativeStoreMount,
@@ -75,14 +78,23 @@ from constructicon.substrate.executors.linux import LinuxLauncher, ProcessExchan
 from constructicon.substrate.executors.operator_store import BindingCheck
 
 TEXT_BYTES = 64 * 1024
-CALL_LIMIT = 1
 UI_RECORDS = 8
-SERVER = "constructicon_read"
-READ_TOOL: dict[str, object] = {
-    "name": "read_file", "description": "Read one relative workspace file.",
-    "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}},
-                    "required": ["path"], "additionalProperties": False},
-}
+# Native stdin law: the startup conversation (controls, MCP handshake, user message)
+# keeps the maintenance-mode bound, and each lawful callback reply reserves one record.
+STARTUP_INPUT_BYTES = MODE_INPUT_BYTES
+CALLBACK_REPLY_BYTES = RECORD_BYTES
+
+
+def task_input_bytes(recipe: ClaudeNativeRecipe) -> int:
+    """Launcher stdin budget under which no admitted callback reply is refused."""
+    if recipe not in (ClaudeNativeRecipe.STREAM_JSON, ClaudeNativeRecipe.STREAM_JSON_WRITE):
+        raise ValueError("a task requires a closed Claude task recipe")
+    return STARTUP_INPUT_BYTES + recipe.call_limit * CALLBACK_REPLY_BYTES
+
+
+# Derived views of the READ recipe; the transaction itself serves ``self._recipe``.
+SERVER = ClaudeNativeRecipe.STREAM_JSON.server
+READ_TOOL: dict[str, object] = ClaudeNativeRecipe.STREAM_JSON.tool
 ReadWorker = Callable[[str, float], Awaitable[str]]
 
 
@@ -417,7 +429,7 @@ class ClaudeReadTransaction:
         self._input_limit, self._output_limit, self._deadline = input_limit, output_limit, deadline
         self._state: Literal["new", "startup", "ready", "dispatched", "terminal",
                              "checked", "drained", "refused"] = "new"
-        self._input_bytes = self._output_bytes = 0
+        self._input_bytes = self._output_bytes = self._startup_input_bytes = 0
         self._buffer = bytearray()
         self._records: list[bytes] = []
         self._pending: asyncio.Task[bytes] | None = None
@@ -745,10 +757,13 @@ class ClaudeReadTransaction:
         finally:
             self._phase = previous_phase
 
-    async def _write(self, raw: bytes, *, user: bool = False) -> None:
+    async def _write(self, raw: bytes, *, user: bool = False, callback: bool = False) -> None:
         self._check()
         self._input_bytes += len(raw)  # Spent before delivery, including uncertain writes.
-        if self._input_bytes > self._input_limit or len(raw) > RECORD_BYTES:
+        if not callback:  # Startup never draws on the callback replies' reserved budget.
+            self._startup_input_bytes += len(raw)
+        if (self._input_bytes > self._input_limit or len(raw) > RECORD_BYTES
+                or self._startup_input_bytes > STARTUP_INPUT_BYTES):
             raise self._refused(ClaudeReadRefusalCode.STREAM_BOUND)
         assert self._io is not None
         if user and self._before_user is not None:
@@ -927,7 +942,7 @@ class ClaudeReadTransaction:
         await self._write(_wire({"type": "control_response", "response": {
             "subtype": "success", "request_id": outer,
             "response": {"mcp_response": {"jsonrpc": "2.0", "id": identifier, "result": result}},
-        }}))
+        }}), callback=not handshake)
         if not handshake:
             self._calls_completed += 1
             if self._progress is not None:

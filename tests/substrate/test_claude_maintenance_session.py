@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from contextlib import suppress
-from dataclasses import fields
+from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -172,6 +172,39 @@ async def test_qualification_requires_three_controls_and_joined_lifecycle(
         assert custody.checks >= 8
         assert launcher.joined is True
         assert launcher.native.writes == ["initialize", "get_settings", "get_hooks_listing"]
+    finally:
+        custody.finish()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recipe", [ClaudeNativeRecipe.STREAM_JSON,
+                                    ClaudeNativeRecipe.STREAM_JSON_WRITE])
+@pytest.mark.parametrize("extra", [0, 1])
+async def test_qualification_accepts_exactly_the_shared_task_launcher_budget(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, recipe: ClaudeNativeRecipe, extra: int,
+) -> None:
+    from constructicon.substrate.executors import claude_maintenance_session as session
+    from constructicon.substrate.executors.claude_read import task_input_bytes
+
+    monkeypatch.setattr(session, "EgressRelay", Relay)
+    custody, launcher = Custody(), QualificationLauncher()
+    launcher.claude_recipe = recipe
+    launcher.limits = replace(launcher.limits, input_bytes=task_input_bytes(recipe) + extra)
+    try:
+        facts = await run_maintenance_session(
+            custody, launcher, policy("platform.claude.com", "api.anthropic.com"),
+            tmp_path / "lane", phase=ClaudeMaintenanceSessionPhase.QUALIFY,
+            mode=ClaudeAuthMode.SUBSCRIPTION,
+        )
+        if extra:
+            assert facts.lifecycle is ClaudeMaintenanceSessionLifecycle.REFUSED
+            assert custody.checks == custody.opened == launcher.calls == 0
+        else:
+            assert custody.opened == 1  # Past the preflight limits gate.
+            if recipe is ClaudeNativeRecipe.STREAM_JSON:  # The fake vendor has no WRITE command.
+                assert facts.lifecycle is ClaudeMaintenanceSessionLifecycle.JOINED_CLEAN
+                assert facts.qualification is not None
+                assert facts.qualification.request_writes == 3
     finally:
         custody.finish()
 

@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import stat
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -20,7 +19,12 @@ from pathlib import Path
 from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import Digest, digest
 from constructicon.substrate.executors._supervisor import CLAUDE_NATIVE_LABEL
-from constructicon.substrate.executors.claude_startup import fixed_environment, fixed_policy
+from constructicon.substrate.executors.claude_startup import (
+    _EFFORTS,
+    _MODEL,
+    fixed_environment,
+    fixed_policy,
+)
 from constructicon.substrate.executors.egress import EgressSocket
 from constructicon.substrate.executors.operator_store import BindingCheck
 
@@ -37,8 +41,6 @@ POLICY_MOUNT = f"{ADMIN_ROOT}/managed-settings.json"
 MCP_MOUNT = f"{ADMIN_ROOT}/managed-mcp.json"
 MANAGED_MCP = b'{"mcpServers":{}}\n'
 CLAUDE_PROFILE = CLAUDE_NATIVE_LABEL
-_MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
-_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
 
 class ClaudeNativeRecipe(StrEnum):
