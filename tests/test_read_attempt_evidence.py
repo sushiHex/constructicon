@@ -118,6 +118,27 @@ def collect(root):
     return reader.collect(root, AUTH, RUN, 1)
 
 
+WRITE_FIXTURE = "sha256:" + "a" * 64
+WRITE_BASE = "b" * 40
+
+
+def write_inputs(files, **changes):
+    from constructicon.core.qualification_write import WriteQualificationRequest
+
+    request = WriteQualificationRequest(
+        authorization_id=AUTH, fixture_identity=WRITE_FIXTURE, base_commit=WRITE_BASE,
+    ).model_dump(mode="json")
+    request.update(changes)
+    with sqlite3.connect(files / "write.sqlite") as db:
+        db.execute("UPDATE runs SET inputs_json=?", (json.dumps({"request": request}),))
+
+
+def collect_write(files, **kwargs):
+    return reader.collect(files, AUTH, RUN, posture="write",
+                          expected_fixture_identity=WRITE_FIXTURE,
+                          expected_base_commit=WRITE_BASE, **kwargs)
+
+
 def test_write_projection_names_only_its_exact_files_and_callback_budget(files):
     record = attempt()
     record["facts"].update(callback_started=8, callback_completed=8)
@@ -125,16 +146,132 @@ def test_write_projection_names_only_its_exact_files_and_callback_budget(files):
                            "admitted_completed": 8, "worker_results": ["success"] * 8}
     write(files / "write-attempt.json", record)
     (files / "read.sqlite").rename(files / "write.sqlite")
-    result = reader.collect(files, AUTH, RUN, posture="write")
+    write_inputs(files)
+    result = collect_write(files)
     assert result["schema_version"] == 2 and result["posture"] == "write"
     assert result["attempt"]["state"] == result["journal"]["state"] == "valid"
+    assert result["journal"]["event_count"] == 1
     assert result["attempt"]["callback_started"] == result["attempt"]["callback_completed"] == 8
     assert result["attempt"]["callback_observation"] == record["callbacks"]
-    # Default READ keeps its old path and shape and cannot borrow the WRITE database.
     assert collect(files)["journal"]["state"] == "missing"
     record["facts"]["callback_started"] = 9
     write(files / "write-attempt.json", record)
-    assert reader.collect(files, AUTH, RUN, posture="write")["attempt"]["state"] == "invalid"
+    assert collect_write(files)["attempt"]["state"] == "invalid"
+
+
+@pytest.mark.parametrize("field,value", [
+    ("authorization_id", "wrong"), ("fixture_identity", "sha256:" + "c" * 64),
+    ("base_commit", "d" * 40), ("extra", "unexpected"),
+    ("authorization_id", None), ("fixture_identity", None), ("base_commit", None),
+])
+def test_write_journal_requires_exact_independent_request(files, field, value):
+    (files / "read.sqlite").rename(files / "write.sqlite")
+    write_inputs(files, **{field: value})
+    assert collect_write(files)["journal"]["state"] == "invalid"
+
+
+@pytest.mark.parametrize("field", ["authorization_id", "fixture_identity", "base_commit"])
+def test_write_journal_refuses_missing_request_field(files, field):
+    from constructicon.core.qualification_write import WriteQualificationRequest
+
+    (files / "read.sqlite").rename(files / "write.sqlite")
+    request = WriteQualificationRequest(authorization_id=AUTH, fixture_identity=WRITE_FIXTURE,
+                                        base_commit=WRITE_BASE).model_dump(mode="json")
+    del request[field]
+    with sqlite3.connect(files / "write.sqlite") as db:
+        db.execute("UPDATE runs SET inputs_json=?", (json.dumps({"request": request}),))
+    assert collect_write(files)["journal"]["state"] == "invalid"
+
+
+@pytest.mark.parametrize("posture,identity,base", [
+    ("write", None, None), ("write", WRITE_FIXTURE, None), ("write", None, WRITE_BASE),
+    ("read", WRITE_FIXTURE, WRITE_BASE), ("read", WRITE_FIXTURE, None),
+    ("write", "sha256:" + "A" * 64, WRITE_BASE),
+    ("write", WRITE_FIXTURE, "a" * 39), ("write", WRITE_FIXTURE, "a" * 41),
+])
+def test_fixture_pins_refuse_before_filesystem(monkeypatch, posture, identity, base):
+    monkeypatch.setattr(reader, "_root", lambda *args: pytest.fail("filesystem accessed"))
+    with pytest.raises(ValueError):
+        reader.collect("unused", AUTH, RUN, posture=posture,
+                       expected_fixture_identity=identity, expected_base_commit=base)
+
+
+def test_write_selected_path_controls_missing_classification(files, monkeypatch):
+    (files / "read.sqlite").unlink()
+    selected = files / "write.sqlite"
+    other = files / "read.sqlite"
+    real = Path.is_symlink
+    monkeypatch.setattr(Path, "is_symlink", lambda p: p == other or real(p))
+    assert collect_write(files)["journal"]["state"] == "missing"
+    monkeypatch.setattr(Path, "is_symlink", lambda p: p == selected or real(p))
+    assert collect_write(files)["journal"]["state"] == "invalid"
+
+
+def test_write_dangling_selected_journal_is_invalid(files):
+    (files / "read.sqlite").unlink()
+    try:
+        (files / "write.sqlite").symlink_to(files / "absent.sqlite")
+    except OSError:
+        pytest.skip("Windows symlink privilege unavailable")
+    assert collect_write(files)["journal"]["state"] == "invalid"
+
+
+def test_cli_collects_exact_write_request(files, capsys):
+    (files / "read.sqlite").rename(files / "write.sqlite")
+    write_inputs(files)
+    write(files / "write-attempt.json", attempt())
+    status = reader.main(["--run-root", str(files), "--authorization-id", AUTH,
+                          "--run-id", RUN, "--max-epoch", "1", "--posture", "write",
+                          "--fixture-identity", WRITE_FIXTURE, "--base-commit", WRITE_BASE])
+    captured = capsys.readouterr()
+    assert status == 0 and captured.err == ""
+    assert json.loads(captured.out)["journal"]["state"] == "valid"
+
+
+def test_cli_refuses_missing_and_mixed_fixture_pins(files, capsys):
+    common = ["--run-root", str(files), "--authorization-id", AUTH, "--run-id", RUN,
+              "--max-epoch", "1"]
+    assert reader.main([*common, "--posture", "write"]) == 1
+    assert reader.main([*common, "--fixture-identity", WRITE_FIXTURE,
+                                 "--base-commit", WRITE_BASE]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err.count("read evidence collection refused") == 2
+
+
+@pytest.mark.parametrize("source,message,reason", [
+    ("executors/linux.py", "the physical Linux launch probe failed", "probe_failed"),
+    ("executors/linux.py", "the physical Linux launch probe is malformed", "probe_malformed"),
+    ("executors/claude_provider.py", "Claude READ acquisition deadline expired",
+     "acquisition_expired"),
+    ("git/contained.py", "contained staging initialization failed", "workspace_staging_failed"),
+    ("git/contained.py", "workspace posture differs from its sealed acquisition",
+     "workspace_posture_mismatch"),
+    ("git/contained.py", "workspace mount is no longer its owned directory",
+     "workspace_mount_lost"),
+    ("git/contained.py", "workspace must be minted by the assembled provider",
+     "workspace_provider_mismatch"),
+    ("git/contained.py", "workspace does not own this open invocation and epoch",
+     "workspace_invocation_mismatch"),
+    ("git/capture.py", "contained workspace revision differs from its binding",
+     "workspace_revision_mismatch"),
+    ("executors/claude_provider.py", "Claude READ task differs from its sealed grants",
+     "task_grants_mismatch"),
+    ("executors/claude_provider.py", "Claude READ workspace differs from its admitted binding",
+     "workspace_binding_mismatch"),
+    ("executors/claude_provider.py", "Claude READ executes one materialized task only",
+     "execute_not_ready"),
+])
+def test_write_predispatch_reasons_are_closed_source_literals(files, source, message, reason):
+    producer = Path(__file__).parents[1] / "src/constructicon/substrate" / source
+    assert f'"{message}"' in producer.read_text(encoding="utf-8")
+    (files / "read.sqlite").rename(files / "write.sqlite")
+    write_inputs(files)
+    with sqlite3.connect(files / "write.sqlite") as db:
+        db.execute("UPDATE events SET kind='NodeFailed',payload=?", (
+            json.dumps({"error_type": "ContractViolation", "error": message}),
+        ))
+    events = collect_write(files)["journal"]["events"]
+    assert events == [{"kind": "NodeFailed", "error_type": "ContractViolation", "reason": reason}]
 
 
 @pytest.mark.parametrize("posture", ["../write", "", "READ", 1])

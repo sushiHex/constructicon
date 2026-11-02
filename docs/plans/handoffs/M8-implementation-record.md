@@ -11107,3 +11107,65 @@ fresh boot/generation/qualification and exact package still need binding and
 review before owner selection. No installation, credential operation, API key,
 model call or production availability is established here. Final CI and review
 receipts belong to the linked PR. Frozen plans remain unchanged.
+
+## First Claude WRITE window and exact journal inputs — #339
+
+The [selected scope](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6584974015)
+and [closeout](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6585727176)
+cover one window at controller
+`fabd271646ea1009bd55d37413195123afff6a8d`. Fresh boot, drift, D2,
+launch/controller verification, the WRITE import closure and no-model WRITE
+startup passed. Positive preservation kept the historical controller archive
+untouched; the frozen replacement guard required a freshly computed installed
+tree difference before removal. Generation 13 was affirmatively withdrawn;
+only its next generation, 14, was published and activated. Cleanup was compiled,
+source-validated and staged before activation. Independent actual pins matched
+the ordinary one-hour candidate and immutable owner window before placement.
+
+The sole WRITE run returned an incomplete typed report: failed run, task not
+dispatched, zero callbacks, no candidate, target unchanged. Executor and
+workspace obligations were closed and discarded. Generation 14 withdrawal
+returned the exact positive marker with empty stderr; clean park and a fresh
+survey affirmed Off/idle, and custody was released. No retry, remint or
+production availability follows. The report SHA-256 is
+`6cf01ba1e0209cb7ad51a325fdd0b4de8c45f71b4acf84b122e3a9b6a8dfbfec`.
+
+The bounded attempt projection retained initial and terminal binding checks,
+with no dispatch and an unclosed relay observation. Its journal projection was
+invalid/partial. Offline reproduction identified a reader defect, not journal
+damage: WRITE selected `write.sqlite` correctly but still compared the run's
+inputs to READ's `request.authorization`. The real WRITE producer uses
+`authorization_id`, `fixture_identity` and `base_commit`. The previous positive
+WRITE test had renamed a READ database without changing its inputs, hiding the
+composition error. A typed WRITE request in real SQLite reproduces the refusal.
+
+The reader now requires independent WRITE fixture identity and base-commit pins
+before filesystem access, and compares the complete request against those pins
+and the expected authorization. READ retains its exact input law and refuses
+WRITE pins. Missing-versus-invalid classification follows the selected journal
+path, including dangling symlinks. Regression tests exercise actual WRITE
+request fields and extra/missing values; the mutation inventory distinguishes
+READ binding, WRITE binding and selected-path classification. A future WRITE
+metadata command must supply `--fixture-identity` and `--base-commit` from its
+previously reviewed fixture pins. It cannot derive its expectations from the
+journal it is checking. No provider, vendor, authority or accepted plan changes.
+The existing closed refusal vocabulary also names twelve exact source literals
+for probes, workspace materialization and task/workspace binding checks, so those
+failure events no longer collapse to `other`. Tests tie each entry to its real
+producer and exercise it through a WRITE journal. Variable diagnostics and
+unrecognized errors remain unexported; an exception group is not unpacked from
+its string representation.
+
+This repair does not identify the live pre-dispatch cause. The attempt tuple
+does not prove that `execute` was reached: closing an unused acquired handle can
+also settle an outcome and terminal binding check after workspace materialization
+fails. Sorted acquisition order and the two acquired obligations contradict an
+initial hypothesis of executor materialization failure alone. Read the retained
+failure event before choosing a product fix or another model attempt.
+
+One local capture error did not require a remote retry: the unchanged LR8
+command retained its complete 9,279-byte output, then a local adapter applied
+the default 4 KiB post-capture reader. The existing transport writes and syncs
+complete native streams before that read. Independent review checked the
+original capture under the existing 64 KiB controller envelope and the frozen
+remote replacement predicate. No fetch rerun or runbook change occurred.
