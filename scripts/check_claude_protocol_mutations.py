@@ -386,9 +386,54 @@ READ_MUTANTS = (
     ("READ input accounting is cumulative", READ + "ClaudeReadTransaction._write",
      'self._input_bytes > self._input_limit', 'False',
      READ_TEST + "test_cumulative_native_and_per_worker_bounds_bind"),
+    ("callback reserves its actual escaped IDs and post-result controls before effect",
+     READ + "ClaudeReadTransaction._mcp",
+     "self._input_bytes + len(maximum_reply) + POST_RESULT_INPUT_BYTES\n                > self._input_limit",
+     "False",
+     "tests/substrate/test_claude_task_budgets.py::"
+     "test_exact_id_reply_capacity_is_checked_before_worker[-1]"),
+    ("task reply transport covers JSON control-character expansion",
+     READ + "callback_reply_bytes", "6 * _task_payload_bytes(recipe)[1]",
+     "_task_payload_bytes(recipe)[1]",
+     "tests/substrate/test_claude_task_budgets.py::"
+     "test_control_character_read_reply_and_producer_echo_complete[False]"),
+    ("task framing covers the duplicated producer result",
+     READ + "task_record_bytes", "RECORD_BYTES + max(6 * argument, 12 * reply)",
+     "RECORD_BYTES",
+     "tests/substrate/test_claude_task_budgets.py::"
+     "test_control_character_read_reply_and_producer_echo_complete[True]"),
+    ("task stdout reserves all admitted WRITE program and echoed result copies",
+     READ + "task_output_bytes", "recipe.call_limit * (", "0 * (",
+     "tests/substrate/test_claude_task_budgets.py::"
+     "test_eight_full_write_programs_fit_producer_stdout[task]"),
+    ("callback refuses before effect when received output has spent its echo reserve",
+     READ + "ClaudeReadTransaction._mcp",
+     "captured_stdout + _task_echo_bytes(self._recipe) + MODE_OUTPUT_BYTES\n                > self._output_limit",
+     "False",
+     "tests/substrate/test_claude_task_budgets.py::"
+     "test_consumed_stdout_refuses_before_worker_echo_cannot_fit"),
+    ("callback capacity includes captured stdout before its reader starts",
+     READ + "ClaudeReadTransaction._capture_snapshot",
+     "captured = self._io.stdout_bytes_received", "captured = self._output_bytes",
+     "tests/substrate/test_claude_task_budgets.py::"
+     "test_consumed_stdout_refuses_before_worker_echo_cannot_fit"),
+    ("callback refuses invalid or contradictory captured stdout facts",
+     READ + "ClaudeReadTransaction._capture_snapshot", "if (", "if False and (",
+     "tests/substrate/test_claude_task_budgets.py::"
+     "test_capture_snapshot_rejects_contradictory_or_nonmonotonic_facts"),
+    ("callback classifies captured bytes before granting worker authority",
+     READ + "ClaudeReadTransaction._callback_barrier",
+     "captured == self._output_bytes and (not eof or self._eof)", "not eof or self._eof",
+     "tests/substrate/test_claude_task_budgets.py::"
+     "test_already_captured_lifecycle_and_eof_precede_worker_authority"),
+    ("callback observes captured zero-byte EOF before granting worker authority",
+     READ + "ClaudeReadTransaction._callback_barrier", "and (not eof or self._eof)", "",
+     "tests/substrate/test_claude_task_budgets.py::"
+     "test_already_captured_lifecycle_and_eof_precede_worker_authority"),
     ("READ output accounting is cumulative", READ + "ClaudeReadTransaction._receive",
      'if self._output_bytes > self._output_limit:', 'if False:',
-     READ_TEST + "test_cumulative_native_and_per_worker_bounds_bind"),
+     "tests/substrate/test_claude_task_budgets.py::"
+     "test_cumulative_stdout_ceiling_binds_without_callback_admission"),
     ("READ callback server is exact", READ + "ClaudeReadTransaction._mcp",
      'or request.get("server_name") != self._recipe.server', 'or False',
      READ_TEST + "test_identity_shape_mode_and_replayed_callback_refusals"),
@@ -2508,9 +2553,9 @@ WRITE_PROTOCOL_TEST = "tests/substrate/test_claude_write_protocol.py::"
 MUTANTS += (
     ("WRITE command completion is rechecked after callback preflight",
      READ + "ClaudeReadTransaction._mcp",
-     'await self._quiet()  # Classify buffered frames before worker authority.\n'
+     'captured_stdout = await self._callback_barrier()\n'
      '        if self._command_completed:',
-     'await self._quiet()  # Classify buffered frames before worker authority.\n'
+     'captured_stdout = await self._callback_barrier()\n'
      '        if False:',
      WRITE_PROTOCOL_TEST + "test_completed_command_buffered_before_next_callback_refuses"),
     ("WRITE callbacks cannot exceed the closed recipe ceiling",

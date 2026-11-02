@@ -16,6 +16,33 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude task budgets include producer copies and JSON expansion
+
+Pinned Claude Code 2.1.296 source confirms assistant programs and user tool
+results are emitted on stdout, with retained results also represented in
+`tool_use_result`. The previous 512 KiB task stdout budget could fail after an
+earlier WRITE effect. A full READ result can exceed a 256 KiB callback record
+after JSON escaping; startup could also spend mandatory post-result stdin.
+Task-only transport profiles now derive from the existing argument/result/call
+limits, and exact-ID maximum replies are checked before worker authority.
+Focused fake peers cover accepting paths and a one-byte pre-effect refusal.
+The [implementation record](plans/handoffs/M8-implementation-record.md) states
+the source digest, offsets, formulas and limits. The metadata allowance remains
+policy, not a vendor promise. Launcher/protocol revisions change; historical
+private scopes are unchanged and no live WRITE is established by this fix.
+Independent review exposed received-versus-captured accounting: the affirmative
+`ProcessIO` stdout snapshot now includes queued bytes even before the owned read
+task starts. That shared contract and Linux source change all future Linux
+launcher revisions, including Codex assemblies. The existing recording wrapper
+only forwards the new fact; frozen Codex executor/protocol files are unchanged.
+Historical results stand; fresh qualification is required for new assemblies.
+The captured-byte fact also exposed a pre-existing authority defect: queued
+lifecycle records could remain unclassified while a callback worker started.
+Callback barriers now settle all already-captured bytes and affirmative captured
+EOF before granting work or releasing a result. Byte equality alone cannot
+prove absence of zero-byte EOF. This guarantees the captured instant, not
+future data or OS-pipe readiness.
+
 ## First live Claude subscription READ succeeded
 
 The bounded live session on controller `196d220640fd3e9032fd47c797f0fe3ab780f089`

@@ -13,11 +13,15 @@ from pathlib import Path
 import pytest
 
 from constructicon.core.executor import ExecutorSuccess, TaskSpec, Usage
+from constructicon.substrate.executors.claude_native import ClaudeNativeRecipe
 from constructicon.substrate.executors.claude_protocol import ClaudeAuthMode
 from constructicon.substrate.executors.claude_read import (
     ClaudeReadTransaction,
     _Refused,
     run_read_transaction,
+    task_input_bytes,
+    task_output_bytes,
+    task_record_bytes,
 )
 from constructicon.substrate.executors.claude_read_worker import (
     READ_WORKER_LIMITS,
@@ -32,6 +36,52 @@ from tests.substrate.test_linux_containment import launcher as launcher
 from tests.substrate.test_native_codex_mediation import write_evidence
 
 MODELS = ("fixture-read", "fixture-zero")
+
+
+class CapturedPipeChannel:
+    """Expose consumed plus asyncio-captured stdout, never OS-pipe readiness."""
+
+    def __init__(self, child):
+        self.child = child
+        self.read_bytes = 0
+
+    @property
+    def stdout_bytes_received(self):
+        # StreamReader owns these captured bytes even before our read starts.
+        return self.read_bytes + len(self.child.stdout._buffer)
+
+    @property
+    def stdout_eof_received(self):
+        return self.child.stdout._eof
+
+    async def read(self, maximum=8192):
+        raw = await self.child.stdout.read(maximum)
+        self.read_bytes += len(raw)
+        return raw
+
+    async def write(self, data):
+        self.child.stdin.write(data)
+        await self.child.stdin.drain()
+
+    async def close_stdin(self):
+        self.child.stdin.close()
+        await self.child.stdin.wait_closed()
+
+
+async def test_pipe_channel_snapshot_counts_queued_and_consumed_bytes():
+    from types import SimpleNamespace
+
+    reader = asyncio.StreamReader()
+    channel = CapturedPipeChannel(SimpleNamespace(stdout=reader))
+    reader.feed_data(b"captured")
+    assert channel.stdout_bytes_received == 8 and channel.read_bytes == 0
+    assert await channel.read(2) == b"ca"
+    assert channel.stdout_bytes_received == 8 and channel.read_bytes == 2
+    reader.feed_data(b"more")
+    assert channel.stdout_bytes_received == 12
+    reader.feed_eof()
+    assert channel.stdout_eof_received is True
+    assert channel.stdout_bytes_received == 12
 
 
 @pytest.fixture(scope="module")
@@ -77,28 +127,23 @@ async def test_compiled_fake_peer_completes_the_actual_bounded_read_protocol(wir
         calls.append((path, remaining))
         return "ready\n" if model == "fixture-ready" else SEED_CALC
 
-    class Channel:
+    class Channel(CapturedPipeChannel):
         async def read(self, maximum=8192):
-            raw = await child.stdout.read(maximum)
+            raw = await super().read(maximum)
             native_records.append(raw)
             return raw
 
-        async def write(self, data):
-            child.stdin.write(data)
-            await child.stdin.drain()
-
-        async def close_stdin(self):
-            child.stdin.close()
-            await child.stdin.wait_closed()
-
     transaction = ClaudeReadTransaction(
         TaskSpec(instruction="Read calc.py literally."), mode=ClaudeAuthMode.SUBSCRIPTION,
-        model=model, effort="low", worker=worker, input_limit=1024 * 1024,
-        output_limit=1024 * 1024, deadline=asyncio.get_running_loop().time() + 10,
+        model=model, effort="low", worker=worker,
+        input_limit=task_input_bytes(ClaudeNativeRecipe.STREAM_JSON),
+        output_limit=task_output_bytes(ClaudeNativeRecipe.STREAM_JSON),
+        record_limit=task_record_bytes(ClaudeNativeRecipe.STREAM_JSON),
+        deadline=asyncio.get_running_loop().time() + 10,
     )
     try:
         async with asyncio.timeout(10):
-            await transaction(Channel())
+            await transaction(Channel(child))
             assert await child.wait() == 0
             assert await child.stderr.read() == b""
     finally:
@@ -154,9 +199,10 @@ async def test_compiled_summaries_cannot_replace_the_terminal_result(wire_peer):
     async def worker(path, remaining):
         return "ready\n"
 
-    class OmitResult:
+    class OmitResult(CapturedPipeChannel):
         async def read(self, maximum=8192):
             raw = await child.stdout.readline()
+            self.read_bytes += len(raw)
             if raw:
                 record = json.loads(raw)
                 received.append(record)
@@ -165,23 +211,18 @@ async def test_compiled_summaries_cannot_replace_the_terminal_result(wire_peer):
                     return b""
             return raw
 
-        async def write(self, data):
-            child.stdin.write(data)
-            await child.stdin.drain()
-
-        async def close_stdin(self):
-            child.stdin.close()
-            await child.stdin.wait_closed()
-
     transaction = ClaudeReadTransaction(
         TaskSpec(instruction="Read ready.txt."), mode=ClaudeAuthMode.SUBSCRIPTION,
-        model="fixture-ready", effort="low", worker=worker, input_limit=1024 * 1024,
-        output_limit=1024 * 1024, deadline=asyncio.get_running_loop().time() + 10,
+        model="fixture-ready", effort="low", worker=worker,
+        input_limit=task_input_bytes(ClaudeNativeRecipe.STREAM_JSON),
+        output_limit=task_output_bytes(ClaudeNativeRecipe.STREAM_JSON),
+        record_limit=task_record_bytes(ClaudeNativeRecipe.STREAM_JSON),
+        deadline=asyncio.get_running_loop().time() + 10,
     )
     try:
         async with asyncio.timeout(10):
             with pytest.raises(_Refused):
-                await transaction(OmitResult())
+                await transaction(OmitResult(child))
     finally:
         if child.returncode is None:
             child.kill()
@@ -227,10 +268,7 @@ async def test_maintenance_eof_cannot_complete_a_read(wire_peer):
         calls.append((path, remaining))
         return "ready\n"
 
-    class EarlyClose:
-        async def read(self, maximum=8192):
-            return await child.stdout.read(maximum)
-
+    class EarlyClose(CapturedPipeChannel):
         async def write(self, data):
             if child.stdin.is_closing():
                 return
@@ -244,13 +282,16 @@ async def test_maintenance_eof_cannot_complete_a_read(wire_peer):
 
     transaction = ClaudeReadTransaction(
         TaskSpec(instruction="Read ready.txt."), mode=ClaudeAuthMode.SUBSCRIPTION,
-        model="fixture-ready", effort="low", worker=worker, input_limit=1024 * 1024,
-        output_limit=1024 * 1024, deadline=asyncio.get_running_loop().time() + 10,
+        model="fixture-ready", effort="low", worker=worker,
+        input_limit=task_input_bytes(ClaudeNativeRecipe.STREAM_JSON),
+        output_limit=task_output_bytes(ClaudeNativeRecipe.STREAM_JSON),
+        record_limit=task_record_bytes(ClaudeNativeRecipe.STREAM_JSON),
+        deadline=asyncio.get_running_loop().time() + 10,
     )
     try:
         async with asyncio.timeout(10):
             with pytest.raises(_Refused):
-                await transaction(EarlyClose())
+                await transaction(EarlyClose(child))
             assert await child.wait() == 0
             assert await child.stderr.read() == b""
     finally:

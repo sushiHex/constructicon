@@ -227,6 +227,14 @@ class RecordingIO:
         self._io = io
         self.methods: list[str] = []
 
+    @property
+    def stdout_bytes_received(self) -> int:
+        return self._io.stdout_bytes_received
+
+    @property
+    def stdout_eof_received(self) -> bool:
+        return self._io.stdout_eof_received
+
     async def read(self, maximum: int = 8192) -> bytes:
         return await self._io.read(maximum)
 

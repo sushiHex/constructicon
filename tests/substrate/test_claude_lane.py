@@ -167,8 +167,11 @@ def test_task_launchers_reserve_stdin_for_every_lawful_callback_reply(tmp_path):
     ):
         assert launcher.limits.input_bytes == claude_read.task_input_bytes(recipe) == (
             claude_read.STARTUP_INPUT_BYTES
-            + recipe.call_limit * claude_read.CALLBACK_REPLY_BYTES
+            + claude_read.POST_RESULT_INPUT_BYTES
+            + recipe.call_limit * claude_read.callback_reply_bytes(recipe)
         )
+        assert launcher.limits.stdout_bytes == claude_read.task_output_bytes(recipe)
+        assert launcher.limits.record_bytes == claude_read.task_record_bytes(recipe)
     assert loaded.launcher(ClaudeMaintenanceSessionPhase.LOGIN).limits.input_bytes == 4096
 
 
@@ -440,12 +443,15 @@ def test_main_reserves_evidence_and_publishes_only_finite_unqualified_facts(
             else ClaudeNativeRecipe.STREAM_JSON
         )
         # Maintenance conversations self-cap at 8 KiB inside the task launcher's budget.
+        from constructicon.substrate.executors import claude_read
+
         assert launcher.limits.input_bytes == (
             4096 if phase is ClaudeMaintenanceSessionPhase.LOGIN
-            else 8192 + 256 * 1024
+            else claude_read.task_input_bytes(ClaudeNativeRecipe.STREAM_JSON)
         )
         assert launcher.limits.stdout_bytes == (
-            256 * 1024 if phase is ClaudeMaintenanceSessionPhase.LOGIN else 512 * 1024
+            256 * 1024 if phase is ClaudeMaintenanceSessionPhase.LOGIN
+            else claude_read.task_output_bytes(ClaudeNativeRecipe.STREAM_JSON)
         )
         if phase is ClaudeMaintenanceSessionPhase.QUALIFY:
             assert policy == claude_lane.read_configuration(

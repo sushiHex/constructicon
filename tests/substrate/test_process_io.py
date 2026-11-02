@@ -89,6 +89,47 @@ async def test_fragment_reads_keep_one_capture_cursor():
     assert output == b"abcdef"  # Consumption cannot erase salvage.
 
 
+async def test_captured_stdout_snapshot_includes_unstarted_and_consumed_reads():
+    io, _, output = channel()
+    assert io.stdout_bytes_received == 0 and io.stdout_eof_received is False
+    output.extend(b"captured")
+    pending = asyncio.create_task(io.read(2))
+    # The captured-byte fact is affirmative even before that reader starts.
+    assert io.offset == 0 and io.stdout_bytes_received == 8
+    assert await pending == b"ca"
+    assert io.offset == 2 and io.stdout_bytes_received == 8
+    output.extend(b"more")
+    assert io.stdout_bytes_received == 12
+    io.eof = True
+    assert io.stdout_eof_received is True
+    assert await io.read() == b"pturedmore"
+    assert io.stdout_bytes_received == 12
+    io.invalidate()
+    with pytest.raises(ContractViolation):
+        _ = io.stdout_bytes_received
+    with pytest.raises(ContractViolation):
+        _ = io.stdout_eof_received
+
+
+async def test_recording_wrapper_forwards_the_captured_stdout_snapshot():
+    from constructicon.substrate.executors.codex_lane import RecordingIO
+
+    io, _, output = channel()
+    recording = RecordingIO(io)
+    assert recording.stdout_bytes_received == 0 and recording.stdout_eof_received is False
+    output.extend(b"captured")
+    assert recording.stdout_bytes_received == 8
+    io.eof = True
+    assert recording.stdout_eof_received is True
+    assert await recording.read(2) == b"ca"
+    assert recording.stdout_bytes_received == 8
+    io.invalidate()
+    with pytest.raises(ContractViolation):
+        _ = recording.stdout_bytes_received
+    with pytest.raises(ContractViolation):
+        _ = recording.stdout_eof_received
+
+
 async def test_stdin_half_close_is_idempotent_but_scope_close_refuses_every_operation():
     io, writer, output = channel()
     await io.close_stdin()

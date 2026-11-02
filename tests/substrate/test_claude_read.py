@@ -105,6 +105,15 @@ class Peer:
         self.callback_replies = 0
         self.registration = False
         self.reply_text = "file text"
+        self.stdout_read_bytes = 0
+
+    @property
+    def stdout_bytes_received(self):
+        return self.stdout_read_bytes + len(self.output)
+
+    @property
+    def stdout_eof_received(self):
+        return self.closed
 
     def emit(self, value):
         if self.defect == "terminal-session" and value.get("type") == "result":
@@ -253,6 +262,7 @@ class Peer:
         size = min(len(self.output), maximum, self.fragment)
         data = bytes(self.output[:size])
         del self.output[:size]
+        self.stdout_read_bytes += len(data)
         return data
 
     async def close_stdin(self):
@@ -262,7 +272,7 @@ class Peer:
 
 class Launcher:
     claude_recipe = ClaudeNativeRecipe.STREAM_JSON
-    limits = DEFAULT_PROCESS_LIMITS
+    limits = replace(DEFAULT_PROCESS_LIMITS, record_bytes=claude_read.RECORD_BYTES)
 
     def __init__(self, peer=None, *, result=None):
         self.peer = peer or Peer()
@@ -442,14 +452,16 @@ async def test_classifier_observations_do_not_renew_or_escape_stream_bounds(limi
     class Limited(Peer):
         def terminal(self):
             for _ in range(40 if limit == "cumulative" else 1):
-                super().emit(classifier_sideband("task_summary", detail="x" * 512))
+                size = claude_read.TEXT_BYTES if limit == "cumulative" else 512
+                super().emit(classifier_sideband("task_summary", detail="x" * size))
             if limit == "cumulative":
                 super().terminal()
             # Summary alone never settles the turn; silence spends the deadline.
 
     launcher = Launcher(Limited())
     if limit == "cumulative":
-        launcher.limits = replace(launcher.limits, stdout_bytes=16000)
+        launcher.limits = replace(launcher.limits, stdout_bytes=claude_read.task_output_bytes(
+            ClaudeNativeRecipe.STREAM_JSON))
     outcome, calls = await run(launcher, timeout=.05 if limit == "deadline" else 5)
     assert isinstance(outcome, ExecutorFailure) and launcher.joined
     assert len(calls) == launcher.peer.callback_replies == 1
@@ -2259,7 +2271,7 @@ async def test_lawful_callback_reply_fits_the_assembled_stdin_budget(budget):
         return text
 
     outcome, _ = await run(launcher, worker=worker)
-    assert ran and launcher.joined
+    assert ran == (budget == "task") and launcher.joined
     if budget == "task":
         assert isinstance(outcome, ExecutorSuccess), outcome
         assert launcher.peer.callback_replies == 1
@@ -2426,6 +2438,7 @@ async def test_worker_gets_remaining_absolute_deadline_without_renewal(monkeypat
         model="model", effort="high",
         worker=worker, input_limit=1000, output_limit=1000, deadline=110,
     )
+    transaction._io = Peer()
     transaction._state = "dispatched"
     pending = asyncio.create_task(asyncio.Event().wait())
     transaction._pending = pending
