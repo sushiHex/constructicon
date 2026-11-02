@@ -23,6 +23,14 @@ class ProcessIO(Protocol):
         """
         ...
 
+    @property
+    def stdout_eof_received(self) -> bool:
+        """Whether stdout EOF has been captured, even with unread buffered bytes.
+
+        Once true, it stays true and the captured byte count cannot increase.
+        """
+        ...
+
     async def write(self, data: bytes) -> None: ...
 
     async def read(self, maximum: int = 8192) -> bytes: ...

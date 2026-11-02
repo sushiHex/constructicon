@@ -111,6 +111,10 @@ class Peer:
     def stdout_bytes_received(self):
         return self.stdout_read_bytes + len(self.output)
 
+    @property
+    def stdout_eof_received(self):
+        return self.closed
+
     def emit(self, value):
         if self.defect == "terminal-session" and value.get("type") == "result":
             value["session_id"] = NATIVE_UUID
@@ -2434,6 +2438,7 @@ async def test_worker_gets_remaining_absolute_deadline_without_renewal(monkeypat
         model="model", effort="high",
         worker=worker, input_limit=1000, output_limit=1000, deadline=110,
     )
+    transaction._io = Peer()
     transaction._state = "dispatched"
     pending = asyncio.create_task(asyncio.Event().wait())
     transaction._pending = pending

@@ -50,6 +50,10 @@ class CapturedPipeChannel:
         # StreamReader owns these captured bytes even before our read starts.
         return self.read_bytes + len(self.child.stdout._buffer)
 
+    @property
+    def stdout_eof_received(self):
+        return self.child.stdout._eof
+
     async def read(self, maximum=8192):
         raw = await self.child.stdout.read(maximum)
         self.read_bytes += len(raw)
@@ -74,6 +78,9 @@ async def test_pipe_channel_snapshot_counts_queued_and_consumed_bytes():
     assert await channel.read(2) == b"ca"
     assert channel.stdout_bytes_received == 8 and channel.read_bytes == 2
     reader.feed_data(b"more")
+    assert channel.stdout_bytes_received == 12
+    reader.feed_eof()
+    assert channel.stdout_eof_received is True
     assert channel.stdout_bytes_received == 12
 
 

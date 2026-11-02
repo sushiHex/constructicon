@@ -480,6 +480,8 @@ class ClaudeReadTransaction:
                              "checked", "drained", "refused"] = "new"
         self._input_bytes = self._output_bytes = self._startup_input_bytes = 0
         self._post_input_bytes = 0
+        self._captured_stdout_bytes = 0
+        self._captured_stdout_eof = False
         self._buffer = bytearray()
         self._records: list[bytes] = []
         self._pending: asyncio.Task[bytes] | None = None
@@ -807,6 +809,34 @@ class ClaudeReadTransaction:
         finally:
             self._phase = previous_phase
 
+    def _capture_snapshot(self) -> tuple[int, bool]:
+        assert self._io is not None
+        captured = self._io.stdout_bytes_received
+        eof = self._io.stdout_eof_received
+        if (type(captured) is not int or captured < self._output_bytes
+                or captured < self._captured_stdout_bytes or captured > self._output_limit
+                or type(eof) is not bool or (self._eof and not eof)
+                or (self._captured_stdout_eof
+                    and (not eof or captured != self._captured_stdout_bytes))):
+            raise self._refused(ClaudeReadRefusalCode.STREAM_BOUND)
+        self._captured_stdout_bytes, self._captured_stdout_eof = captured, eof
+        return captured, eof
+
+    async def _callback_barrier(self) -> int:
+        """Classify all bytes and EOF already captured, including an unstarted read.
+
+        The final snapshot and the caller's authority check have no intervening
+        await. Nothing here claims freshness for future bytes or an OS pipe.
+        """
+        while True:
+            await self._quiet()
+            captured, eof = self._capture_snapshot()
+            if captured == self._output_bytes and (not eof or self._eof):
+                return captured
+            if self._pending is None:
+                raise self._refused(ClaudeReadRefusalCode.STREAM_END)
+            await self._wait_read()
+
     async def _write(self, raw: bytes, *, user: bool = False, callback: bool = False) -> None:
         self._check()
         self._input_bytes += len(raw)  # Spent before delivery, including uncertain writes.
@@ -979,7 +1009,7 @@ class ClaudeReadTransaction:
             if not valid:
                 raise self._refused(ClaudeReadRefusalCode.MCP_ARGUMENTS, value)
             assert isinstance(path, str)
-            await self._quiet()  # Classify buffered frames before worker authority.
+            captured_stdout = await self._callback_barrier()
             if self._command_completed:
                 raise self._refused(ClaudeReadRefusalCode.LIFECYCLE, value)
             # A result cannot be truncated after the worker may have mutated its
@@ -989,11 +1019,6 @@ class ClaudeReadTransaction:
             maximum_reply = _callback_response(outer, identifier, {
                 "content": [{"type": "text", "text": "\x00" * output_limit}], "isError": False,
             })
-            assert self._io is not None
-            captured_stdout = self._io.stdout_bytes_received
-            if (type(captured_stdout) is not int or captured_stdout < self._output_bytes
-                    or captured_stdout > self._output_limit):
-                raise self._refused(ClaudeReadRefusalCode.STREAM_BOUND, value)
             if (len(maximum_reply) > callback_reply_bytes(self._recipe)
                     or self._input_bytes + len(maximum_reply) + POST_RESULT_INPUT_BYTES
                     > self._input_limit
@@ -1022,9 +1047,9 @@ class ClaudeReadTransaction:
             while not task.done():
                 assert self._pending is not None
                 await asyncio.wait((task, self._pending), return_when=asyncio.FIRST_COMPLETED)
-                await self._quiet()  # Read wins even when worker and EOF/terminal finish together.
+                await self._callback_barrier()  # Captured read/EOF wins a simultaneous finish.
             text = await task
-            await self._quiet()
+            await self._callback_barrier()
             return text
         except BaseException as error:
             if not task.done():

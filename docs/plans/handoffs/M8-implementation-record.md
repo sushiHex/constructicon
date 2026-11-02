@@ -82,8 +82,22 @@ from its retained stdout buffer; the fake peer reports consumed plus queued
 bytes. Admission validates the fact and uses it for capacity. Split-read READ
 and WRITE peers and a portable test of the actual `_ProcessIO` primitive cover
 the unstarted-reader boundary. This is not an OS-pipe readiness or freshness
-claim; unsupported or terminal records not yet framed retain the existing
-classification limits.
+claim.
+
+A related class reproduction then established a pre-existing authority defect,
+not merely a budget defect: a valid same-user completed/cancelled lifecycle
+record queued after a callback could remain outside parser accounting when the
+worker started. It was consequential and was not waived as pre-existing. The
+callback barrier now repeatedly settles the owned read and classifies everything
+already captured before granting work or releasing its result. Captured EOF is
+a second affirmative `ProcessIO` fact because zero-byte EOF cannot be inferred
+from byte-count equality. Both facts are type-checked and monotonic; once EOF is
+captured, the count cannot grow. Final settled snapshot, completion recheck,
+capacity checks and worker grant have no intervening await. READ and WRITE
+split-read regressions prove that queued completion, cancellation and zero-byte
+EOF grant no worker/progress authority. Startup and handshake behavior retain
+their existing protocol boundaries. Future bytes and OS-pipe readiness remain
+outside the guarantee.
 
 Focused peers exercise eight full programs with duplicated control-heavy
 results, full control-heavy READ results with and without echoes, the full
@@ -91,14 +105,20 @@ startup allowance, and a one-byte input-capacity boundary with maximally escaped
 admitted IDs. The insufficient-capacity case affirmatively proves no worker
 call. Task profile preflight accepts exact input/stdout/record ceilings and
 refuses each +1. Independent review and exact-head CI evidence belong to the
-delivery PR. The seven new focused mutants cover pre-effect reply capacity,
+delivery PR. The nine new focused mutants cover pre-effect reply capacity,
 JSON expansion, echoed-result framing, cumulative WRITE stdout and pre-effect
 remaining stdout capacity, captured rather than parsed accounting, and invalid
-snapshot facts. The final narrow independent review found no further blocker
-in the snapshot fix (Claude transaction blob
+snapshot facts, positive classification of captured bytes, and captured EOF.
+An earlier narrow independent review found no further blocker in the first
+snapshot fix (Claude transaction blob
 `65dd409af5390ca996e0466fb6cdf96fc416d86c`, plus the core contract and Linux
 implementation). A suspected qualification-revision bypass was rejected after
 source reproduction: host acceptance also compares the launcher revision.
+The later authority-class fix requires fresh final-source review and CI; its
+evidence belongs to the delivery PR. The complete protocol mutation inventory
+also found that the new callback preflight masked an older cumulative-output
+mutant's original input. That mutant now uses the existing zero-callback READ
+permitting path, where the parser ceiling must bind without callback admission.
 
 Launcher limits feed `LinuxLauncher.revision`; the protocol source also feeds
 the executor revision. The shared `ProcessIO` contract and Linux source also

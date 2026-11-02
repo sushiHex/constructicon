@@ -14,6 +14,7 @@ from tests.substrate.test_claude_read import (
     Launcher,
     Peer,
     classifier_sideband,
+    lifecycle,
     run,
     wire,
 )
@@ -258,8 +259,7 @@ async def test_consumed_stdout_refuses_before_worker_echo_cannot_fit(recipe, cou
     assert isinstance(result, ExecutorFailure), result
     assert calls == progress == [] and peer.callback_replies == 0
     assert launcher.conversation._output_bytes < launcher.limits.stdout_bytes
-    if queued:
-        assert launcher.conversation._output_bytes < peer.stdout_bytes_received
+    assert launcher.conversation._output_bytes == peer.stdout_bytes_received
 
 
 @pytest.mark.parametrize("snapshot", [True, -1, 0, 5000000])
@@ -275,3 +275,91 @@ async def test_invalid_captured_stdout_snapshot_refuses_before_worker(snapshot):
     result, calls = await run(launcher)
     assert isinstance(result, ExecutorFailure)
     assert calls == [] and launcher.peer.callback_replies == 0
+
+
+@pytest.mark.parametrize("recipe", [ClaudeNativeRecipe.STREAM_JSON,
+                                   ClaudeNativeRecipe.STREAM_JSON_WRITE])
+@pytest.mark.parametrize("boundary", ["completed", "cancelled", "eof"])
+async def test_already_captured_lifecycle_and_eof_precede_worker_authority(recipe, boundary):
+    base = Peer if recipe is ClaudeNativeRecipe.STREAM_JSON else WritePeer
+
+    class Boundary(base):
+        def mcp(self, method, **kwargs):
+            super().mcp(method, **kwargs)
+            if method == "tools/call":
+                if boundary == "eof":
+                    self.closed = True
+                else:
+                    self.emit(lifecycle(self, boundary))
+
+        async def read(self, maximum=8192):
+            newline = self.output.find(b"\n")
+            if newline >= 0:
+                maximum = min(maximum, newline + 1)
+            return await super().read(maximum)
+
+    peer, calls, progress = Boundary(), [], []
+    launcher = Launcher(peer)
+
+    async def worker(argument, remaining):
+        calls.append(argument)
+        return peer.reply_text
+
+    result = await claude_read.run_read_transaction(
+        launcher, ("fixed-nonvendor-peer",), TaskSpec(instruction="task"),
+        mode=ClaudeAuthMode.SUBSCRIPTION, model="model", effort="high", worker=worker,
+        guard_fds=(), timeout_s=5, recipe=recipe, progress=progress.append,
+    )
+    assert isinstance(result, ExecutorFailure), result
+    assert calls == progress == [] and peer.callback_replies == 0
+    if boundary == "eof":
+        assert peer.stdout_eof_received is True
+        assert peer.stdout_bytes_received == launcher.conversation._output_bytes
+        assert launcher.conversation._eof is True
+    else:
+        assert launcher.conversation._output_bytes == peer.stdout_bytes_received
+        if boundary == "completed":
+            assert launcher.conversation._command_completed is True
+
+
+@pytest.mark.parametrize("fault", ["byte-type", "byte-regression", "byte-overflow", "eof-type",
+                                   "eof-regression", "bytes-after-eof", "parsed-eof-conflict"])
+async def test_capture_snapshot_rejects_contradictory_or_nonmonotonic_facts(fault):
+    import asyncio
+    from types import SimpleNamespace
+
+    transaction = claude_read.ClaudeReadTransaction(
+        TaskSpec(instruction="task"), mode=ClaudeAuthMode.SUBSCRIPTION, model="model",
+        effort="high", worker=lambda argument, remaining: asyncio.sleep(0, "text"),
+        input_limit=1000, output_limit=100, deadline=asyncio.get_running_loop().time() + 5,
+    )
+    channel = SimpleNamespace(stdout_bytes_received=8, stdout_eof_received=False)
+    transaction._io = channel
+    assert transaction._capture_snapshot() == (8, False)
+    if fault == "byte-type":
+        channel.stdout_bytes_received = True
+    elif fault == "byte-regression":
+        channel.stdout_bytes_received = 7
+    elif fault == "byte-overflow":
+        channel.stdout_bytes_received = 101
+    elif fault == "eof-type":
+        channel.stdout_eof_received = 1
+    elif fault == "parsed-eof-conflict":
+        transaction._eof = True
+    else:
+        channel.stdout_eof_received = True
+        assert transaction._capture_snapshot() == (8, True)
+        if fault == "eof-regression":
+            channel.stdout_eof_received = False
+        else:
+            channel.stdout_bytes_received = 9
+    with pytest.raises(claude_read._Refused):
+        transaction._capture_snapshot()
+
+
+async def test_cumulative_stdout_ceiling_binds_without_callback_admission():
+    launcher = Launcher(Peer(callback=False))
+    launcher.limits = replace(launcher.limits, stdout_bytes=1)
+    result, calls = await run(launcher)
+    assert isinstance(result, ExecutorFailure) and calls == []
+    assert "known_refusal=stream-bound" in result.error.detail

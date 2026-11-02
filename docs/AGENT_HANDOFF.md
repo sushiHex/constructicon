@@ -36,6 +36,12 @@ task starts. That shared contract and Linux source change all future Linux
 launcher revisions, including Codex assemblies. The existing recording wrapper
 only forwards the new fact; frozen Codex executor/protocol files are unchanged.
 Historical results stand; fresh qualification is required for new assemblies.
+The captured-byte fact also exposed a pre-existing authority defect: queued
+lifecycle records could remain unclassified while a callback worker started.
+Callback barriers now settle all already-captured bytes and affirmative captured
+EOF before granting work or releasing a result. Byte equality alone cannot
+prove absence of zero-byte EOF. This guarantees the captured instant, not
+future data or OS-pipe readiness.
 
 ## First live Claude subscription READ succeeded
 
