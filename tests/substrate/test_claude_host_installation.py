@@ -8,6 +8,8 @@ The workflow owns the fixed root copy, profile load, and exact cleanup.
 
 from __future__ import annotations
 
+import asyncio
+import errno
 import hashlib
 import io
 import json
@@ -15,11 +17,13 @@ import os
 import subprocess
 import sys
 import tarfile
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from scripts import claude_host_artifacts as host
 
+from constructicon.core.errors import ContractViolation
 from constructicon.core.grants import Posture
 from constructicon.core.identity import Digest
 from constructicon.substrate.executors.claude_native import (
@@ -28,6 +32,7 @@ from constructicon.substrate.executors.claude_native import (
     ClaudeNativeRecipe,
 )
 from tests.substrate.test_claude_native_containment import fake_mount
+from tests.substrate.test_contained_workspace import context
 
 SOURCE = Path(__file__).resolve().parents[2]
 COMMIT = "a" * 40  # Test-only stand-in; prove_sources is substituted below.
@@ -203,6 +208,159 @@ async def test_verified_install_launches_joined_fake_peer(
         assert b"policy-canonical-path:exact\n" in result.stdout
         assert b"mcp-canonical-path:exact\n" in result.stdout
         assert f"final-label:{CLAUDE_PROFILE}\n".encode() in result.stdout
+        assert f"git:{errno.EACCES}\n".encode() in result.stdout
         assert credential.read_bytes() == b"fake-refreshed\n"
+    await _write_population(configuration)
     # The installed artifact and proof scope are physical; the archive member
     # remains synthetic and says nothing about vendor authentication.
+
+
+def _write_context(revision, capability_id, suffix):
+    ctx = context(posture=Posture.WRITE, run_id="claude-git-" + suffix)
+    return replace(ctx, binding=ctx.binding.model_copy(update={
+        "revision": str(revision), "capability_id": capability_id,
+    }), check_control=lambda: None)
+
+
+def test_write_population_prepares_the_real_typed_context():
+    from constructicon.core.manifest import CapabilityBinding
+
+    ctx = _write_context(Digest("sha256:" + "a" * 64), "n5-write-workspace", "accepted")
+    assert isinstance(ctx.binding, CapabilityBinding)
+    expected = context(posture=Posture.WRITE).binding.model_dump()
+    expected.update(revision="sha256:" + "a" * 64, capability_id="n5-write-workspace")
+    assert ctx.binding.model_dump() == expected
+    assert str(ctx.run_lease.run_id) == "claude-git-accepted" and ctx.check_control is not None
+    ctx.check_control()
+
+
+async def _write_population(configuration, missing=None):
+    """Real resource assembly, acquire, populate, Git checkout and discard.
+
+    Only fixture admission/control is test-owned; no launcher/process/populate
+    result is substituted. The installed archive contains the synthetic peer.
+    """
+    from constructicon.api import _qualification_write_assembly as assembly
+    from constructicon.substrate.executors.linux import LinuxLauncher, LinuxLaunchProfile
+    from constructicon.substrate.journal.sqlite import SqliteJournal
+
+    suffix = missing or "accepted"
+    fixture = WORKSPACE / ("write-fixture-" + suffix)
+    assembly.prepare_fixture(fixture)
+    launcher = LinuxLauncher(
+        runtime_root=configuration.launch_root / "runtime",
+        expected_runtime=configuration.runtime_digest,
+        bubblewrap=configuration.launch_root / "bwrap", policy=configuration.launch_policy,
+        expected_policy_sha256=configuration.launch_policy_sha256,
+        launch_profile=LinuxLaunchProfile.CLAUDE_BOOTSTRAP,
+    )
+    if missing:
+        original = (SOURCE / "scripts/constructicon-m8-claude.apparmor").read_bytes()
+        rule = (b"  allow ix /usr/bin/git,\n" if missing == "bootstrap" else
+                b"  allow px /usr/bin/git -> "
+                b"constructicon-m8-claude-launch//&constructicon-m8-claude-bootstrap,\n")
+        components = original.split(b"profile constructicon-m8-claude-")
+        for index, component in enumerate(components):
+            if component.startswith(missing.encode() + b" "):
+                components[index] = component.replace(rule, b"")
+        expected = b"profile constructicon-m8-claude-".join(components)
+        assert POLICY.read_bytes() == expected and expected != original
+        launcher = replace(launcher, expected_policy_sha256=hashlib.sha256(expected).hexdigest())
+    assert launcher.effective_profile is LinuxLaunchProfile.CLAUDE_BOOTSTRAP
+    journal = SqliteJournal(WORKSPACE / ("write-" + suffix + ".sqlite"))
+    resources = await assembly.assemble_contained_write(fixture, journal, launcher)
+    workspace = resources.workspace
+    ctx = _write_context(workspace.revision, assembly.WORKSPACE_CAPABILITY, suffix)
+    acquired = await workspace.acquire(ctx)
+    try:
+        if missing:
+            with pytest.raises(ContractViolation, match="contained staging initialization failed"):
+                await acquired.materialize()
+            assert not acquired.resource.ready
+        else:
+            await acquired.materialize()
+            assert acquired.resource.ready
+            async with acquired.resource.use() as guard:
+                result = await launcher.run(
+                    ("/usr/bin/python3", "-I", "-c", "import subprocess;"
+                     "subprocess.run(['/usr/bin/git','rev-parse','--verify','HEAD'],check=True)"),
+                    workspace=Path(acquired.resource.path), posture=Posture.WRITE,
+                    guard_fds=(guard,), timeout_s=20,
+                )
+            assert result.returncode == result.payload_returncode == 0, result
+            assert result.stdout.strip().decode() == resources.fixture.base_commit
+            assert sorted(p.name for p in Path(acquired.resource.path).iterdir()) == [".git"]
+            async with acquired.resource.use() as guard:
+                await _direct_git_label(launcher, acquired.resource, guard)
+                edited = await launcher.run(
+                    ("/usr/bin/python3", "-I", "-c",
+                     "from pathlib import Path;Path('n5-write.txt').write_bytes(b'ready\\n')"),
+                    workspace=Path(acquired.resource.path), posture=Posture.WRITE,
+                    guard_fds=(guard,), timeout_s=20,
+                )
+                assert edited.returncode == edited.payload_returncode == 0, edited
+            # Includes Python commit and the actual direct-Git pack-objects READ
+            # boundary, then untrusted-pack validation/import and publication.
+            candidate = await acquired.resource.commit_all("synthetic Claude policy proof")
+            assert candidate != resources.fixture.base_commit
+            assert resources.authority._run("show", f"{candidate}:n5-write.txt").stdout == "ready\n"
+            assert resources.authority._run("rev-parse", f"{candidate}^").stdout.strip() == (
+                resources.fixture.base_commit
+            )
+    finally:
+        closed = await workspace.close(acquired, "discard")
+        assert closed.disposition == "discarded" and not Path(acquired.resource.path).exists()
+    assert resources.authority.resolve_ref(assembly.TARGET) == resources.fixture.base_commit
+
+
+async def _direct_git_label(launcher, workspace, guard):
+    """Observe only this test's blocked direct Git child, then join normally."""
+    observed = []
+    expected_label = launcher.effective_profile.label
+
+    async def conversation(io):
+        async with asyncio.timeout(5):
+            while not observed:
+                pending, seen = [os.getpid()], set()
+                while pending:
+                    pid = pending.pop()
+                    if pid in seen:
+                        continue
+                    seen.add(pid)
+                    assert len(seen) <= 64
+                    proc = Path(f"/proc/{pid}")
+                    try:
+                        if proc.joinpath("cmdline").read_bytes() == (
+                            b"/usr/bin/git\0hash-object\0--stdin\0"
+                        ):
+                            observed.append(proc.joinpath("attr/current").read_text().strip())
+                        pending.extend(int(p) for p in proc.joinpath(
+                            f"task/{pid}/children").read_text().split())
+                    except FileNotFoundError:
+                        pass  # A joined supervisor child may disappear mid-observation.
+                if not observed:
+                    await asyncio.sleep(.01)
+        assert observed == [expected_label]
+        await io.write(b"synthetic Git label probe\n")
+        await io.close_stdin()
+        while await io.read():
+            pass
+
+    result = await launcher.exchange(
+        ("/usr/bin/git", "hash-object", "--stdin"), workspace=Path(workspace.path),
+        posture=Posture.READ, guard_fds=(guard,), conversation=conversation, timeout_s=15,
+    )
+    assert result.returncode == result.payload_returncode == 0, result
+    assert observed == [expected_label]
+
+
+async def test_missing_git_rule_refuses_real_write_population():
+    _required()
+    from constructicon.substrate.executors.claude_lane import read_configuration
+
+    missing = os.environ["M8_CLAUDE_GIT_RULE_MISSING"]
+    assert missing in ("launch", "bootstrap")
+    pins = json.loads((WORKSPACE / "proof-pins.json").read_text())
+    configuration = read_configuration(INSTALLED / "launch-config.json",
+                                       expected_sha256=pins["launch_config_sha256"])
+    await _write_population(configuration, missing)

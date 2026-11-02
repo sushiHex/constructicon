@@ -35,6 +35,7 @@ MAINTENANCE_LITERAL_EVIDENCE_NAMES = [
 PROOFS = {
     "Prove staged Claude host runtime with a synthetic native peer": (
         "foundation", "tests/substrate/test_claude_host_installation.py "
+        "tests/substrate/test_claude_host_installation.py "
         "tests/substrate/test_claude_host_installation.py",
     ),
     "Prove the fake Claude native final transition and bounded layout": (
@@ -191,10 +192,17 @@ def test_every_existing_proof_runs_once_in_its_isolated_lane():
                     "test_stage_and_judge_synthetic_host_runtime")
     verify_target = ("tests/substrate/test_claude_host_installation.py::"
                      "test_verified_install_launches_joined_fake_peer")
-    assert host_step.count("-m pytest") == 2
-    assert host_step.count("M8_CLAUDE_HOST_PROOF_REQUIRED=1") == 2
+    assert host_step.count("-m pytest") == 3
+    assert host_step.count("M8_CLAUDE_HOST_PROOF_REQUIRED=1") == 3
     assert host_step.count(stage_target) == host_step.count(verify_target) == 1
     assert host_step.index(stage_target) < host_step.index(verify_target)
+    missing_target = ("tests/substrate/test_claude_host_installation.py::"
+                      "test_missing_git_rule_refuses_real_write_population")
+    assert (host_step.index(stage_target) < host_step.index(missing_target)
+            < host_step.index(verify_target))
+    assert 'for component in launch bootstrap; do' in host_step
+    assert 'M8_CLAUDE_GIT_RULE_MISSING="$component"' in host_step
+    assert host_step.count('sudo apparmor_parser --replace --skip-cache') == 2
     startup = steps[startup_name]
     assert startup.count("-m pytest") == 2
     controls = "-k 'not test_pinned_credential_free_startup_has_only_a_noauth_observation'"

@@ -36,7 +36,7 @@ from tests.substrate.test_native_codex_mediation import write_evidence
 
 ROOT = Path("/var/lib/constructicon-m8-claude")
 POLICY = Path("/etc/apparmor.d/constructicon-m8-claude")
-OPERATIONS = ("direct", "shell", "self", "fd", "execveat")
+OPERATIONS = ("direct", "shell", "self", "fd", "execveat", "git")
 GENERIC_LABEL = "constructicon-m8-launch//&constructicon-m8-workload (enforce)"
 
 
@@ -137,7 +137,11 @@ async def test_same_namespace_execution_controls_really_execute(
     finally:
         os.close(guard)
     assert result.returncode == result.payload_returncode == 0, result
-    assert result.stdout == f"control-label:{GENERIC_LABEL}\nattempt:{operation}\n".encode()
+    expected = f"control-label:{GENERIC_LABEL}\nattempt:{operation}\n".encode()
+    if operation == "git":
+        assert result.stdout.startswith(expected + b"git version ")
+    else:
+        assert result.stdout == expected
     assert result.stderr == b""
 
 
