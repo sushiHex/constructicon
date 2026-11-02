@@ -11192,8 +11192,16 @@ stack for the actual WRITE resources. This source incompatibility matches the
 observed failure; the child stderr and exit distinction were not exported and
 remain unmeasured.
 
-Both Claude policies now inherit execution of the fixed immutable `/usr/bin/git`
-in both required components. No generic executable rule or new profile is added.
+Both Claude policies now transition direct execution of the fixed immutable
+`/usr/bin/git` from launch into the launch/bootstrap stack, with inherited Git
+execution in bootstrap. No generic executable rule or new profile is added.
+The first candidate's launch-only inheritance was insufficient: `capture` also
+launches Git `pack-objects` directly, so that command would retain launch alone.
+Consequential review found that source-backed gap; the explicit stacked
+transition closes it. The initial foundation CI failed earlier, while the test
+used `dataclasses.replace` on a Pydantic binding; it never exercised the policy.
+The corrected helper uses `model_copy` for that binding and has an executed
+portable typed-context preparation test.
 The native component's `deny x /**` remains unchanged: a vendor process cannot
 use the bootstrap permission to execute Git. The worker may execute Git inside
 its existing networkless workspace; this is narrower than the existing Codex
@@ -11206,7 +11214,10 @@ taxonomy were deferred because neither is needed to repair this fixed permission
 
 The existing Linux foundation proof now materializes and populates the real
 contained WRITE resources under the installed production Claude profile, checks
-the checked-out base and discards the workspace without moving the target. Root
+the checked-out base, edits through the contained Python worker and performs real
+capture, pack export/import and candidate-content checks before discard without
+moving the target. A blocked direct Git control's own process label must equal
+the declared bootstrap stack. Root
 loads two variants, each missing one required Git rule; service-owned tests must
 refuse population before root restores the exact candidate policy and runs the
 accepting path. The synthetic native peer also attempts Git: the native stack
@@ -11214,7 +11225,10 @@ must deny it while a same-namespace generic control admits it. These are physica
 removed-rule controls, not claimed code-object mutation kills. Portable tests pin
 exact rules and production/hosted policy parity. Windows cannot execute these
 Linux assertions; final-head CI supplies their physical evidence, recorded in
-the delivery PR. No new vendor binary ran locally.
+the delivery PR. The revised physical checks are not established by the failed
+first CI run or Windows skips. No new vendor binary ran locally. Expanded bounded
+producer diagnostics remain separately tracked in #348; the historical live
+child errno and exit distinction remain unmeasured.
 
 This code does not update the private host. Its historical policy and withdrawn
 store remain intact. A new launch policy changes sealed launch/provider identity

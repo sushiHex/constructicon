@@ -22,9 +22,14 @@ def test_workspace_git_is_exact_in_each_trusted_component(policy_name, component
     policy = (root / policy_name).read_text()
     body = policy.split(f"profile constructicon-m8-claude-{component} ", 1)[1].split("\n}", 1)[0]
     inherited = re.findall(r"^  allow ix (.*),$", body, re.MULTILINE)
-    assert sorted(inherited) == sorted(["/usr/bin/git"] + (
-        ["/usr/bin/python3{,.12}"] if component == "bootstrap" else []
-    ))
+    assert sorted(inherited) == (
+        ["/usr/bin/git", "/usr/bin/python3{,.12}"] if component == "bootstrap" else []
+    )
+    git = [line.strip() for line in body.splitlines() if "/usr/bin/git" in line]
+    assert git == (["allow ix /usr/bin/git,"] if component == "bootstrap" else [
+        "allow px /usr/bin/git -> "
+        "constructicon-m8-claude-launch//&constructicon-m8-claude-bootstrap,",
+    ])
     production, ci = ((root / name).read_text() for name in (
         "scripts/constructicon-m8-claude.apparmor", "scripts/ci/constructicon-m8-claude.apparmor",
     ))

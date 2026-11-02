@@ -15,7 +15,7 @@ profile constructicon-m8-claude-launch /var/lib/constructicon-m8-claude/bwrap fl
   allow unix,
   allow signal,
   allow ptrace,
-  allow ix /usr/bin/git,
+  allow px /usr/bin/git -> constructicon-m8-claude-launch//&constructicon-m8-claude-bootstrap,
   allow px /usr/bin/python3{,.12} -> constructicon-m8-claude-launch//&constructicon-m8-claude-bootstrap,
   allow px /opt/claude/claude -> constructicon-m8-claude-launch//&constructicon-m8-claude-bootstrap//&constructicon-m8-claude-native,
 }

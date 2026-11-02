@@ -239,7 +239,8 @@ jobs:
           prefix=b"profile constructicon-m8-claude-"+sys.argv[2].encode()+b" "
           before,body=source.split(prefix,1)
           head,after=body.split(b"\n}",1)
-          rule=b"  allow ix /usr/bin/git,\n"
+          rule=(b"  allow ix /usr/bin/git,\n" if sys.argv[2]=="bootstrap" else
+                b"  allow px /usr/bin/git -> constructicon-m8-claude-launch//&constructicon-m8-claude-bootstrap,\n")
           assert head.count(rule)==1
           policy.write_bytes(before+prefix+head.replace(rule,b"")+b"\n}"+after)
           ' "$PWD/scripts/constructicon-m8-claude.apparmor" "$component"
