@@ -11169,3 +11169,54 @@ the default 4 KiB post-capture reader. The existing transport writes and syncs
 complete native streams before that read. Independent review checked the
 original capture under the existing 64 KiB controller envelope and the frozen
 remote replacement predicate. No fetch rerun or runbook change occurred.
+
+## Claude WRITE population under the installed execution policy — #339
+
+The separately selected [metadata observation](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6586455873)
+completed with native zero, empty stderr and a valid, complete journal projection:
+nine events, ending in `NodeFailed` / `ContractViolation` /
+`workspace_staging_failed`. Its [closeout](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6586952075)
+records the evidence SHA-256
+`0b90a2bc1379ac77ad5e5a611041223784e8dc945d56a0040eff792ddedac3ef`.
+No vendor, model, qualification, installation or store operation ran. Clean park,
+positive Off/idle and custody release completed. No model retry was selected.
+
+The failed boundary is WRITE workspace population: trusted Python runs Git init,
+index-pack, update-ref and checkout inside the resource sandbox. READ population
+extracts a tar with Python, so its live success did not prove this path. Source
+audit matched the exact policy blob from launch commit `41e416f` to the host's
+observed SHA-256 `7d0c68c12110d54ed669d050f04a259ffb18981a5bfe60f88809303fa7d34ad6`.
+That policy permits Python and Claude execution, but neither retained launch nor
+bootstrap component admits Git. The launcher explicitly selects that bootstrap
+stack for the actual WRITE resources. This source incompatibility matches the
+observed failure; the child stderr and exit distinction were not exported and
+remain unmeasured.
+
+Both Claude policies now inherit execution of the fixed immutable `/usr/bin/git`
+in both required components. No generic executable rule or new profile is added.
+The native component's `deny x /**` remains unchanged: a vendor process cannot
+use the bootstrap permission to execute Git. The worker may execute Git inside
+its existing networkless workspace; this is narrower than the existing Codex
+generic-workload policy. Existing adversarial capture tests treat worker-written
+Git metadata as hostile. Workspace read/write mounts, network restrictions,
+credential exposure and capture authority are unchanged. Independent design
+review verified both that precedent and those
+capture protections. A separate resource profile and a broad staging-error
+taxonomy were deferred because neither is needed to repair this fixed permission.
+
+The existing Linux foundation proof now materializes and populates the real
+contained WRITE resources under the installed production Claude profile, checks
+the checked-out base and discards the workspace without moving the target. Root
+loads two variants, each missing one required Git rule; service-owned tests must
+refuse population before root restores the exact candidate policy and runs the
+accepting path. The synthetic native peer also attempts Git: the native stack
+must deny it while a same-namespace generic control admits it. These are physical
+removed-rule controls, not claimed code-object mutation kills. Portable tests pin
+exact rules and production/hosted policy parity. Windows cannot execute these
+Linux assertions; final-head CI supplies their physical evidence, recorded in
+the delivery PR. No new vendor binary ran locally.
+
+This code does not update the private host. Its historical policy and withdrawn
+store remain intact. A new launch policy changes sealed launch/provider identity
+and needs separately selected replacement, verification and fresh qualification
+before any further live model attempt. Closed session authority is not reused.

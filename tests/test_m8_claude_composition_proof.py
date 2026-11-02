@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -11,6 +12,26 @@ from scripts.ci import build_m8_claude_fixture as fixture
 from scripts.ci import prove_m8_claude_missing as missing
 
 from constructicon.substrate.executors.claude_native import CLAUDE_PROFILE
+
+
+@pytest.mark.parametrize("policy_name", ["scripts/constructicon-m8-claude.apparmor",
+                                         "scripts/ci/constructicon-m8-claude.apparmor"])
+@pytest.mark.parametrize("component", ["launch", "bootstrap"])
+def test_workspace_git_is_exact_in_each_trusted_component(policy_name, component):
+    root = Path(__file__).resolve().parents[1]
+    policy = (root / policy_name).read_text()
+    body = policy.split(f"profile constructicon-m8-claude-{component} ", 1)[1].split("\n}", 1)[0]
+    inherited = re.findall(r"^  allow ix (.*),$", body, re.MULTILINE)
+    assert sorted(inherited) == sorted(["/usr/bin/git"] + (
+        ["/usr/bin/python3{,.12}"] if component == "bootstrap" else []
+    ))
+    production, ci = ((root / name).read_text() for name in (
+        "scripts/constructicon-m8-claude.apparmor", "scripts/ci/constructicon-m8-claude.apparmor",
+    ))
+    def enforcement(text):
+        return [line.strip() for line in text.splitlines()
+                if line.strip() and not line.lstrip().startswith("#")]
+    assert enforcement(production) == enforcement(ci)
 
 
 def test_native_exec_stack_retains_both_existing_components_without_fallback():

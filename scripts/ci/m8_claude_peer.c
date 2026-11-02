@@ -36,6 +36,7 @@ static void label(const char *key) {
 static int attempt(const char *kind) {
     char *const target[] = {"/usr/bin/python3", "-I", "-c", "pass", NULL};
     if (!strcmp(kind, "direct")) execv(target[0], target);
+    else if (!strcmp(kind, "git")) execl("/usr/bin/git", "git", "--version", (char *)NULL);
     else if (!strcmp(kind, "shell")) execl("/bin/sh", "sh", "-c", ":", (char *)NULL);
     else if (!strcmp(kind, "self")) execl(SELF, SELF, "--landed", (char *)NULL);
     else {
@@ -292,6 +293,7 @@ int main(int argc, char **argv) {
     const char *kinds[] = {"direct", "shell", "self", "fd", "execveat"};
     for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
         printf("%s:%d\n", kinds[i], attempt(kinds[i]));
+    printf("git:%d\n", attempt("git"));
     pid_t child = fork();
     require(child >= 0);
     if (!child) {

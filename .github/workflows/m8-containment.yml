@@ -227,6 +227,32 @@ jobs:
           sudo -u m8-service mv \
             /var/lib/constructicon-m8-claude-host-proof/staging \
             /var/lib/constructicon-m8-claude-host-proof/staging-retired
+          # Each stack component must admit trusted Git. Only these candidate
+          # data rules are removed; the native deny and every other rule stay.
+          # The existing EXIT cleanup owns all three profiles on every failure.
+          for component in launch bootstrap; do
+            sudo /usr/bin/python3 -I -S -B -c '
+          import pathlib,sys
+          source=pathlib.Path(sys.argv[1]).read_bytes()
+          policy=pathlib.Path("/etc/apparmor.d/constructicon-m8-claude")
+          assert policy.read_bytes()==source
+          prefix=b"profile constructicon-m8-claude-"+sys.argv[2].encode()+b" "
+          before,body=source.split(prefix,1)
+          head,after=body.split(b"\n}",1)
+          rule=b"  allow ix /usr/bin/git,\n"
+          assert head.count(rule)==1
+          policy.write_bytes(before+prefix+head.replace(rule,b"")+b"\n}"+after)
+          ' "$PWD/scripts/constructicon-m8-claude.apparmor" "$component"
+            sudo apparmor_parser --replace --skip-cache /etc/apparmor.d/constructicon-m8-claude
+            sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+              M8_CLAUDE_HOST_PROOF_REQUIRED=1 M8_CLAUDE_GIT_RULE_MISSING="$component" \
+              "$PWD/.venv/bin/python" -m pytest \
+                tests/substrate/test_claude_host_installation.py::test_missing_git_rule_refuses_real_write_population \
+                -v --tb=short --durations=10 -p no:cacheprovider </dev/null
+            sudo install -o root -g root -m 0444 \
+              "$PWD/scripts/constructicon-m8-claude.apparmor" /etc/apparmor.d/constructicon-m8-claude
+            sudo apparmor_parser --replace --skip-cache /etc/apparmor.d/constructicon-m8-claude
+          done
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_CLAUDE_HOST_PROOF_REQUIRED=1 \
             "$PWD/.venv/bin/python" -m pytest \

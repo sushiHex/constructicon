@@ -16,6 +16,23 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude WRITE resources require Git in both stacked components
+
+The complete retained journal identified `workspace_staging_failed` before
+Claude dispatch. Source audit matched the installed policy hash and found that
+WRITE population executes Git under a stack that omitted Git execution in both
+launch and bootstrap. READ's Python extraction and a standalone WRITE callback
+had not exercised that composition.
+
+Both policies now add execution of the fixed `/usr/bin/git` in those components;
+the native all-execution denial is unchanged. The existing Linux proof exercises
+real full WRITE population, each removed-rule refusal and native Git denial
+against an admitting control. This does not install a new host policy or establish
+live WRITE acceptance. Policy identity changes require fresh qualification before
+use. The [implementation record](plans/handoffs/M8-implementation-record.md#claude-write-population-under-the-installed-execution-policy--339)
+records the source provenance, measured limits and rejected alternatives. The
+metadata-only session ended with the VM parked, positive idle and custody released.
+
 ## WRITE journal evidence binds the WRITE request
 
 The first bounded Claude WRITE window at controller `fabd271` installed and
