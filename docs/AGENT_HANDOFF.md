@@ -16,6 +16,26 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## WRITE journal evidence binds the WRITE request
+
+The first bounded Claude WRITE window at controller `fabd271` installed and
+qualified its selected startup, but returned an incomplete run with no task
+dispatch, zero callbacks and no candidate. Generation 14 was explicitly
+withdrawn; park and a fresh Off/idle survey completed. This is not live WRITE
+acceptance or general production availability. The
+[implementation record](plans/handoffs/M8-implementation-record.md#first-claude-write-window-and-exact-journal-inputs--339)
+links the selected scope, closeout and evidence limits.
+
+Its metadata reader selected the WRITE filename but expected READ inputs. The
+old accepting test also used READ inputs in a renamed database. WRITE evidence
+now compares the actual three-field request against separately supplied fixture
+identity, base commit and authorization; READ behavior is preserved. A WRITE
+metadata command needs `--fixture-identity` and `--base-commit` from reviewed
+pins. Do not obtain those expectations from the database being inspected.
+The live failure cause remains unestablished by the retained partial projection;
+the attempt tuple alone cannot distinguish workspace materialization from later
+pre-dispatch failures. No new model attempt is evidence for that distinction.
+
 ## Claude task budgets include producer copies and JSON expansion
 
 Pinned Claude Code 2.1.296 source confirms assistant programs and user tool

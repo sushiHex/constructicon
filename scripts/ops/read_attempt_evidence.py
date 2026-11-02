@@ -48,7 +48,7 @@ ERRORS = frozenset(
         "CancelledError",
     }
 )
-# Exact source literals: api/claude_qualification.py:75; executors/linux.py:816.
+# Exact source refusal literals; never prefixes or variable diagnostic text.
 REASONS = {
     "Claude READ refused [known_refusal=settings]": "claude_read_settings",
     "Claude READ refused [known_refusal=hooks]": "claude_read_hooks",
@@ -57,6 +57,18 @@ REASONS = {
     "Claude READ refused [known_refusal=native-store-binding]": "claude_read_native_store_binding",
     "Claude qualification did not complete its fixed READ": "read_contract_refused",
     "the physical Linux launch probe contradicts containment": "probe_contradiction",
+    "the physical Linux launch probe failed": "probe_failed",
+    "the physical Linux launch probe is malformed": "probe_malformed",
+    "Claude READ acquisition deadline expired": "acquisition_expired",
+    "contained staging initialization failed": "workspace_staging_failed",
+    "workspace posture differs from its sealed acquisition": "workspace_posture_mismatch",
+    "workspace mount is no longer its owned directory": "workspace_mount_lost",
+    "workspace must be minted by the assembled provider": "workspace_provider_mismatch",
+    "workspace does not own this open invocation and epoch": "workspace_invocation_mismatch",
+    "contained workspace revision differs from its binding": "workspace_revision_mismatch",
+    "Claude READ task differs from its sealed grants": "task_grants_mismatch",
+    "Claude READ workspace differs from its admitted binding": "workspace_binding_mismatch",
+    "Claude READ executes one materialized task only": "execute_not_ready",
     "Claude READ refused [known_refusal=record]": "claude_read_record",
     "Claude READ refused [known_refusal=record-parse]": "claude_read_record_parse",
     "Claude READ refused [known_refusal=unhandled-record]": "claude_read_unhandled_record",
@@ -513,7 +525,7 @@ def _attempt(root, uid, authorization, run, maximum, posture="read"):
     return result
 
 
-def _journal(root, uid, authorization, run, maximum, posture="read"):
+def _journal(root, uid, run, maximum, posture, expected_inputs):
     result = dict(state="invalid", partial=True, run_status=None, event_count=None, events=None)
     opened, connection, wal_digests = [], None, {}
     try:
@@ -551,7 +563,7 @@ def _journal(root, uid, authorization, run, maximum, posture="read"):
             row is not None
             and row[0] in RUN_STATUS
             and _integer(row[1], maximum)
-            and _json(row[2]) == {"request": {"authorization": authorization}}
+            and _json(row[2]) == expected_inputs
         )
         rows = connection.execute(
             "SELECT seq,kind,CASE WHEN kind='NodeFailed' "
@@ -609,7 +621,7 @@ def _journal(root, uid, authorization, run, maximum, posture="read"):
         )
     except FileNotFoundError:
         result["state"] = (
-            "missing" if not opened and not (root / "read.sqlite").is_symlink() else "invalid"
+            "missing" if not opened and not path.is_symlink() else "invalid"
         )
     except (OSError, ValueError, TypeError, KeyError, RecursionError, sqlite3.Error):
         pass
@@ -621,7 +633,8 @@ def _journal(root, uid, authorization, run, maximum, posture="read"):
     return result
 
 
-def collect(run_root, expected_authorization_id, expected_run_id, max_epoch=1, *, posture="read"):
+def collect(run_root, expected_authorization_id, expected_run_id, max_epoch=1, *, posture="read",
+            expected_fixture_identity=None, expected_base_commit=None):
     """Inspect two fixed private artifacts; caller supplies previously checked pins."""
     require(type(max_epoch) is int and max_epoch == 1)
     require(type(posture) is str and posture in ("read", "write"))
@@ -631,6 +644,20 @@ def collect(run_root, expected_authorization_id, expected_run_id, max_epoch=1, *
             for value in (expected_authorization_id, expected_run_id)
         )
     )
+    if posture == "write":
+        require(
+            type(expected_fixture_identity) is str
+            and re.fullmatch(r"sha256:[0-9a-f]{64}", expected_fixture_identity) is not None
+            and type(expected_base_commit) is str
+            and re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", expected_base_commit) is not None
+        )
+        # The producer is _qualification_write_graph.write_inputs.
+        expected_inputs = {"request": {"authorization_id": expected_authorization_id,
+                           "fixture_identity": expected_fixture_identity,
+                           "base_commit": expected_base_commit}}
+    else:
+        require(expected_fixture_identity is None and expected_base_commit is None)
+        expected_inputs = {"request": {"authorization": expected_authorization_id}}
     root, uid = Path(run_root), _service_uid()
     require(uid > 0 and _effective_uid() == uid)
     _root(root, uid)
@@ -639,8 +666,8 @@ def collect(run_root, expected_authorization_id, expected_run_id, max_epoch=1, *
         "schema_version": 1,
         "attempt": _attempt(root, uid, expected_authorization_id, expected_run_id, max_epoch,
                             posture),
-        "journal": _journal(root, uid, expected_authorization_id, expected_run_id, max_epoch,
-                            posture),
+        "journal": _journal(root, uid, expected_run_id, max_epoch,
+                            posture, expected_inputs),
     }
     if posture == "write":
         result.update(schema_version=2, posture="write")
@@ -663,11 +690,14 @@ def main(argv=None):
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--max-epoch", required=True, type=int, choices=(1,))
     parser.add_argument("--posture", choices=("read", "write"), default="read")
+    parser.add_argument("--fixture-identity")
+    parser.add_argument("--base-commit")
     options = parser.parse_args(argv)
     try:
         result = collect(
             options.run_root, options.authorization_id, options.run_id, options.max_epoch,
-            posture=options.posture,
+            posture=options.posture, expected_fixture_identity=options.fixture_identity,
+            expected_base_commit=options.base_commit,
         )
     except (OSError, ValueError, TypeError, KeyError, ImportError):
         print("read evidence collection refused", file=sys.stderr)
