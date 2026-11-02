@@ -52,7 +52,11 @@ from constructicon.substrate.executors.claude_operator_io import (
     STDOUT_BYTES as LOGIN_OUTPUT_BYTES,
 )
 from constructicon.substrate.executors.claude_protocol import RECORD_BYTES, ClaudeAuthMode
-from constructicon.substrate.executors.claude_read import task_input_bytes
+from constructicon.substrate.executors.claude_read import (
+    task_input_bytes,
+    task_output_bytes,
+    task_record_bytes,
+)
 from constructicon.substrate.executors.claude_startup_qualification import (
     ClaudeQualificationLifecycle,
     ClaudeStartupQualification,
@@ -148,16 +152,18 @@ def _limits_ok(limits: object, *, login: bool, recipe: object) -> bool:
         return False
     if login:
         input_bound = LOGIN_INPUT_BYTES
+        output_bound, record_bound = LOGIN_OUTPUT_BYTES, RECORD_BYTES
     elif recipe is ClaudeNativeRecipe.STREAM_JSON or recipe is ClaudeNativeRecipe.STREAM_JSON_WRITE:
         # The shared task launcher reserves callback replies; every maintenance
         # conversation on it still self-caps at MODE_INPUT_BYTES.
         input_bound = task_input_bytes(recipe)
+        output_bound, record_bound = task_output_bytes(recipe), task_record_bytes(recipe)
     else:
         return False
     return (
         limits.input_bytes <= input_bound
-        and limits.stdout_bytes <= (LOGIN_OUTPUT_BYTES if login else MODE_OUTPUT_BYTES)
-        and limits.record_bytes <= RECORD_BYTES
+        and limits.stdout_bytes <= output_bound
+        and limits.record_bytes <= record_bound
         and limits.stderr_bytes <= STDERR_BYTES
     )
 

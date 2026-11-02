@@ -37,6 +37,9 @@ from constructicon.substrate.executors.claude_initialize import _cancelled, _cle
 from constructicon.substrate.executors.claude_maintenance_mode import (
     INPUT_BYTES as MODE_INPUT_BYTES,
 )
+from constructicon.substrate.executors.claude_maintenance_mode import (
+    OUTPUT_BYTES as MODE_OUTPUT_BYTES,
+)
 from constructicon.substrate.executors.claude_native import (
     ClaudeNativeRecipe,
     ClaudeNativeStoreMount,
@@ -62,7 +65,7 @@ from constructicon.substrate.executors.claude_protocol import (
     initialize_request,
     observe_initialize,
 )
-from constructicon.substrate.executors.claude_read_worker import validate_read_path
+from constructicon.substrate.executors.claude_read_worker import PATH_BYTES, validate_read_path
 from constructicon.substrate.executors.claude_startup import (
     ClaudeStartupVerdict,
     hooks_request,
@@ -71,6 +74,7 @@ from constructicon.substrate.executors.claude_startup import (
     settings_request,
 )
 from constructicon.substrate.executors.claude_write_worker import (
+    WRITE_PROGRAM_BYTES,
     WRITE_WORKER_LIMITS,
     validate_write_program,
 )
@@ -79,17 +83,53 @@ from constructicon.substrate.executors.operator_store import BindingCheck
 
 TEXT_BYTES = 64 * 1024
 UI_RECORDS = 8
-# Native stdin law: the startup conversation (controls, MCP handshake, user message)
-# keeps the maintenance-mode bound, and each lawful callback reply reserves one record.
+# JSON expands one UTF-8 byte to at most six bytes (for example U+0000).
+# RECORD_BYTES is a policy allowance for metadata, never a vendor size promise.
 STARTUP_INPUT_BYTES = MODE_INPUT_BYTES
-CALLBACK_REPLY_BYTES = RECORD_BYTES
+POST_RESULT_INPUT_BYTES = sum(len(builder("0" * 32)) for builder in (
+    initialize_request, settings_request, hooks_request,
+))
+
+
+def _task_payload_bytes(recipe: ClaudeNativeRecipe) -> tuple[int, int]:
+    if recipe is ClaudeNativeRecipe.STREAM_JSON:
+        return PATH_BYTES, TEXT_BYTES
+    if recipe is ClaudeNativeRecipe.STREAM_JSON_WRITE:
+        return WRITE_PROGRAM_BYTES, WRITE_WORKER_LIMITS.stdout_bytes
+    raise ValueError("a task requires a closed Claude task recipe")
+
+
+def callback_reply_bytes(recipe: ClaudeNativeRecipe) -> int:
+    """One encoded callback result plus the explicit metadata allowance."""
+    return RECORD_BYTES + 6 * _task_payload_bytes(recipe)[1]
+
+
+def task_record_bytes(recipe: ClaudeNativeRecipe) -> int:
+    argument, reply = _task_payload_bytes(recipe)
+    return RECORD_BYTES + max(6 * argument, 12 * reply)
+
+
+def _task_echo_bytes(recipe: ClaudeNativeRecipe) -> int:
+    return RECORD_BYTES + 12 * _task_payload_bytes(recipe)[1]
+
+
+def task_output_bytes(recipe: ClaudeNativeRecipe) -> int:
+    """Bound payload copies; arbitrary extra messages still spend the finite budget.
+
+    Pinned 2.1.296 emits the assistant program and MCP request, then a user
+    tool_result with a second copy in tool_use_result. Each record receives the
+    existing metadata allowance; MODE_OUTPUT_BYTES remains the residual budget.
+    """
+    argument, _reply = _task_payload_bytes(recipe)
+    return MODE_OUTPUT_BYTES + recipe.call_limit * (
+        2 * (RECORD_BYTES + 6 * argument) + _task_echo_bytes(recipe)
+    )
 
 
 def task_input_bytes(recipe: ClaudeNativeRecipe) -> int:
     """Launcher stdin budget under which no admitted callback reply is refused."""
-    if recipe not in (ClaudeNativeRecipe.STREAM_JSON, ClaudeNativeRecipe.STREAM_JSON_WRITE):
-        raise ValueError("a task requires a closed Claude task recipe")
-    return STARTUP_INPUT_BYTES + recipe.call_limit * CALLBACK_REPLY_BYTES
+    return (STARTUP_INPUT_BYTES + POST_RESULT_INPUT_BYTES
+            + recipe.call_limit * callback_reply_bytes(recipe))
 
 
 # Derived views of the READ recipe; the transaction itself serves ``self._recipe``.
@@ -284,6 +324,13 @@ def _wire(value: object) -> bytes:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode() + b"\n"
 
 
+def _callback_response(outer: str, identifier: int | str, result: dict[str, object]) -> bytes:
+    return _wire({"type": "control_response", "response": {
+        "subtype": "success", "request_id": outer,
+        "response": {"mcp_response": {"jsonrpc": "2.0", "id": identifier, "result": result}},
+    }})
+
+
 def _parse(raw: bytes) -> dict[str, object]:
     try:
         value = parse_json_value(raw[:-1].decode("utf-8"))
@@ -412,6 +459,7 @@ class ClaudeReadTransaction:
     def __init__(
         self, task: TaskSpec, *, mode: ClaudeAuthMode, model: str, effort: str,
         worker: ReadWorker, input_limit: int, output_limit: int, deadline: float,
+        record_limit: int = RECORD_BYTES,
         before_user: Callable[[], None] | None = None,
         check_control: Callable[[], None] | None = None,
         recipe: ClaudeNativeRecipe = ClaudeNativeRecipe.STREAM_JSON,
@@ -427,9 +475,11 @@ class ClaudeReadTransaction:
         self._worker = worker
         self._before_user, self._check_control = before_user, check_control
         self._input_limit, self._output_limit, self._deadline = input_limit, output_limit, deadline
+        self._record_limit = min(record_limit, task_record_bytes(recipe))
         self._state: Literal["new", "startup", "ready", "dispatched", "terminal",
                              "checked", "drained", "refused"] = "new"
         self._input_bytes = self._output_bytes = self._startup_input_bytes = 0
+        self._post_input_bytes = 0
         self._buffer = bytearray()
         self._records: list[bytes] = []
         self._pending: asyncio.Task[bytes] | None = None
@@ -506,11 +556,11 @@ class ClaudeReadTransaction:
             return
         self._buffer.extend(chunk)
         while (newline := self._buffer.find(b"\n")) >= 0:
-            if newline + 1 > RECORD_BYTES:
+            if newline + 1 > self._record_limit:
                 raise self._refused(ClaudeReadRefusalCode.STREAM_BOUND)
             self._records.append(bytes(self._buffer[:newline + 1]))
             del self._buffer[:newline + 1]
-        if len(self._buffer) >= RECORD_BYTES:
+        if len(self._buffer) >= self._record_limit:
             raise self._refused(ClaudeReadRefusalCode.STREAM_BOUND)
         self._start_read()
 
@@ -760,10 +810,14 @@ class ClaudeReadTransaction:
     async def _write(self, raw: bytes, *, user: bool = False, callback: bool = False) -> None:
         self._check()
         self._input_bytes += len(raw)  # Spent before delivery, including uncertain writes.
-        if not callback:  # Startup never draws on the callback replies' reserved budget.
+        if not callback and self._terminal_result_accepted:
+            self._post_input_bytes += len(raw)
+        elif not callback:  # Startup never draws on the callback replies' reserved budget.
             self._startup_input_bytes += len(raw)
-        if (self._input_bytes > self._input_limit or len(raw) > RECORD_BYTES
-                or self._startup_input_bytes > STARTUP_INPUT_BYTES):
+        record_bound = callback_reply_bytes(self._recipe) if callback else RECORD_BYTES
+        if (self._input_bytes > self._input_limit or len(raw) > record_bound
+                or self._startup_input_bytes > STARTUP_INPUT_BYTES
+                or self._post_input_bytes > POST_RESULT_INPUT_BYTES):
             raise self._refused(ClaudeReadRefusalCode.STREAM_BOUND)
         assert self._io is not None
         if user and self._before_user is not None:
@@ -928,21 +982,34 @@ class ClaudeReadTransaction:
             await self._quiet()  # Classify buffered frames before worker authority.
             if self._command_completed:
                 raise self._refused(ClaudeReadRefusalCode.LIFECYCLE, value)
+            # A result cannot be truncated after the worker may have mutated its
+            # workspace. Check its maximum encoded reply using these actual IDs
+            # before granting authority; no conversation write occurs during work.
+            output_limit = _task_payload_bytes(self._recipe)[1]
+            maximum_reply = _callback_response(outer, identifier, {
+                "content": [{"type": "text", "text": "\x00" * output_limit}], "isError": False,
+            })
+            assert self._io is not None
+            captured_stdout = self._io.stdout_bytes_received
+            if (type(captured_stdout) is not int or captured_stdout < self._output_bytes
+                    or captured_stdout > self._output_limit):
+                raise self._refused(ClaudeReadRefusalCode.STREAM_BOUND, value)
+            if (len(maximum_reply) > callback_reply_bytes(self._recipe)
+                    or self._input_bytes + len(maximum_reply) + POST_RESULT_INPUT_BYTES
+                    > self._input_limit
+                    or captured_stdout + _task_echo_bytes(self._recipe) + MODE_OUTPUT_BYTES
+                    > self._output_limit):
+                raise self._refused(ClaudeReadRefusalCode.STREAM_BOUND, value)
             self._calls += 1  # ID and admitted start are spent before the worker's first await.
             if self._progress is not None:
                 self._progress("started")
             text = await self._read_worker(path)
-            output_limit = (TEXT_BYTES if self._recipe is ClaudeNativeRecipe.STREAM_JSON
-                            else WRITE_WORKER_LIMITS.stdout_bytes)
             if not _text(text, output_limit):
                 raise self._refused(ClaudeReadRefusalCode.MCP_CALL, value)
             if self._progress is not None:
                 self._progress("worker_success")
             result = {"content": [{"type": "text", "text": text}], "isError": False}
-        await self._write(_wire({"type": "control_response", "response": {
-            "subtype": "success", "request_id": outer,
-            "response": {"mcp_response": {"jsonrpc": "2.0", "id": identifier, "result": result}},
-        }}), callback=not handshake)
+        await self._write(_callback_response(outer, identifier, result), callback=not handshake)
         if not handshake:
             self._calls_completed += 1
             if self._progress is not None:
@@ -1142,6 +1209,7 @@ async def run_read_transaction(
     conversation = ClaudeReadTransaction(
         task, mode=mode, model=model, effort=effort, worker=worker,
         input_limit=launcher.limits.input_bytes, output_limit=launcher.limits.stdout_bytes,
+        record_limit=launcher.limits.record_bytes,
         deadline=started_at + timeout_s,
         before_user=before_user, check_control=check_control,
         recipe=recipe, progress=progress,

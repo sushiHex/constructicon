@@ -439,6 +439,11 @@ class _ProcessIO:
         self._draining: asyncio.Future[None] | None = None
         self._interrupted_drain: asyncio.Future[None] | None = None
 
+    @property
+    def stdout_bytes_received(self) -> int:
+        self.require_active()
+        return len(self._output)
+
     def require_active(self) -> None:
         if self.stopping:
             raise _OwnedStop("process conversation is closed")

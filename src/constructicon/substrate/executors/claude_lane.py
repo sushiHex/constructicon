@@ -26,9 +26,6 @@ from constructicon.substrate.executors.claude_maintenance_login import (
 from constructicon.substrate.executors.claude_maintenance_mode import (
     LIFETIME_SECONDS as MODE_SECONDS,
 )
-from constructicon.substrate.executors.claude_maintenance_mode import (
-    OUTPUT_BYTES as MODE_OUTPUT_BYTES,
-)
 from constructicon.substrate.executors.claude_maintenance_session import (
     ClaudeMaintenanceSessionFacts,
     ClaudeMaintenanceSessionLifecycle,
@@ -54,7 +51,11 @@ from constructicon.substrate.executors.claude_protocol import (
     RECORD_BYTES,
     ClaudeAuthMode,
 )
-from constructicon.substrate.executors.claude_read import task_input_bytes
+from constructicon.substrate.executors.claude_read import (
+    task_input_bytes,
+    task_output_bytes,
+    task_record_bytes,
+)
 from constructicon.substrate.executors.codex_lane import EvidenceFile, _fsync_directory
 from constructicon.substrate.executors.egress import (
     EgressDestination,
@@ -198,8 +199,9 @@ class LaneConfiguration:
             limits=ProcessLimits(
                 # Maintenance and qualification conversations self-cap at MODE_INPUT_BYTES.
                 input_bytes=LOGIN_INPUT_BYTES if login else task_input_bytes(recipe),
-                stdout_bytes=LOGIN_OUTPUT_BYTES if login else MODE_OUTPUT_BYTES,
-                record_bytes=RECORD_BYTES, stderr_bytes=STDERR_BYTES,
+                stdout_bytes=LOGIN_OUTPUT_BYTES if login else task_output_bytes(recipe),
+                record_bytes=RECORD_BYTES if login else task_record_bytes(recipe),
+                stderr_bytes=STDERR_BYTES,
             ),
             claude=ClaudeNativeVendor(self.vendor_tree, self.model, self.effort,
                                       self.vendor_digest),

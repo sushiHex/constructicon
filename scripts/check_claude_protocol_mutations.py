@@ -386,6 +386,43 @@ READ_MUTANTS = (
     ("READ input accounting is cumulative", READ + "ClaudeReadTransaction._write",
      'self._input_bytes > self._input_limit', 'False',
      READ_TEST + "test_cumulative_native_and_per_worker_bounds_bind"),
+    ("callback reserves its actual escaped IDs and post-result controls before effect",
+     READ + "ClaudeReadTransaction._mcp",
+     "self._input_bytes + len(maximum_reply) + POST_RESULT_INPUT_BYTES\n                > self._input_limit",
+     "False",
+     "tests/substrate/test_claude_task_budgets.py::"
+     "test_exact_id_reply_capacity_is_checked_before_worker[-1]"),
+    ("task reply transport covers JSON control-character expansion",
+     READ + "callback_reply_bytes", "6 * _task_payload_bytes(recipe)[1]",
+     "_task_payload_bytes(recipe)[1]",
+     "tests/substrate/test_claude_task_budgets.py::"
+     "test_control_character_read_reply_and_producer_echo_complete[False]"),
+    ("task framing covers the duplicated producer result",
+     READ + "task_record_bytes", "RECORD_BYTES + max(6 * argument, 12 * reply)",
+     "RECORD_BYTES",
+     "tests/substrate/test_claude_task_budgets.py::"
+     "test_control_character_read_reply_and_producer_echo_complete[True]"),
+    ("task stdout reserves all admitted WRITE program and echoed result copies",
+     READ + "task_output_bytes", "recipe.call_limit * (", "0 * (",
+     "tests/substrate/test_claude_task_budgets.py::"
+     "test_eight_full_write_programs_fit_producer_stdout[task]"),
+    ("callback refuses before effect when received output has spent its echo reserve",
+     READ + "ClaudeReadTransaction._mcp",
+     "captured_stdout + _task_echo_bytes(self._recipe) + MODE_OUTPUT_BYTES\n                > self._output_limit",
+     "False",
+     "tests/substrate/test_claude_task_budgets.py::"
+     "test_consumed_stdout_refuses_before_worker_echo_cannot_fit"),
+    ("callback capacity includes captured stdout before its reader starts",
+     READ + "ClaudeReadTransaction._mcp",
+     "captured_stdout = self._io.stdout_bytes_received", "captured_stdout = self._output_bytes",
+     "tests/substrate/test_claude_task_budgets.py::"
+     "test_consumed_stdout_refuses_before_worker_echo_cannot_fit"),
+    ("callback refuses invalid or contradictory captured stdout facts",
+     READ + "ClaudeReadTransaction._mcp",
+     "type(captured_stdout) is not int or captured_stdout < self._output_bytes\n                or captured_stdout > self._output_limit",
+     "False",
+     "tests/substrate/test_claude_task_budgets.py::"
+     "test_invalid_captured_stdout_snapshot_refuses_before_worker"),
     ("READ output accounting is cumulative", READ + "ClaudeReadTransaction._receive",
      'if self._output_bytes > self._output_limit:', 'if False:',
      READ_TEST + "test_cumulative_native_and_per_worker_bounds_bind"),

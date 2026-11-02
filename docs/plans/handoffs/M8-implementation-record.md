@@ -1,5 +1,116 @@
 # M8 implementation record
 
+## Claude task transport budgets — #40 / #339
+
+Source inspection and credential-free peers reproduced three pre-existing
+transport failures after a callback had run: the 512 KiB stdout ceiling could
+not carry eight 128 KiB WRITE programs; a 64 KiB READ result made of JSON control
+characters exceeded the 256 KiB encoded callback ceiling; and startup could
+consume the 8 KiB shared allowance before mandatory post-result controls.
+The preceding stdin-reserve correction (#342) did not settle these boundaries.
+
+The producer inspected was the unmodified npm
+`@anthropic-ai/claude-code-linux-x64@2.1.296` member `package/claude`, size
+257,068,216 bytes, SHA-256
+`24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de`.
+Its cached bytes were rehashed before inspection. No vendor binary was executed,
+and no credential, account or model call supplied this evidence. Byte offsets
+below refer to that exact artifact, not an earlier interface-screen version:
+
+- `Rk` at B@233288149 forwards assistant and user messages independently of
+  `replayUserMessages` and `includePartialMessages`; `wk` at B@233292064 calls
+  `nte`, imported from `chunk-8wvdsmns.js` at B@233120939.
+- `nte` at B@223470500 emits the assistant message and the user tool-result
+  message, including a second result copy in `tool_use_result` when retained.
+  `vf` / `gqr` at B@219983383 split content blocks while preserving strings.
+  The normal headless output path calls `Rk` at B@233456817.
+- The MCP mapper at B@237053972 passes result content through `m` and `Die`.
+  The former filters empty documents; `Die` at B@237049817 removes text metadata.
+  Plain text is not JSON-stringified into another string by that mapper.
+
+One UTF-8 byte expands to at most six JSON bytes; U+0000 attains the bound.
+The task profile now derives all three transport ceilings from the unchanged
+callback count and worker payload limits. Let `M = 262144` be the explicit
+metadata policy allowance, `A` the argument byte limit (READ 1024, WRITE 131072),
+`R` the worker result byte limit (READ 65536, WRITE 32768), and `N` the call limit
+(READ 1, WRITE 8). The laws are:
+
+```text
+callback record reserve = M + 6R
+task stdin              = 8192 + 339 + N(M + 6R)
+task record             = M + max(6A, 12R)
+task stdout             = 524288 + N(2(M + 6A) + M + 12R)
+```
+
+The two argument copies account for assistant output and the MCP request; the
+two result copies account for user content and `tool_use_result`. The metadata
+allowance is policy, not a vendor size promise. Arbitrary extra assistant
+messages and sidebands remain bounded by the finite residual allowance; this
+does not claim every possible vendor stream succeeds. Normal source emission
+splits assistant content blocks; aggregate or unexpected records remain subject
+to the explicit record ceiling and existing callback barriers.
+
+| Task | stdin | stdout | complete record |
+| --- | ---: | ---: | ---: |
+| READ | 663891 | 2109440 | 1048576 |
+| WRITE | 3678547 | 22544384 | 1048576 |
+
+Before granting worker authority, the transaction encodes the maximum legal
+result using the actual admitted request IDs, checks its record reserve and
+remaining stdin, and protects all mandatory post-result controls. Those three
+requests total exactly 339 bytes with the fixed 32-character generated IDs.
+Startup keeps its own 8 KiB ceiling; post-result controls have a separate
+counter. Oversized results and process damage still refuse without truncation.
+Login and maintenance conversation limits remain unchanged; the shared launcher
+and its maintenance preflight admit the derived task profile.
+
+Independent boundary review found an introduced gap in the initial correction:
+already-received sidebands could spend the enlarged stdout budget, leaving too
+little capacity for the current worker's known result echo. After draining the
+callback barrier, admission now also reserves `M + 12R` stdout bytes for that
+echo and the existing 512 KiB residual allowance for post-result output. READ
+and WRITE peers affirmatively prove refusal before worker/progress authority
+when received sidebands have consumed that capacity. Arbitrary future extra
+vendor output remains subject to the stated finite policy.
+
+The review's narrow follow-up reproduced a second introduced gap: a native
+read task could still be unstarted while already-captured sidebands followed
+the callback in the transport buffer. Parser accounting alone missed them.
+`ProcessIO.stdout_bytes_received` now reports the instantaneous cumulative
+captured-byte fact, including unread buffered data. Linux derives it directly
+from its retained stdout buffer; the fake peer reports consumed plus queued
+bytes. Admission validates the fact and uses it for capacity. Split-read READ
+and WRITE peers and a portable test of the actual `_ProcessIO` primitive cover
+the unstarted-reader boundary. This is not an OS-pipe readiness or freshness
+claim; unsupported or terminal records not yet framed retain the existing
+classification limits.
+
+Focused peers exercise eight full programs with duplicated control-heavy
+results, full control-heavy READ results with and without echoes, the full
+startup allowance, and a one-byte input-capacity boundary with maximally escaped
+admitted IDs. The insufficient-capacity case affirmatively proves no worker
+call. Task profile preflight accepts exact input/stdout/record ceilings and
+refuses each +1. Independent review and exact-head CI evidence belong to the
+delivery PR. The seven new focused mutants cover pre-effect reply capacity,
+JSON expansion, echoed-result framing, cumulative WRITE stdout and pre-effect
+remaining stdout capacity, captured rather than parsed accounting, and invalid
+snapshot facts. The final narrow independent review found no further blocker
+in the snapshot fix (Claude transaction blob
+`65dd409af5390ca996e0466fb6cdf96fc416d86c`, plus the core contract and Linux
+implementation). A suspected qualification-revision bypass was rejected after
+source reproduction: host acceptance also compares the launcher revision.
+
+Launcher limits feed `LinuxLauncher.revision`; the protocol source also feeds
+the executor revision. The shared `ProcessIO` contract and Linux source also
+feed every Linux launcher revision, including future Codex assemblies. The
+existing `codex_lane.RecordingIO` wrapper transparently forwards the new fact;
+the frozen `codex.py` and `codex_protocol.py` are unchanged, and historical
+results remain historical. Fresh
+qualification and a newly selected future private scope are required before
+use. Historical frozen READ/WRITE acceptance artifacts
+are unchanged. This slice establishes no installation, credential operation,
+live WRITE or production availability.
+
 Status: PR A–D and Codex N1–N5 are complete at their recorded boundaries.
 The owner accepted bounded historical Codex closeout on 2026-10-13; N6/N7 and
 integrated M8 completion remain separate. No production provider is enabled.
