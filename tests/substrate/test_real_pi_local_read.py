@@ -136,8 +136,18 @@ async def test_one_local_model_read(pi_startup_launcher, tmp_path):
             decoder = conversation.decoder
             assert result.returncode == result.payload_returncode == 0
             assert not result.timed_out and result.bound_exceeded is None
-            assert decoder.eof and decoder.settled
-            assert not decoder.damage_count and not decoder.refused
+            # Never include raw stdout/stderr, prompts, replies, IDs, or the
+            # decoder's excerpt in CI failure output.
+            diagnostics = {
+                "state_observed": decoder.state_observed, "prompt_accepted": decoder.accepted,
+                "agent_started": decoder.started, "agent_ended": decoder.ended,
+                "eof": decoder.eof, "settled": decoder.settled, "refused": decoder.refused,
+                "damage_count": decoder.damage_count, "first_error": decoder.error,
+                "records": decoder.count, "stdout_bytes": decoder.total,
+                "stderr_bytes": len(result.stderr),
+            }
+            assert decoder.eof and decoder.settled, diagnostics
+            assert not decoder.damage_count and not decoder.refused, diagnostics
             assert len(decoder.calls) == 1
             call = next(iter(decoder.calls.values()))
             assert call.arguments == {"path": "fixture.txt"} and call.started and call.ended

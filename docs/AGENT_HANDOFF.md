@@ -3518,3 +3518,13 @@ Only the Linux run can establish those physical observations. The startup
 recipe uses the pinned release's offline and resource-discovery flags. It sends
 no prompt and establishes neither effective tool authority nor project resource
 discovery behavior, credentials, or model service.
+
+## Pi v1.3.0 user message wire shape
+
+The pinned producer emits the initial user message as a one-element text block
+array and the RPC projection leaves that event unchanged. The decoder now
+checks that exact shape and instruction; the scripted peer uses the same shape.
+The manual local READ test reports bounded protocol progress and a fixed
+decoder reason on failure. Run 41706702254 established clean exit and EOF
+without settlement, but did not record which protocol predicate stopped it.
+This correction establishes source compatibility for the user message only.

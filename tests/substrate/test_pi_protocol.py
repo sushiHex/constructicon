@@ -41,6 +41,23 @@ def test_clean_protocol_has_affirmative_completion():
     assert all(call.result is not None for call in decoder.calls.values())
 
 
+@pytest.mark.parametrize("content", [
+    "read", [{"type": "text", "text": "changed"}],
+    [{"type": "text", "text": "read"}, {"type": "image", "data": "extra"}],
+])
+def test_user_completion_must_echo_the_exact_single_text_block(content):
+    def change_user_completion(records):
+        for item in records:
+            if item["type"] == "message_end" and item["message"]["role"] == "user":
+                item = {**item, "message": {**item["message"], "content": content}}
+            yield item
+
+    decoder = decoded(transform=change_user_completion)
+    assert decoder.outcome(CLEAN).status == "partial"
+    assert decoder.error == "unexpected user message"
+    assert not decoder.settled
+
+
 @pytest.mark.parametrize("replacement", [None, [], 1, "wrong"])
 @pytest.mark.parametrize("event,field", [
     ("message_end", "message"), ("message_update", "assistantMessageEvent"),
