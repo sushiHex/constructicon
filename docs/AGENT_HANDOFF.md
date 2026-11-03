@@ -3503,3 +3503,18 @@ after park, while emitted metadata remained unchanged. No additional
 host/vendor/model call was needed. Neither issue changed product code; no local
 vendor-binary test was run. Delivery #339 is complete; #40 and
 M8 remain open.
+
+### Pi v1.3.0 credential-free startup lane (Refs #42)
+
+The Linux containment workflow now provisions a separate immutable image from
+the hash-pinned Pi v1.3.0 Linux x64 release at tag commit
+`71023aec1546d6d677a65669c5665c0927ce0dd0`. It stages only reviewed runtime
+members and never runs Pi while provisioning. The test uses the existing
+networkless launcher and an admitted read snapshot containing project bait.
+A fresh home and a separate network namespace with no host-loopback reach are
+checked before exec. Acceptance requires a matched idle in-memory RPC state,
+stdout EOF after stdin closes, joined zero exit, and unchanged workspace bytes.
+Only the Linux run can establish those physical observations. The startup
+recipe uses the pinned release's offline and resource-discovery flags. It sends
+no prompt and establishes neither effective tool authority nor project resource
+discovery behavior, credentials, or model service.
