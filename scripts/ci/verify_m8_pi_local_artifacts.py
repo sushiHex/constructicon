@@ -11,7 +11,6 @@ import stat
 import sys
 from pathlib import Path
 
-
 PINS = {
     "server": (22934007, "70df3ef8becd405b9ebc13b925387715ae7dccb0f034fd5f46a4034b350130a1"),
     "model": (639446688, "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031"),
