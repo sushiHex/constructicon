@@ -43,14 +43,14 @@ jobs:
           test ! -e /etc/apparmor.d/constructicon-m8-launch
           sudo install -m 0444 scripts/ci/constructicon-m8-launch.apparmor /etc/apparmor.d/constructicon-m8-launch
           sudo apparmor_parser --add --skip-cache /etc/apparmor.d/constructicon-m8-launch
-          sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" scripts/ci/build_m8_runtime.py /var/lib/constructicon-m8-launch/runtime > "$RUNNER_TEMP/runtime.json"
+          sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" scripts/ci/build_m8_runtime.py /var/lib/constructicon-m8-launch/runtime | tee "$RUNNER_TEMP/runtime.json"
           sudo install -m 0444 "$RUNNER_TEMP/runtime.json" /var/lib/constructicon-m8-launch/runtime.json
           curl --fail --silent --show-error --location --max-time 120 https://github.com/earendil-works/pi/releases/download/v1.3.0/pi-linux-x64.tar.gz -o "$RUNNER_TEMP/pi.tar.gz"
           curl --fail --silent --show-error --location --max-time 120 https://github.com/ggml-org/llama.cpp/releases/download/b12069/llama-b12069-bin-ubuntu-x64.tar.gz -o "$RUNNER_TEMP/llama.tar.gz"
           curl --fail --silent --show-error --location --max-time 300 https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/23749fefcc72300e3a2ad315e1317431b06b590a/Qwen3-0.6B-Q8_0.gguf -o "$RUNNER_TEMP/model.gguf"
-          sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" scripts/ci/build_m8_pi_startup_fixture.py /var/lib/constructicon-m8-launch/runtime /var/lib/constructicon-m8-launch/pi-startup-runtime "$RUNNER_TEMP/pi.tar.gz" > "$RUNNER_TEMP/pi.json"
+          sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" scripts/ci/build_m8_pi_startup_fixture.py /var/lib/constructicon-m8-launch/runtime /var/lib/constructicon-m8-launch/pi-startup-runtime "$RUNNER_TEMP/pi.tar.gz" | tee "$RUNNER_TEMP/pi.json"
           sudo install -m 0444 "$RUNNER_TEMP/pi.json" /var/lib/constructicon-m8-launch/pi-startup-runtime.json
-          sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" scripts/ci/build_m8_pi_local_runtime.py /var/lib/constructicon-m8-launch/pi-startup-runtime /var/lib/constructicon-m8-launch/pi-local-runtime "$RUNNER_TEMP/llama.tar.gz" "$RUNNER_TEMP/model.gguf" > "$RUNNER_TEMP/local.json"
+          sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" scripts/ci/build_m8_pi_local_runtime.py /var/lib/constructicon-m8-launch/pi-startup-runtime /var/lib/constructicon-m8-launch/pi-local-runtime "$RUNNER_TEMP/llama.tar.gz" "$RUNNER_TEMP/model.gguf" | tee "$RUNNER_TEMP/local.json"
           sudo install -m 0444 "$RUNNER_TEMP/local.json" /var/lib/constructicon-m8-launch/pi-local-runtime.json
           sudo chown m8-service:m8-service "$RUNNER_TEMP/pi-local-evidence"
           sudo chmod 0755 "$RUNNER_TEMP/pi-local-evidence"
