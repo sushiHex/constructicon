@@ -48,6 +48,14 @@ os.execv(command[0], command)
 """
 
 
+# Pinned producer (paths below are relative to packages/coding-agent/src):
+# https://github.com/earendil-works/pi/tree/71023aec1546d6d677a65669c5665c0927ce0dd0
+# Response envelope and state fields: modes/rpc/rpc-mode.ts:66-72,448-463.
+# --no-session selects the memory-only manager: main.ts:364-366. The manager
+# starts without a file and assigns one only if persistent: core/session-manager.ts:1803-1806,
+# 1078-1082. AgentSession forwards the file accessor: core/agent-session.ts:1652-1654.
+# JSON.stringify omits that undefined field: modes/rpc/jsonl.ts:10-12.
+# Stdin end triggers shutdown and stdout flush: modes/rpc/rpc-mode.ts:802-805,726-742.
 class StartupWire:
     def __init__(self, io):
         self.io = io
