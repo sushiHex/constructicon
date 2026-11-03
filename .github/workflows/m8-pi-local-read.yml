@@ -1,0 +1,74 @@
+name: M8 one local Pi READ
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  local-read:
+    if: github.ref == 'refs/heads/main' && github.run_attempt == '1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081
+        with:
+          python-version: "3.11"
+      - run: uv sync --dev
+      - name: Initialize bounded evidence
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/pi-local-evidence"
+          printf 'head=%s runner=%s kernel=%s\n' "$GITHUB_SHA" "$ImageVersion" "$(uname -r)" > "$RUNNER_TEMP/pi-local-evidence/host.txt"
+      - name: Provision isolated runtime and pinned artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
+          test "$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)" -ge 4194304
+          test "$(df -Pk "$RUNNER_TEMP" | awk 'NR==2 {print $4}')" -ge 4194304
+          sudo apt-get -q update
+          sudo apt-get -q -y install --no-install-recommends bubblewrap=0.9.0-1ubuntu0.3
+          sudo useradd --create-home --shell /bin/sh m8-service
+          test ! -e /var/lib/constructicon-m8-launch
+          sudo install -d -m 0755 /var/lib/constructicon-m8-launch
+          sudo install -m 0555 /usr/bin/bwrap /var/lib/constructicon-m8-launch/bwrap
+          sudo install -m 0555 /usr/bin/bwrap /var/lib/constructicon-m8-launch/unprofiled-bwrap
+          test ! -e /etc/apparmor.d/constructicon-m8-launch
+          sudo install -m 0444 scripts/ci/constructicon-m8-launch.apparmor /etc/apparmor.d/constructicon-m8-launch
+          sudo apparmor_parser --add --skip-cache /etc/apparmor.d/constructicon-m8-launch
+          sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" scripts/ci/build_m8_runtime.py /var/lib/constructicon-m8-launch/runtime | tee "$RUNNER_TEMP/runtime.json"
+          sudo install -m 0444 "$RUNNER_TEMP/runtime.json" /var/lib/constructicon-m8-launch/runtime.json
+          curl --fail --silent --show-error --location --max-time 120 https://github.com/earendil-works/pi/releases/download/v1.3.0/pi-linux-x64.tar.gz -o "$RUNNER_TEMP/pi.tar.gz"
+          curl --fail --silent --show-error --location --max-time 120 https://github.com/ggml-org/llama.cpp/releases/download/b12069/llama-b12069-bin-ubuntu-x64.tar.gz -o "$RUNNER_TEMP/llama.tar.gz"
+          curl --fail --silent --show-error --location --max-time 300 https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/23749fefcc72300e3a2ad315e1317431b06b590a/Qwen3-0.6B-Q8_0.gguf -o "$RUNNER_TEMP/model.gguf"
+          sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" scripts/ci/build_m8_pi_startup_fixture.py /var/lib/constructicon-m8-launch/runtime /var/lib/constructicon-m8-launch/pi-startup-runtime "$RUNNER_TEMP/pi.tar.gz" | tee "$RUNNER_TEMP/pi.json"
+          sudo install -m 0444 "$RUNNER_TEMP/pi.json" /var/lib/constructicon-m8-launch/pi-startup-runtime.json
+          sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" scripts/ci/build_m8_pi_local_runtime.py /var/lib/constructicon-m8-launch/pi-startup-runtime /var/lib/constructicon-m8-launch/pi-local-runtime "$RUNNER_TEMP/llama.tar.gz" "$RUNNER_TEMP/model.gguf" | tee "$RUNNER_TEMP/local.json"
+          sudo install -m 0444 "$RUNNER_TEMP/local.json" /var/lib/constructicon-m8-launch/pi-local-runtime.json
+          sudo chown m8-service:m8-service "$RUNNER_TEMP/pi-local-evidence"
+          sudo chmod 0755 "$RUNNER_TEMP/pi-local-evidence"
+          sudo chmod o+x /home/runner /home/runner/work /home/runner/work/constructicon "$RUNNER_TEMP"
+      - name: Execute one bounded READ
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
+            M8_PI_STARTUP_REQUIRED=1 M8_PI_STARTUP_ROOT=/var/lib/constructicon-m8-launch/pi-startup-runtime \
+            M8_PI_LOCAL_REQUIRED=1 M8_PI_LOCAL_ROOT=/var/lib/constructicon-m8-launch/pi-local-runtime \
+            M8_EVIDENCE_DIRECTORY="$RUNNER_TEMP/pi-local-evidence" \
+            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_real_pi_local_read.py -v --tb=short -p no:cacheprovider
+      - name: Retain bounded evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pi-local-read-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pi-local-evidence
+          if-no-files-found: error
