@@ -25,7 +25,7 @@ from tests.substrate.test_real_pi_startup import FLAGS, PI, StartupWire
 from tests.substrate.test_real_pi_startup import pi_startup_launcher as pi_startup_launcher
 
 SERVER = r"""
-import json, os, socket, subprocess, time
+import http.client, json, os, socket, subprocess, time
 p = subprocess.Popen(['/opt/pi-local/llama-server', '--host', '/workspace/pi.sock',
                       '-m', '/opt/pi-local/model.gguf', '--ctx-size', '1024',
                       '--threads', '2', '--parallel', '1', '--n-predict', '128',
@@ -41,12 +41,18 @@ try:
                 s.settimeout(1)
                 s.connect('/workspace/pi.sock')
                 s.sendall(b'GET /health HTTP/1.0\r\n\r\n')
-                if s.recv(4096).startswith(b'HTTP/1.1 200'):
+                # b12069, server-http.cpp:308-320 refuses while loading;
+                # server-context.cpp:5728-5739 calls ok() (5290-5293: 200).
+                # Parse HTTP status; TCP/Unix stream reads can split a line.
+                with http.client.HTTPResponse(s) as response:
+                    response.begin()
+                    healthy = response.status == 200
+                if healthy:
                     st = os.lstat('/workspace/pi.sock')
                     print(json.dumps({'ready': [st.st_dev, st.st_ino],
                                       'net': os.readlink('/proc/self/ns/net')}), flush=True)
                     break
-        except OSError:
+        except (OSError, http.client.HTTPException):
             pass
         time.sleep(.2)
     else:
