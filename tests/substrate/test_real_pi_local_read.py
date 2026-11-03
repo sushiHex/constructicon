@@ -134,8 +134,6 @@ async def test_one_local_model_read(pi_startup_launcher, tmp_path):
                 conversation=conversation, timeout_s=200, pi_peer=route,
             )
             decoder = conversation.decoder
-            assert result.returncode == result.payload_returncode == 0
-            assert not result.timed_out and result.bound_exceeded is None
             # Never include raw stdout/stderr, prompts, replies, IDs, or the
             # decoder's excerpt in CI failure output.
             diagnostics = {
@@ -145,9 +143,17 @@ async def test_one_local_model_read(pi_startup_launcher, tmp_path):
                 "damage_count": decoder.damage_count, "first_error": decoder.error,
                 "records": decoder.count, "stdout_bytes": decoder.total,
                 "stderr_bytes": len(result.stderr),
+                "returncode": result.returncode, "payload_returncode": result.payload_returncode,
+                "timed_out": result.timed_out, "limit_exceeded": result.bound_exceeded is not None,
+                "read_calls": len(decoder.calls), "final_observed": decoder.final is not None,
             }
-            assert decoder.eof and decoder.settled, diagnostics
-            assert not decoder.damage_count and not decoder.refused, diagnostics
+            # Pytest short tracebacks can elide dictionary entries. Keep the
+            # complete bounded progress record even when acceptance fails.
+            write_evidence("duplex-real-pi-local-progress.json", diagnostics)
+            assert result.returncode == result.payload_returncode == 0
+            assert not result.timed_out and result.bound_exceeded is None
+            assert decoder.eof and decoder.settled, json.dumps(diagnostics)
+            assert not decoder.damage_count and not decoder.refused, json.dumps(diagnostics)
             assert len(decoder.calls) == 1
             call = next(iter(decoder.calls.values()))
             assert call.arguments == {"path": "fixture.txt"} and call.started and call.ended
