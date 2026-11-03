@@ -18,6 +18,7 @@ from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.executors._egress_bridge import PI_PORT
 from constructicon.substrate.executors.linux import ProcessExchangeError
 from constructicon.substrate.executors.pi_peer import PiPeerRoute
+from constructicon.substrate.executors.pi_protocol import parse_record
 from constructicon.substrate.executors.pi_read import PI_LIMITS, PiReadConversation
 from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
 from tests.substrate.test_linux_containment import launcher as launcher
@@ -162,6 +163,33 @@ print('{"revoked":true}', flush=True)
 """
 
 
+def wire_phases(stdout):
+    """Publish only allowlisted labels, never RPC payload values."""
+    kinds = (
+        "response", "agent_start", "agent_end", "agent_settled", "turn_start", "turn_end",
+        "message_start", "message_update", "message_end", "tool_execution_start",
+        "tool_execution_update", "tool_execution_end", "entry_appended",
+    )
+    roles = ("system", "user", "assistant", "toolResult")
+    updates = (
+        "toolcall_start", "toolcall_delta", "toolcall_end", "text_start", "text_delta",
+        "text_end", "done", "error",
+    )
+    phases = []
+    for line in stdout.splitlines()[1:49]:  # First line is the trusted bootstrap.
+        try:
+            event = parse_record(line)
+            kind = event.get("type")
+            role = event.get("message", {}).get("role")
+            update = event.get("assistantMessageEvent", {}).get("type")
+            phases.append([kind if kind in kinds else "other",
+                           role if role in roles else None,
+                           update if update in updates else None])
+        except (ValueError, TypeError, AttributeError, RecursionError):
+            phases.append(["invalid", None, None])
+    return phases
+
+
 async def test_pinned_pi_fixed_peer_wire_and_active_revocation(pi_startup_launcher, tmp_path):
     pi_launcher, receipt = pi_startup_launcher
     workspace = tmp_path / "workspace"
@@ -226,8 +254,6 @@ async def test_pinned_pi_fixed_peer_wire_and_active_revocation(pi_startup_launch
         await conversation(io)
 
     def diagnostics(result):
-        # This lane carries only synthetic fixture data. Retain the first
-        # offending RPC excerpt and capped stderr to diagnose pinned wire drift.
         return {
             "scope": "scripted Pi READ; no model inference",
             "release": receipt,
@@ -245,12 +271,12 @@ async def test_pinned_pi_fixed_peer_wire_and_active_revocation(pi_startup_launch
             "refused": decoder.refused,
             "damage_count": decoder.damage_count,
             "first_error": decoder.error,
-            "first_damaged_record": decoder.excerpt,
+            "wire_phases": wire_phases(result.stdout),
             "read_count": len(decoder.calls),
             "final_observed": decoder.final is not None,
             "records": decoder.count,
             "stdout_bytes": decoder.total,
-            "stderr_excerpt": result.stderr[:1024].decode("utf-8", errors="replace"),
+            "stderr_bytes": len(result.stderr),
         }
 
     paths = AcquisitionPaths(tmp_path / "guards", acquisition_id_for("pi-fixed-peer", 1))
