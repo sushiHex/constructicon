@@ -11234,3 +11234,65 @@ This code does not update the private host. Its historical policy and withdrawn
 store remain intact. A new launch policy changes sealed launch/provider identity
 and needs separately selected replacement, verification and fresh qualification
 before any further live model attempt. Closed session authority is not reused.
+
+## One live Claude subscription WRITE — #77
+
+The installation closeout ([#77](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6591651500))
+and separately selected scope ([#77](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6592021064))
+bound one attempt, run approximately 2026-11-03 00:25–00:55 UTC, to the retained
+controller `fabd271646ea1009bd55d37413195123afff6a8d`. The installed launch
+was `b4967c08e33f768c18e8904f53bc2f26fcc089e3`; L config SHA-256 was
+`ad777690d10f770540bb5ce57732b0ce89844d39abf3274784158f77f34ddc4c`.
+The new Git profile policy was installed and positively read back as
+`installed: true`. Fresh D2, controller/import/launch checks and the
+credential-free Claude-bootstrap resource smoke passed for the complete changed
+candidate and exact gate; its report SHA-256 is
+`6c88d6a7a063f7674c748d523c37c22105d06dd229bb581098b15b6fa13f492f`. Retained-lock
+pre-observer and post-maintenance inventory both confirmed withdrawal of
+generation 14. The prior READ record remains separate.
+
+Generation 15 was published, sealed and activated after exact cleanup was
+staged and duty saved. Independent Claude review of the HOLD packet returned
+MATCH with no blocker, then independently read the actual report (receipt 6799).
+The review checked base/target source, report definitions, fixture identities,
+hashes and cross-field consistency. `source_graph_hash`, operator binding,
+revisions, egress and Q derivation were source-owned checks, not independently
+recomputed by the reviewer. One `claude-sonnet-4-6`
+low-effort WRITE ran under a 300-second grant and at most eight callbacks: one was admitted and
+completed successfully. The attempt report passed; candidate changed while the
+target stayed unchanged; the journal was valid, complete and succeeded; initial
+and terminal bindings were checked; relay closure was observed. The exact JSON
+report SHA-256 is
+`8f75ef46deed6c171d0efe74b68bea72506d0b2a1f5c2f20d2bce444d0fd4cba`; corrected
+v2 WRITE metadata SHA-256 is
+`fb72d68c48393e034593f2aa09f3b730ed03495872f76b0e89edb2132304be34`.
+
+Fresh startup semantic Q was `sha256:988cc9b4b736076bd4a95d1e2116fc7ce10006596072550f9cdd3acaa7618811`;
+its raw SHA-256 was `ae47a4c4de728310f765243747286f6c7eb3c2d4c8375a0a9745c35a4bb7b849`.
+The actual terminal source check passed. Native commands returned zero with
+quiet stderr; native token, served-model and backend-usage telemetry was
+null/unemitted, and backend request/retry count is unknown. Generation 15
+withdrawal was confirmed by its explicit marker. VM park and
+positive idle Off/Ok were observed with uptime zero, no checkpoints and no VM
+connections. All three obligations were closed/released, the checkpoint chain
+validated, and release `6798` was acknowledged by receipt `6799`. Post-release
+checks observed no SSH, VM connection or VM worker process. The private VM is
+therefore not evidence of ongoing availability.
+No finite dollar ceiling is claimed. The owner had accepted subscription
+overage; no API key was created, billed fallback used, or login performed. This is one
+successful live WRITE only: it does not complete #40 or M8, or establish general
+production availability. The scope closed early at approximately 00:55 UTC.
+Public final closeout: [#77](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6592516986).
+
+The VM helper's fresh-only capture-directory guard refused before the first
+native process because the recorder had erroneously created that directory.
+The scope was closed and preserved; the corrected recorder asserts absence and
+tests both acceptance and refusal against a real temporary directory. Only
+after this correction did a fresh scope execute the one successful WRITE.
+Separately, retention expected a drift prefix in stdout, but
+`read_metadata_session.render` emits stdout as JSON and writes the marker to a
+separate file. Exact-byte retention was corrected offline after park; emitted
+metadata remained unchanged. No additional host/vendor/model call was needed.
+Neither issue changed product code. No vendor binary local tests were run.
+Delivery #339 is complete; broader
+#40 and M8 remain open.
