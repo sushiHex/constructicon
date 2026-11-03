@@ -3473,27 +3473,33 @@ metadata preparation.
 
 ## One live Claude subscription WRITE — #77 (2026-11-03 UTC)
 
-One selected live `sonnet-4-6` low-effort WRITE succeeded under the 300-second,
+One selected live `claude-sonnet-4-6` low-effort WRITE succeeded under the 300-second,
 eight-callback bound: one callback completed, the candidate changed, target
 stayed unchanged, and the complete journal succeeded with initial and terminal
 binding checks. The credential-free bootstrap smoke, exact changed-candidate
 gate, fresh D2/controller/import/launch checks, installed Git policy readback,
-and independent Fable HOLD/MATCH review are recorded in the dated [M8
-implementation record](plans/handoffs/M8-implementation-record.md#one-live-claude-subscription-write--77).
-Generation 15 was withdrawn explicitly; terminal source check passed, native
-telemetry was quiet, VM Off/Ok idle was positively observed, and all three
-obligations closed/released. The checkpoint chain validated, and release 6798
-was acknowledged by independent receipt 6799; post-release checks found no SSH,
-VM connection or VM worker process. Backend token/request
-counts remain unknown, no finite dollar ceiling is claimed, and no API key,
-billed fallback or login was used. The prior READ is separate; neither this
+and independent Fable packet review (MATCH, no blocker) are recorded in the
+dated [M8 implementation record](plans/handoffs/M8-implementation-record.md#one-live-claude-subscription-write--77).
+The installed launch was `b4967c08e33f768c18e8904f53bc2f26fcc089e3`. Fresh
+startup semantic Q was `sha256:988cc9b4b736076bd4a95d1e2116fc7ce10006596072550f9cdd3acaa7618811`
+(raw SHA-256 `ae47a4c4de728310f765243747286f6c7eb3c2d4c8375a0a9745c35a4bb7b849`).
+Generation 15 was withdrawn explicitly; terminal source check passed. Native
+commands returned zero with quiet stderr; token, served-model and backend-usage
+telemetry was null/unemitted, and backend request/retry count is unknown. VM
+Off/Ok idle was positively observed, and all three obligations closed/released.
+The checkpoint chain validated, and release 6798 was acknowledged by independent
+receipt 6799; post-release checks found no SSH, VM connection or VM worker
+process. No finite dollar ceiling is claimed, and no API key, billed fallback or
+login was used. The prior READ is separate; neither this
 single WRITE nor its successful result completes #40/M8 or claims general
 production availability. [Public closeout](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6592516986).
 
-Two local orchestration assumptions were wrong and were fixed offline: the
-recorder's fresh-only capture-directory guard refused before subprocess/start
-because root had pre-created that directory; the corrected recorder tests both
-acceptance and refusal. Retention also expected a drift prefix on stdout, while
-the renderer emits JSON there and writes the marker separately; exact-byte
-retention was corrected with the VM parked. Neither changed product code; no
-additional host/model attempt or local vendor-binary test followed.
+The VM helper's fresh-only capture-directory guard refused before the first
+native process because the recorder had erroneously created that directory.
+After the recorder correction, a fresh scope executed the one successful WRITE.
+Retention also expected a drift prefix on stdout, while the renderer emits JSON
+there and writes the marker separately; exact-byte retention was corrected
+after park, while emitted metadata remained unchanged. No additional
+host/vendor/model call was needed. Neither issue changed product code; no local
+vendor-binary test was run. Delivery #339 is complete; #40 and
+M8 remain open.
