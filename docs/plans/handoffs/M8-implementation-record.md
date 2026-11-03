@@ -11252,9 +11252,12 @@ pre-observer and post-maintenance inventory both confirmed withdrawal of
 generation 14. The prior READ record remains separate.
 
 Generation 15 was published, sealed and activated after exact cleanup was
-staged and duty saved. Independent Fable reviewed the HOLD packet and returned
-MATCH with no blocker after checking source constants and raw Git blobs, then
-independently read the actual report (receipt 6799). One `claude-sonnet-4-6`
+staged and duty saved. Independent Claude review of the HOLD packet returned
+MATCH with no blocker, then independently read the actual report (receipt 6799).
+The review checked base/target source, report definitions, fixture identities,
+hashes and cross-field consistency. `source_graph_hash`, operator binding,
+revisions, egress and Q derivation were source-owned checks, not independently
+recomputed by the reviewer. One `claude-sonnet-4-6`
 low-effort WRITE ran under a 300-second grant and at most eight callbacks: one was admitted and
 completed successfully. The attempt report passed; candidate changed while the
 target stayed unchanged; the journal was valid, complete and succeeded; initial

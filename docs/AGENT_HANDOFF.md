@@ -3478,7 +3478,7 @@ eight-callback bound: one callback completed, the candidate changed, target
 stayed unchanged, and the complete journal succeeded with initial and terminal
 binding checks. The credential-free bootstrap smoke, exact changed-candidate
 gate, fresh D2/controller/import/launch checks, installed Git policy readback,
-and independent Fable packet review (MATCH, no blocker) are recorded in the
+and independent Claude packet review (MATCH, no blocker) are recorded in the
 dated [M8 implementation record](plans/handoffs/M8-implementation-record.md#one-live-claude-subscription-write--77).
 The installed launch was `b4967c08e33f768c18e8904f53bc2f26fcc089e3`. Fresh
 startup semantic Q was `sha256:988cc9b4b736076bd4a95d1e2116fc7ce10006596072550f9cdd3acaa7618811`
