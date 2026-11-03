@@ -346,8 +346,16 @@ class PiDecoder:
         role = message["role"]
         if role == "system":
             # Pi v1.3.0 (71023aec1546d6d677a65669c5665c0927ce0dd0):
-            # agent-session.ts builds the initial prompt sections; agent-loop.ts
-            # adds the active tool declaration and emits the same message twice.
+            # packages/coding-agent/src/core/agent-session.ts:1748-1754,1937-1940
+            # creates the empty-content, timestamped system patch before the user;
+            # system-prompt.ts:151-156,217-228 supplies the first string sections.
+            # packages/agent/src/agent-loop.ts:347-356,368-374 adds the tool delta;
+            # packages/ai/src/utils/transcript.ts:123-129 projects its exact keys.
+            # packages/coding-agent/src/core/tools/read.ts:95-101 defines the
+            # single admitted READ and its sampling metadata.
+            # packages/agent/src/agent-loop.ts:110-121 emits both copies;
+            # packages/coding-agent/src/modes/rpc/rpc-mode.ts:355-356 forwards them
+            # unchanged via packages/coding-agent/src/modes/json-event.ts:48-51.
             sections = message.get("sections")
             tools = message.get("toolsAdded")
             if (self.messages or not same(self.system_start, message)
