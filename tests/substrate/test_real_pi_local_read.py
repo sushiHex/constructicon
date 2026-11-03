@@ -65,6 +65,9 @@ model, *command = sys.argv[1:]
 config = Path.home() / '.pi' / 'agent'
 config.mkdir(parents=True)
 (config / 'models.json').write_text(model)
+(config / 'settings.json').write_text(
+    '{"compaction":{"enabled":false},"retry":{"enabled":false,"provider":{"maxRetries":0}},'
+    '"cacheWarming":"off"}')
 os.execv(command[0], command)
 """
 
