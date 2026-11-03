@@ -339,7 +339,9 @@ class PiDecoder:
     def message_end(self, message: dict[str, Any]) -> None:
         role = message["role"]
         if role == "user":
-            # Pi v1.3.0 emits one text block for an instruction without images.
+            # Pi v1.3.0 (71023aec1546d6d677a65669c5665c0927ce0dd0):
+            # packages/coding-agent/src/core/agent-session.ts:1919 creates
+            # the text block; src/modes/json-event.ts:49-50 passes it through.
             if self.messages or not same(
                 message.get("content"), [{"type": "text", "text": self.instruction}],
             ):
