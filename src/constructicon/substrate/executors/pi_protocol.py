@@ -356,7 +356,9 @@ class PiDecoder:
                     or type(sections) is not dict or not sections
                     or any(type(value) is not str for value in sections.values())
                     or type(tools) is not list or len(tools) != 1 or type(tools[0]) is not dict
-                    or set(tools[0]) != {"name", "description", "parameters"}
+                    or set(tools[0]) != {"name", "description", "parameters", "constrainedSampling"}
+                    or not same(tools[0]["constrainedSampling"],
+                                {"type": "json_schema", "strict": "prefer"})
                     or tools[0]["name"] != "read" or type(tools[0]["description"]) is not str
                     or type(tools[0]["parameters"]) is not dict):
                 raise ValueError("unsupported initial system declaration")

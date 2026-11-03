@@ -43,15 +43,21 @@ def test_clean_protocol_has_affirmative_completion():
 
 @pytest.mark.parametrize("variant", [
     "pinned", "mismatched-copy", "second-system", "late", "extra-tool", "missing-user",
+    "wrong-sampling",
 ])
 def test_initial_system_declaration_preserves_read_transcript_guards(variant):
     system = {
         "role": "system", "content": "", "sections": {"preamble": "fixture"},
         "timestamp": 1,
-        "toolsAdded": [{"name": "read", "description": "Read file", "parameters": {}}],
+        "toolsAdded": [{
+            "name": "read", "description": "Read file", "parameters": {},
+            "constrainedSampling": {"type": "json_schema", "strict": "prefer"},
+        }],
     }
     if variant == "extra-tool":
         system["toolsAdded"].append({"name": "write", "description": "", "parameters": {}})
+    if variant == "wrong-sampling":
+        system["toolsAdded"][0]["constrainedSampling"]["strict"] = True
     end = {**system, "timestamp": 2} if variant == "mismatched-copy" else system
     pair = [{"type": "message_start", "message": system}, {"type": "message_end", "message": end}]
 
