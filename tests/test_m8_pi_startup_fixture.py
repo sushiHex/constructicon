@@ -31,3 +31,25 @@ def test_pinned_archive_cannot_install_a_link_in_the_runtime_allowlist(tmp_path,
     with pytest.raises(ValueError, match="unique regular file"):
         fixture.stage_release(archive, destination)
     assert not destination.exists()
+
+
+def test_startup_libraries_use_the_existing_sparse_image_loader_path(tmp_path):
+    host = tmp_path / "host/usr/lib/x86_64-linux-gnu"
+    host.mkdir(parents=True)
+    runtime = tmp_path / "runtime"
+    library = runtime / "lib/x86_64-linux-gnu"
+    library.mkdir(parents=True)
+    expected = {
+        "libpthread.so.0", "libdl.so.2", "libxcb.so.1", "libXau.so.6",
+        "libXdmcp.so.6", "libbsd.so.0", "libmd.so.0",
+    }
+    for name in expected | {"unreviewed.so"}:
+        (host / name).write_text(name, encoding="ascii")
+    (library / "libdl.so.2").write_bytes(b"already curated")
+    observed = fixture.stage_libraries(host, runtime)
+    assert observed == {
+        f"lib/x86_64-linux-gnu/{name}": fixture.sha(library / name) for name in expected
+    }
+    assert {item.name for item in library.iterdir()} == expected
+    assert (library / "libdl.so.2").read_bytes() == b"already curated"
+    assert not (runtime / "usr").exists()

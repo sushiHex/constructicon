@@ -54,6 +54,22 @@ def stage_release(archive, destination):
     return observed
 
 
+def stage_libraries(source, destination):
+    # The base mirrors the loader's /lib/x86_64-linux-gnu search path. The
+    # merged-/usr host stores the corresponding files under /usr/lib.
+    library = Path("lib/x86_64-linux-gnu")
+    observed = {}
+    for name in (
+        "libpthread.so.0", "libdl.so.2", "libxcb.so.1", "libXau.so.6",
+        "libXdmcp.so.6", "libbsd.so.0", "libmd.so.0",
+    ):
+        relative = library / name
+        target = destination / relative
+        if not target.exists():
+            shutil.copyfile(source / name, target)
+        observed[relative.as_posix()] = sha(target)
+    return observed
+
 def main():
     if os.getuid() != 0 or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
         raise SystemExit("startup fixture requires the authorized disposable runner")
@@ -67,21 +83,13 @@ def main():
     members = stage_release(archive, payload)
     # Reviewed ELF DT_NEEDED closure on the selected Ubuntu x64 runner.
     # Do not invoke ldd/ld.so on the vendor binary during root provisioning.
-    library = Path("usr/lib/x86_64-linux-gnu")
-    for name in (
-        "libpthread.so.0", "libdl.so.2", "libxcb.so.1", "libXau.so.6",
-        "libXdmcp.so.6", "libbsd.so.0", "libmd.so.0",
-    ):
-        relative = library / name
-        target = destination / relative
-        if not target.exists():
-            shutil.copyfile(Path("/") / relative, target)
-        members[str(relative)] = sha(target)
+    libraries = stage_libraries(Path("/usr/lib/x86_64-linux-gnu"), destination)
     for path in [*destination.rglob("*"), destination]:
         if not path.is_symlink():
             path.chmod(0o555 if path.is_dir() or path.stat().st_mode & 0o111 else 0o444)
     print(json.dumps({
         "release_commit": RELEASE, "archive_sha256": ARCHIVE_SHA, "members": members,
+        "host_libraries": libraries,
         "runtime_digest": str(runtime_digest(destination)),
     }, sort_keys=True))
 
