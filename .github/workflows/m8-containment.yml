@@ -117,7 +117,7 @@ jobs:
           printf 'commit=%s lane=%s image=%s/%s kernel=%s\n' "$EVIDENCE_COMMIT" "$EVIDENCE_LANE" "$ImageOS" "$ImageVersion" "$(uname -r)" > "$RUNNER_TEMP/m8-host.txt"
           id m8-service >> "$RUNNER_TEMP/m8-host.txt"
           sudo cat /sys/kernel/security/apparmor/profiles | awk '/constructicon-m8-/ {print}' >> "$RUNNER_TEMP/m8-host.txt"
-      - name: Prove pinned Pi startup without a provider route
+      - name: Prove pinned Pi startup and its fixed local peer
         if: matrix.lane == 'lifecycle'
         shell: bash
         run: |
@@ -133,7 +133,7 @@ jobs:
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             M8_PI_STARTUP_REQUIRED=1 M8_PI_STARTUP_ROOT=/var/lib/constructicon-m8-launch/pi-startup-runtime \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_real_pi_startup.py -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
+            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_real_pi_startup.py tests/substrate/test_real_pi_fixed_peer.py -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
       - name: Prove standalone fake no-further-exec feasibility
         if: matrix.lane == 'foundation'
         shell: bash

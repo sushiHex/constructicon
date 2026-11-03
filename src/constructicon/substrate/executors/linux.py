@@ -53,6 +53,7 @@ from constructicon.substrate.executors.claude_native import (
 from constructicon.substrate.executors.claude_native import VENDOR_MOUNT as CLAUDE_VENDOR_MOUNT
 from constructicon.substrate.executors.egress import ZONE_SOCKET, EgressSocket
 from constructicon.substrate.executors.operator_store import CREDENTIAL_FILE, BindingCheck
+from constructicon.substrate.executors.pi_peer import PiPeerRoute
 
 SUPERVISOR_PATH = Path(NAMESPACE_SCRIPT.removeprefix("/"))
 BWRAP_SHA256 = "e318903862396f96de3df57264e0158682b952fd3fb53ac23d876413e7b30f71"
@@ -645,6 +646,7 @@ class LinuxLauncher:
         self, command: tuple[str, ...], *, workspace: Path | None, posture: Posture,
         native_store: NativeStoreMount | ClaudeNativeStoreMount | None = None,
         layout: NativeLayout | ClaudeNativeLayout | None = None,
+        pi_peer: PiPeerRoute | None = None,
     ) -> list[str]:
         if sys.platform != "linux":
             raise ContractViolation("contained command construction requires Linux")
@@ -717,6 +719,15 @@ class LinuxLauncher:
             args += ["--ro-bind", str(native_store.egress.path), ZONE_SOCKET]
             # The proxy bridge travels only with the leaf (M8-N4-proxy-bridge.md).
             command = ("/usr/bin/python3", "-I", BRIDGE_SCRIPT, *command)
+        if pi_peer is not None:
+            if (workspace is None or posture is not Posture.READ or native_store is not None
+                    or self.vendor is not None or self.claude is not None
+                    or self.effective_profile is not LinuxLaunchProfile.GENERIC_WORKLOAD):
+                raise ContractViolation("the Pi peer requires a generic READ workspace launch")
+            leaf, (device, inode) = pi_peer.require_current()
+            args += ["--ro-bind", str(leaf), "/tmp/pi-peer.sock"]
+            command = ("/usr/bin/python3", "-I", BRIDGE_SCRIPT, "--pi-peer",
+                       str(device), str(inode), *command)
         args += ["--chdir", "/workspace" if workspace is not None else "/tmp", "--", *command]
         return args
 
@@ -743,6 +754,7 @@ class LinuxLauncher:
         self, command: tuple[str, ...], *, workspace: Path | None, posture: Posture,
         guard_fds: tuple[int, ...], conversation: Conversation, timeout_s: float,
         native_store: NativeStoreMount | ClaudeNativeStoreMount | None = None,
+        pi_peer: PiPeerRoute | None = None,
     ) -> ProcessResult:
         """Exchange bytes within the same owned, networkless process lifetime."""
 
@@ -750,6 +762,7 @@ class LinuxLauncher:
             command, workspace=workspace, posture=posture, guard_fds=guard_fds,
             stdin=b"", input_limit=self.limits.input_bytes,
             conversation=conversation, timeout_s=timeout_s, native_store=native_store,
+            pi_peer=pi_peer,
         )
 
     async def _launch(
@@ -757,6 +770,7 @@ class LinuxLauncher:
         guard_fds: tuple[int, ...], stdin: bytes, input_limit: int,
         conversation: Conversation | None, timeout_s: float,
         native_store: NativeStoreMount | ClaudeNativeStoreMount | None = None,
+        pi_peer: PiPeerRoute | None = None,
     ) -> ProcessResult:
 
         started = time.monotonic()
@@ -779,6 +793,7 @@ class LinuxLauncher:
                 command, workspace=workspace, posture=posture, guard_fds=guard_fds,
                 stdin=stdin, deadline=deadline, input_limit=input_limit, conversation=conversation,
                 native_store=native_store, layout=layout,
+                **({"pi_peer": pi_peer} if pi_peer is not None else {}),
             )
         except ProcessExchangeError as exc:
             exc.result = replace(exc.result, elapsed_s=time.monotonic() - started)
@@ -838,6 +853,7 @@ class LinuxLauncher:
         input_limit: int | None = None, conversation: Conversation | None = None,
         native_store: NativeStoreMount | ClaudeNativeStoreMount | None = None,
         layout: NativeLayout | ClaudeNativeLayout | None = None,
+        pi_peer: PiPeerRoute | None = None,
     ) -> ProcessResult:
         if sys.platform != "linux":
             raise ContractViolation("contained process ownership requires Linux")
@@ -848,6 +864,7 @@ class LinuxLauncher:
         args = self.argv(
             command, workspace=workspace, posture=posture, native_store=native_store,
             layout=layout,
+            **({"pi_peer": pi_peer} if pi_peer is not None else {}),
         )
         # Only bubblewrap consumes these; the supervisor passes them through.
         mount_fds = (() if native_store is None or layout is None
