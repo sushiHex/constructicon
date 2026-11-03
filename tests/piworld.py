@@ -31,7 +31,7 @@ def assistant(content, reason, *, usage=True):
 
 
 def cycle(instruction, text):
-    user = {"role": "user", "content": instruction, "timestamp": 1}
+    user = {"role": "user", "content": [{"type": "text", "text": instruction}], "timestamp": 1}
     tool = {"type": "toolCall", "id": "read-1", "name": "read",
             "arguments": {"path": "fixture.txt"}}
     request = assistant([tool], "toolUse")

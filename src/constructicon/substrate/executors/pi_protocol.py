@@ -129,6 +129,10 @@ def parse_record(raw: bytes) -> dict[str, Any]:
     return value
 
 
+class UnexpectedUserMessage(ValueError):
+    pass
+
+
 @dataclass
 class ReadCall:
     arguments: dict[str, Any]
@@ -206,6 +210,8 @@ class PiDecoder:
                 return
             try:
                 self.observe(parse_record(raw), self.frame_generation)
+            except UnexpectedUserMessage:
+                self.damage("unexpected user message", raw)
             except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
                 self.damage("malformed or incoherent Pi record", raw)
 
@@ -333,8 +339,11 @@ class PiDecoder:
     def message_end(self, message: dict[str, Any]) -> None:
         role = message["role"]
         if role == "user":
-            if self.messages or message.get("content") != self.instruction:
-                raise ValueError("unexpected user message")
+            # Pi v1.3.0 emits one text block for an instruction without images.
+            if self.messages or not same(
+                message.get("content"), [{"type": "text", "text": self.instruction}],
+            ):
+                raise UnexpectedUserMessage
             return
         if role == "toolResult":
             text_blocks(message.get("content"))
