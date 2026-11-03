@@ -3470,3 +3470,30 @@ owner scope. The first WRITE procedure is still an unexecuted proposal, not
 a host-ready package or live qualification. SQLite connections already close
 per transaction; semantic snapshots prove no run/checkpoint enrollment during
 metadata preparation.
+
+## One live Claude subscription WRITE — #77 (2026-11-03 UTC)
+
+One selected live `sonnet-4-6` low-effort WRITE succeeded under the 300-second,
+eight-callback bound: one callback completed, the candidate changed, target
+stayed unchanged, and the complete journal succeeded with initial and terminal
+binding checks. The credential-free bootstrap smoke, exact changed-candidate
+gate, fresh D2/controller/import/launch checks, installed Git policy readback,
+and independent Fable HOLD/MATCH review are recorded in the dated [M8
+implementation record](plans/handoffs/M8-implementation-record.md#one-live-claude-subscription-write--77).
+Generation 15 was withdrawn explicitly; terminal source check passed, native
+telemetry was quiet, VM Off/Ok idle was positively observed, and all three
+obligations closed/released. The checkpoint chain validated, and release 6798
+was acknowledged by independent receipt 6799; post-release checks found no SSH,
+VM connection or VM worker process. Backend token/request
+counts remain unknown, no finite dollar ceiling is claimed, and no API key,
+billed fallback or login was used. The prior READ is separate; neither this
+single WRITE nor its successful result completes #40/M8 or claims general
+production availability. [Public closeout](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6592516986).
+
+Two local orchestration assumptions were wrong and were fixed offline: the
+recorder's fresh-only capture-directory guard refused before subprocess/start
+because root had pre-created that directory; the corrected recorder tests both
+acceptance and refusal. Retention also expected a drift prefix on stdout, while
+the renderer emits JSON there and writes the marker separately; exact-byte
+retention was corrected with the VM parked. Neither changed product code; no
+additional host/model attempt or local vendor-binary test followed.

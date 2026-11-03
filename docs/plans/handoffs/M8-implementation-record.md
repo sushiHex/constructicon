@@ -11234,3 +11234,54 @@ This code does not update the private host. Its historical policy and withdrawn
 store remain intact. A new launch policy changes sealed launch/provider identity
 and needs separately selected replacement, verification and fresh qualification
 before any further live model attempt. Closed session authority is not reused.
+
+## One live Claude subscription WRITE — #77
+
+The installation closeout ([#77](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6591651500))
+and separately selected scope ([#77](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6592021064))
+bound one attempt, run approximately 2026-11-03 00:25–00:55 UTC, to the retained
+controller `fabd271646ea1009bd55d37413195123afff6a8d`.
+The new Git profile policy was installed and positively read back as
+`official_installed=true`. Fresh D2, controller/import/launch checks and the
+credential-free Claude-bootstrap resource smoke passed for the complete changed
+candidate and exact gate; its report SHA-256 is
+`6c88d6a7a063f7674c748d523c37c22105d06dd229bb581098b15b6fa13f492f`. Retained-lock
+pre-observer and post-maintenance inventory both confirmed withdrawal of
+generation 14. The prior READ record remains separate.
+
+Generation 15 was published, sealed and activated after exact cleanup was
+staged and duty saved. Independent Fable review returned HOLD/MATCH after
+checking source constants and raw Git blobs, then independently read the actual
+report (receipt 6799). One `sonnet-4-6` low-effort WRITE
+ran under a 300-second grant and at most eight callbacks: one was admitted and
+completed successfully. The attempt report passed; candidate changed while the
+target stayed unchanged; the journal was valid, complete and succeeded; initial
+and terminal bindings were checked; relay closure was observed. The exact JSON
+report SHA-256 is
+`8f75ef46deed6c171d0efe74b68bea72506d0b2a1f5c2f20d2bce444d0fd4cba`; corrected
+v2 WRITE metadata SHA-256 is
+`fb72d68c48393e034593f2aa09f3b730ed03495872f76b0e89edb2132304be34`.
+
+The actual terminal source check passed and native telemetry was zero/quiet.
+Generation 15 withdrawal was confirmed by its explicit marker. VM park and
+positive idle Off/Ok were observed with uptime zero, no checkpoints and no VM
+connections. All three obligations were closed/released, the checkpoint chain
+validated, and release `6798` was acknowledged by receipt `6799`. Post-release
+checks observed no SSH, VM connection or VM worker process. The private VM is
+therefore not evidence of ongoing availability.
+Observed/backend token count and backend request count are unknown, and no
+finite dollar ceiling is claimed. The owner had accepted subscription overage;
+no API key was created, billed fallback used, or login performed. This is one
+successful live WRITE only: it does not complete #40 or M8, or establish general
+production availability. The scope closed early at approximately 00:55 UTC.
+Public final closeout: [#77](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6592516986).
+
+Two local orchestration assumptions were corrected without another host or
+model attempt. The recorder expected a fresh-only VM capture directory that the
+root had pre-created; its guard refused before any subprocess or start. The
+closed scope was preserved, and the corrected recorder asserts absence and
+tests both acceptance and refusal against a real temporary directory. Separately,
+retention expected a drift prefix in stdout, but `read_metadata_session.render`
+emits stdout as JSON and writes the marker to a separate file. Exact-byte
+retention was corrected offline with the VM already parked. Neither issue
+changed product code. No vendor binary local tests were run.
