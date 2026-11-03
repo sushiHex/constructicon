@@ -29,6 +29,8 @@ from contextlib import suppress
 BRIDGE_SCRIPT = "/usr/libexec/constructicon-egress-bridge.py"
 LEAF = "/vendor-egress.sock"
 """``egress.ZONE_SOCKET``; this standalone file cannot import it."""
+PI_LEAF = "/tmp/pi-peer.sock"
+PI_PORT = 18081
 PROXY_HOST = "127.0.0.1"
 PROXY_PORT = 18080
 """Fixed, outside Linux's default ephemeral range, bound before the vendor exists."""
@@ -187,7 +189,18 @@ def _exec(command: list[str], env: dict[str, str]) -> None:
 
 
 def main(argv: list[str]) -> int:
+    global LEAF, PROXY_PORT
     command = argv[1:]
+    pi_peer = command[:1] == ["--pi-peer"]
+    if pi_peer:
+        LEAF, PROXY_PORT = PI_LEAF, PI_PORT
+        try:
+            info = os.lstat(LEAF)
+            if (info.st_dev, info.st_ino) != (int(command[1]), int(command[2])):
+                return refuse("Pi peer identity")
+        except (OSError, ValueError, IndexError):
+            return refuse("Pi peer identity")
+        command = command[3:]
     if not command or not command[0].startswith("/"):
         return refuse("command")
     if not leaf_is_socket():
@@ -205,7 +218,7 @@ def main(argv: list[str]) -> int:
         listener.close()
     try:
         _restore_signals()
-        _exec(command, environment(dict(os.environ)))
+        _exec(command, dict(os.environ) if pi_peer else environment(dict(os.environ)))
     except OSError:
         return refuse("exec")
     return refuse("exec")  # a successful exec never returns

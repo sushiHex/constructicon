@@ -79,8 +79,9 @@ PROOFS = {
         "scripts/check_m8_n4_bridge_mutations.py "
         "scripts/check_m8_n5_inventory_mutations.py",
     ),
-    "Prove pinned Pi startup without a provider route": (
-        "lifecycle", "tests/substrate/test_real_pi_startup.py",
+    "Prove pinned Pi startup and its fixed local peer": (
+        "lifecycle",
+        "tests/substrate/test_real_pi_startup.py tests/substrate/test_real_pi_fixed_peer.py",
     ),
     "Prove bounded native startup without a provider route": (
         "lifecycle",
