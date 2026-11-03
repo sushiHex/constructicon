@@ -117,6 +117,23 @@ jobs:
           printf 'commit=%s lane=%s image=%s/%s kernel=%s\n' "$EVIDENCE_COMMIT" "$EVIDENCE_LANE" "$ImageOS" "$ImageVersion" "$(uname -r)" > "$RUNNER_TEMP/m8-host.txt"
           id m8-service >> "$RUNNER_TEMP/m8-host.txt"
           sudo cat /sys/kernel/security/apparmor/profiles | awk '/constructicon-m8-/ {print}' >> "$RUNNER_TEMP/m8-host.txt"
+      - name: Prove pinned Pi startup without a provider route
+        if: matrix.lane == 'lifecycle'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --max-time 120 \
+            https://github.com/earendil-works/pi/releases/download/v1.3.0/pi-linux-x64.tar.gz \
+            --output "$RUNNER_TEMP/pi-linux-x64.tar.gz"
+          sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" scripts/ci/build_m8_pi_startup_fixture.py \
+            /var/lib/constructicon-m8-launch/runtime /var/lib/constructicon-m8-launch/pi-startup-runtime \
+            "$RUNNER_TEMP/pi-linux-x64.tar.gz" | tee "$RUNNER_TEMP/m8-pi-startup-runtime.json"
+          sudo install -m 0444 "$RUNNER_TEMP/m8-pi-startup-runtime.json" /var/lib/constructicon-m8-launch/pi-startup-runtime.json
+          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
+            M8_PI_STARTUP_REQUIRED=1 M8_PI_STARTUP_ROOT=/var/lib/constructicon-m8-launch/pi-startup-runtime \
+            M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
+            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_real_pi_startup.py -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
       - name: Prove standalone fake no-further-exec feasibility
         if: matrix.lane == 'foundation'
         shell: bash
@@ -606,23 +623,6 @@ jobs:
             M8_STARTUP_REQUIRED=1 M8_STARTUP_ROOT=/var/lib/constructicon-m8-launch/startup-runtime \
             PYTEST_ADDOPTS=-pno:cacheprovider \
             "$PWD/.venv/bin/python" scripts/check_m8_startup_mutations.py
-      - name: Prove pinned Pi startup without a provider route
-        if: matrix.lane == 'lifecycle'
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl --fail --silent --show-error --location --max-time 120 \
-            https://github.com/earendil-works/pi/releases/download/v1.3.0/pi-linux-x64.tar.gz \
-            --output "$RUNNER_TEMP/pi-linux-x64.tar.gz"
-          sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" scripts/ci/build_m8_pi_startup_fixture.py \
-            /var/lib/constructicon-m8-launch/runtime /var/lib/constructicon-m8-launch/pi-startup-runtime \
-            "$RUNNER_TEMP/pi-linux-x64.tar.gz" | tee "$RUNNER_TEMP/m8-pi-startup-runtime.json"
-          sudo install -m 0444 "$RUNNER_TEMP/m8-pi-startup-runtime.json" /var/lib/constructicon-m8-launch/pi-startup-runtime.json
-          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
-            M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
-            M8_PI_STARTUP_REQUIRED=1 M8_PI_STARTUP_ROOT=/var/lib/constructicon-m8-launch/pi-startup-runtime \
-            M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_real_pi_startup.py -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
       - name: Build the accepted test-only provider placement
         if: matrix.lane == 'lifecycle' || matrix.lane == 'combined'
         shell: bash
