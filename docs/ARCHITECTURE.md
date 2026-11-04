@@ -877,7 +877,10 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   bytes and the v1 law revision are pinned by goldens captured from
   `d2b8f94`. Codex has bounded historical READ/WRITE and maintenance-application
   acceptance, not a generally enabled production provider or qualification for
-  another boot. Claude Code and Pi retain independent qualification obligations;
+  another boot. Claude Code has accepted historical READ and WRITE evidence.
+  Pi has a qualified bounded local READ profile on hosted Linux; the common
+  workspace component also runs with scripted Claude and Pi bindings.
+  Codex's no-workspace profile cannot satisfy that component's admission.
   M8 is not complete. See the implementation record's
   [historical closeout](plans/handoffs/M8-implementation-record.md#codex-historical-closeout-owner-acceptance-2026-10-13)
   and [q13 contribution](plans/handoffs/M8-implementation-record.md#q13-contribution-recovered-and-published-for-review-refs-245-186).

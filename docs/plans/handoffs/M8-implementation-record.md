@@ -11296,3 +11296,25 @@ metadata remained unchanged. No additional host/vendor/model call was needed.
 Neither issue changed product code. No vendor binary local tests were run.
 Delivery #339 is complete; broader
 #40 and M8 remain open.
+
+## N7 — bounded Pi READ and common workspace component
+
+[The qualified local READ](https://github.com/sushiHex/constructicon/actions/runs/41767411831)
+ran at `ea41265` after [#357](https://github.com/sushiHex/constructicon/pull/357)
+merged. Pinned Pi v1.3.0 used llama.cpp b12069 CPU and Qwen3-0.6B Q8_0 on the
+disposable hosted Linux runner. The [receipts](https://github.com/sushiHex/constructicon/actions/runs/41767411831/artifacts/13293366517)
+record one correlated READ, the matching fixture result and accepted answer,
+unchanged workspace, peer liveness through the exchange and joined teardown.
+The conversation settled and reached EOF without damage, refusal or a limit
+breach. Earlier failed verdicts stand. This proves the bounded pinned profile.
+
+[#359](https://github.com/sushiHex/constructicon/pull/359), merged as `3fb5033`,
+proves the same workspace component through ControlPlane and RunHost under
+scripted Claude and Pi bindings. Both runs checkpoint and release the executor
+and workspace leases. Codex's no-workspace profile cannot satisfy this
+component's admission; the refusal creates no run, lease or worker attempt.
+This scripted composition does not extend historical vendor qualification.
+
+The accepted Claude and Codex READ/WRITE evidence remains revision-specific.
+Integrated M8 is open; [#42](https://github.com/sushiHex/constructicon/issues/42)
+tracks the remaining lifecycle evidence and closure decision.
