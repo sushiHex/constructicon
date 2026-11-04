@@ -43,7 +43,12 @@ Keep the port contract, required capabilities, runner, inputs and empty
 context identical. Review the two source bodies to establish the only
 semantic difference is that literal, then pin both source digests. The
 binder accepts only the exact reviewed candidate definition and source
-digest; reject every other version. No generated Python, mutable module
+digest; reject every other version. The registry hashes the function source,
+not its callees (runtime/registry.py:353-369). Seal the trusted fixture bundle,
+runner and evaluator source, and scripted provider implementation/configuration
+with the experiment. Recheck their digests and admitted provider revision at
+evaluation and issuance. A changed helper or provider refuses even if both
+component function digests still match. No generated Python, mutable module
 globals, metadata prompt slots, free-form graph edits or new IR field.
 
 Override only the atomic component name. Counterfactual resolution locks
@@ -120,7 +125,7 @@ scheduler or autonomy is proposed in this slice.
 First deliver the credential-free fixture, case sealing and candidate diff
 guard. Then compose evaluation, issuance, promotion and rollback with
 positive and negative evidence: train/held-out overlap, changed fixture or
-policy, unauthorized mint, missing result, stale baseline, changed grant,
+policy, unauthorized mint, missing result, stale baseline, changed helper or grant,
 and retry after a durable boundary. Reuse existing crash and replay proofs
 where the seam is unchanged; add only the missing composed proof. A
 refused experiment leaves stable unchanged and records its reason. No
