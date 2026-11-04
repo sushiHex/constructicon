@@ -274,6 +274,12 @@ async def test_write_candidate_installs_only_after_the_contained_gate(
         attestation = journal.load_attestation(evaluation.attestation_id)
         assert attestation is not None and attestation.subject == evaluation.subject
         assert attestation.ok is gate_passes
+        assert attestation.checks == evaluation.checks
+        assert len(evaluation.checks) == 1
+        check = evaluation.checks[0]
+        assert check.name == "callback-content"
+        assert check.status == ("passed" if gate_passes else "failed")
+        assert check.ok is gate_passes
         installed = workspace.authority.resolve_ref(workspace.target_ref)
         assert sum(event.kind == "EffectCommitted" for event in events) == int(gate_passes)
         if gate_passes:
