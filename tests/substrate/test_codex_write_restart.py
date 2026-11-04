@@ -23,12 +23,15 @@ from constructicon.core.control import (
     RunSubmission,
 )
 from constructicon.core.gates import MergeEvaluation
+from constructicon.core.grants import Posture
 from constructicon.core.graph import Connection, GraphNode, Ref
 from constructicon.core.run import RunStatus
 from constructicon.substrate.effects.git import MergeVerifiedEffect
 from constructicon.substrate.executors.linux import LinuxLauncher
 from constructicon.substrate.gates.contained import ContainedGateRunner
 from constructicon.substrate.gates.runner import CheckSpec
+from constructicon.substrate.git.authority import GitAuthority
+from constructicon.substrate.git.capture import ContainedWriteWorkspaceProvider
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.api.test_control_response_loss import LOCAL_ADMIN, RUN_ACTOR
 from tests.conftest import atomic
@@ -198,16 +201,17 @@ async def test_installed_write_is_reconciled_after_host_abandonment(
     journal = SqliteJournal(tmp_path / "install-restart.sqlite")
     workspace = capture_provider(provider, launcher)
     before = workspace.authority.resolve_ref(workspace.target_ref)
+    checks = (CheckSpec(
+        "callback-content",
+        ("/usr/bin/python3", "-c",
+         "from pathlib import Path; assert Path('callback.txt').read_text() == "
+         "'recovered install'"),
+        20,
+    ),)
     gate = await ContainedGateRunner.create(
         journal=journal, authority=workspace.authority, root=tmp_path / "gates",
         target_ref=workspace.target_ref, provider_id="restart-install-gate", launcher=launcher,
-        checks=(CheckSpec(
-            "callback-content",
-            ("/usr/bin/python3", "-c",
-             "from pathlib import Path; assert Path('callback.txt').read_text() == "
-             "'recovered install'"),
-            20,
-        ),),
+        checks=checks,
     )
     native_a = write_native(program=program)
     worker_a = _worker_launcher(launcher, native_a)
@@ -292,12 +296,26 @@ async def test_installed_write_is_reconciled_after_host_abandonment(
         assert not journal.cancel_requested(submitted.run_id)
         assert journal.receipt_for(request.idempotency_key) is None
 
+        journal_b = SqliteJournal(tmp_path / "install-restart.sqlite")
+        authority_b = GitAuthority(tmp_path / "authority.git", tmp_path / "legacy")
+        workspace_b = ContainedWriteWorkspaceProvider(
+            authority_b, root=tmp_path / "owned", target_ref="refs/heads/main",
+            provider_id="capture", posture=Posture.WRITE, launcher=launcher,
+        )
+        gate_b = await ContainedGateRunner.create(
+            journal=journal_b, authority=authority_b, root=tmp_path / "gates",
+            target_ref=workspace_b.target_ref, provider_id="restart-install-gate",
+            launcher=launcher, checks=checks,
+        )
+        assert workspace_b.revision == workspace.revision and gate_b.revision == gate.revision
+        assert authority_b.resolve_ref(workspace_b.target_ref) == installed
+        assert journal_b.receipt_for(request.idempotency_key) is None
         native_b = write_native(program=program)
         worker_b = _worker_launcher(launcher, native_b)
         executor_b = write_provider(
             worker_b, binding=portable_binding[1:3], root=tmp_path / "executor",
         )
-        effect_b = MergeVerifiedEffect(journal=journal, authority=workspace.authority)
+        effect_b = MergeVerifiedEffect(journal=journal_b, authority=authority_b)
         reconciled = []
         original_reconcile = effect_b.reconcile
 
@@ -313,29 +331,29 @@ async def test_installed_write_is_reconciled_after_host_abandonment(
         monkeypatch.setattr(effect_b, "execute", forbid_execute)
         second = ControlPlane(
             system=write_system(
-                journal, workspace, executor_b, gate, effects={"merge_verified": effect_b},
+                journal_b, workspace_b, executor_b, gate_b, effects={"merge_verified": effect_b},
             ),
-            store=journal,
+            store=journal_b,
         )
         await second.startup()
-        await _until(lambda: journal.run_state(submitted.run_id).status in {
+        await _until(lambda: journal_b.run_state(submitted.run_id).status in {
             RunStatus.SUCCEEDED, RunStatus.FAILED,
         })
-        assert journal.run_state(submitted.run_id).status is RunStatus.SUCCEEDED, (
-            journal.events(submitted.run_id)
+        assert journal_b.run_state(submitted.run_id).status is RunStatus.SUCCEEDED, (
+            journal_b.events(submitted.run_id)
         )
         assert len(reconciled) == 1 and reconciled[0][0] == request
         assert reconciled[0][1] is not None and reconciled[0][1].status == "committed"
-        receipt = journal.receipt_for(request.idempotency_key)
+        receipt = journal_b.receipt_for(request.idempotency_key)
         assert receipt is not None and receipt.status == "committed"
-        events = journal.events(submitted.run_id)
+        events = journal_b.events(submitted.run_id)
         assert sum(event.kind == "EffectReconciled" for event in events) == 1
         assert not any(event.kind == "EffectCommitted" for event in events)
-        assert workspace.authority.resolve_ref(workspace.target_ref) == installed
+        assert authority_b.resolve_ref(workspace_b.target_ref) == installed
         assert not worker_b.worker_calls and not native_b.callback_responses
-        assert all(row.state == "closed" for row in journal.capability_leases(submitted.run_id))
+        assert all(row.state == "closed" for row in journal_b.capability_leases(submitted.run_id))
         assert all(handle.closed for handle in (*executor_a.handles, *executor_b.handles))
-        assert not list(workspace.root.glob("payloads/*"))
+        assert not list(workspace_b.root.glob("payloads/*"))
     finally:
         if second is not None:
             await second.shutdown()
