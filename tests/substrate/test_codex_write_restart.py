@@ -10,18 +10,33 @@ native recovery lane.
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import sys
 from dataclasses import fields
 
 import pytest
 
 from constructicon.api.control import ControlPlane
-from constructicon.core.control import RunSubmission
+from constructicon.core.control import (
+    PromotionCommandResult,
+    RegistrationCommandResult,
+    RunSubmission,
+)
+from constructicon.core.gates import MergeEvaluation
+from constructicon.core.grants import Posture
+from constructicon.core.graph import Connection, GraphNode, Ref
 from constructicon.core.run import RunStatus
+from constructicon.substrate.effects.git import MergeVerifiedEffect
 from constructicon.substrate.executors.linux import LinuxLauncher
+from constructicon.substrate.gates.contained import ContainedGateRunner
+from constructicon.substrate.gates.runner import CheckSpec
+from constructicon.substrate.git.authority import GitAuthority
+from constructicon.substrate.git.capture import ContainedWriteWorkspaceProvider
 from constructicon.substrate.journal.sqlite import SqliteJournal
-from tests.api.test_control_response_loss import RUN_ACTOR
+from tests.api.test_control_response_loss import LOCAL_ADMIN, RUN_ACTOR
+from tests.conftest import atomic
 from tests.gateworld import ControlledGate, ControlledGateProvider
+from tests.gitworld import EVALUATION, MERGED, merge_impl
 from tests.substrate.test_codex_adapter import FINISHED
 from tests.substrate.test_codex_adapter import portable_binding as portable_binding
 from tests.substrate.test_codex_write import write_native, write_provider
@@ -171,6 +186,174 @@ async def test_write_abandonment_reconstruction_replays_only_the_uncheckpointed_
         assert all(handle.closed for handle in executor_a.handles)
         assert all(handle.closed for handle in executor_b.handles)
         assert not list(workspace.root.glob("payloads/*"))
+    finally:
+        if second is not None:
+            await second.shutdown()
+        await first.shutdown()
+
+
+@LINUX
+async def test_installed_write_is_reconciled_after_host_abandonment(
+    launcher, provider, portable_binding, tmp_path, monkeypatch,
+):
+    """The real install occurs before abandonment; the successor records its receipt."""
+    program = "from pathlib import Path; Path('callback.txt').write_text('recovered install')"
+    journal = SqliteJournal(tmp_path / "install-restart.sqlite")
+    workspace = capture_provider(provider, launcher)
+    before = workspace.authority.resolve_ref(workspace.target_ref)
+    checks = (CheckSpec(
+        "callback-content",
+        ("/usr/bin/python3", "-c",
+         "from pathlib import Path; assert Path('callback.txt').read_text() == "
+         "'recovered install'"),
+        20,
+    ),)
+    gate = await ContainedGateRunner.create(
+        journal=journal, authority=workspace.authority, root=tmp_path / "gates",
+        target_ref=workspace.target_ref, provider_id="restart-install-gate", launcher=launcher,
+        checks=checks,
+    )
+    native_a = write_native(program=program)
+    worker_a = _worker_launcher(launcher, native_a)
+    executor_a = write_provider(
+        worker_a, binding=portable_binding[1:3], root=tmp_path / "executor",
+    )
+    effect_a = MergeVerifiedEffect(journal=journal, authority=workspace.authority)
+    installed_event = asyncio.Event()
+    requests = []
+    execute = effect_a.execute
+
+    async def pause_after_install(request):
+        receipt = await execute(request)
+        assert receipt.status == "committed"
+        requests.append(request)
+        installed_event.set()
+        await asyncio.Event().wait()
+        return receipt
+
+    monkeypatch.setattr(effect_a, "execute", pause_after_install)
+    first = ControlPlane(
+        system=write_system(
+            journal, workspace, executor_a, gate, effects={"merge_verified": effect_a},
+        ),
+        store=journal,
+    )
+    second = None
+    try:
+        await first.startup()
+        graph = await write_graph(first)
+        definition, _ = atomic("test/recovery-merge", (EVALUATION,), (MERGED,), merge_impl)
+        registered = await first.registry_register(
+            LOCAL_ADMIN, definition=definition, idempotency_key="register-recovery-merge",
+        )
+        assert isinstance(registered, RegistrationCommandResult), registered
+        promoted = await first.registry_promote_initial(
+            LOCAL_ADMIN, component=definition.name, version=registered.version,
+            idempotency_key="promote-recovery-merge",
+        )
+        assert isinstance(promoted, PromotionCommandResult), promoted
+        graph = graph.model_copy(update={
+            "outputs": (MERGED,),
+            "nodes": (*graph.nodes, GraphNode(id="merge", body=Ref(component=definition.name))),
+            "connections": (*graph.connections, Connection(src="check", dst="merge")),
+        })
+        submitted = await first.runs_start(
+            RUN_ACTOR, proposal=graph, inputs={"goal": {"message": "recover installed write"}},
+            idempotency_key="recover-installed-write",
+        )
+        assert isinstance(submitted, RunSubmission), submitted
+        await _until(installed_event.is_set)
+        assert len(requests) == 1
+        request = requests[0]
+        installed = workspace.authority.resolve_ref(workspace.target_ref)
+        assert installed != before
+        assert journal.receipt_for(request.idempotency_key) is None
+        with sqlite3.connect(tmp_path / "install-restart.sqlite") as db:
+            prepared = db.execute(
+                "SELECT request_json, receipt_json FROM effects WHERE idempotency_key = ?",
+                (str(request.idempotency_key),),
+            ).fetchone()
+        assert prepared is not None and prepared[1] is None
+        assert type(request).model_validate_json(prepared[0]) == request
+        assert journal.run_state(submitted.run_id).status is RunStatus.RUNNING
+        leases = journal.capability_leases(submitted.run_id)
+        writer = next(row for row in leases if row.binding_id == "workspace")
+        checker = next(row for row in leases if row.binding_id == "gates")
+        candidate = journal.checkpoint(submitted.run_id, writer.path).outputs[
+            "candidate"
+        ].payload["commit"]
+        evaluation = MergeEvaluation.model_validate(
+            journal.checkpoint(submitted.run_id, checker.path).outputs["evaluation"].payload,
+        )
+        assert evaluation.ok and evaluation.subject is not None
+        assert evaluation.subject.candidate == candidate
+        assert installed == evaluation.subject.merge_commit
+        assert workspace.authority.parents_of(installed) == (before, candidate)
+        assert len(worker_a.worker_calls) == len(native_a.callback_responses) == 1
+
+        await first.shutdown()
+        assert journal.run_state(submitted.run_id).status is RunStatus.RUNNING
+        assert not journal.cancel_requested(submitted.run_id)
+        assert journal.receipt_for(request.idempotency_key) is None
+
+        journal_b = SqliteJournal(tmp_path / "install-restart.sqlite")
+        authority_b = GitAuthority(tmp_path / "authority.git", tmp_path / "legacy")
+        workspace_b = ContainedWriteWorkspaceProvider(
+            authority_b, root=tmp_path / "owned", target_ref="refs/heads/main",
+            provider_id="capture", posture=Posture.WRITE, launcher=launcher,
+        )
+        gate_b = await ContainedGateRunner.create(
+            journal=journal_b, authority=authority_b, root=tmp_path / "gates",
+            target_ref=workspace_b.target_ref, provider_id="restart-install-gate",
+            launcher=launcher, checks=checks,
+        )
+        assert workspace_b.revision == workspace.revision and gate_b.revision == gate.revision
+        assert authority_b.resolve_ref(workspace_b.target_ref) == installed
+        assert journal_b.receipt_for(request.idempotency_key) is None
+        native_b = write_native(program=program)
+        worker_b = _worker_launcher(launcher, native_b)
+        executor_b = write_provider(
+            worker_b, binding=portable_binding[1:3], root=tmp_path / "executor",
+        )
+        effect_b = MergeVerifiedEffect(journal=journal_b, authority=authority_b)
+        reconciled = []
+        original_reconcile = effect_b.reconcile
+
+        async def record_reconcile(request):
+            receipt = await original_reconcile(request)
+            reconciled.append((request, receipt))
+            return receipt
+
+        async def forbid_execute(request):
+            pytest.fail("recovery attempted to install a second time")
+
+        monkeypatch.setattr(effect_b, "reconcile", record_reconcile)
+        monkeypatch.setattr(effect_b, "execute", forbid_execute)
+        second = ControlPlane(
+            system=write_system(
+                journal_b, workspace_b, executor_b, gate_b, effects={"merge_verified": effect_b},
+            ),
+            store=journal_b,
+        )
+        await second.startup()
+        await _until(lambda: journal_b.run_state(submitted.run_id).status in {
+            RunStatus.SUCCEEDED, RunStatus.FAILED,
+        })
+        assert journal_b.run_state(submitted.run_id).status is RunStatus.SUCCEEDED, (
+            journal_b.events(submitted.run_id)
+        )
+        assert len(reconciled) == 1 and reconciled[0][0] == request
+        assert reconciled[0][1] is not None and reconciled[0][1].status == "committed"
+        receipt = journal_b.receipt_for(request.idempotency_key)
+        assert receipt is not None and receipt.status == "committed"
+        events = journal_b.events(submitted.run_id)
+        assert sum(event.kind == "EffectReconciled" for event in events) == 1
+        assert not any(event.kind == "EffectCommitted" for event in events)
+        assert authority_b.resolve_ref(workspace_b.target_ref) == installed
+        assert not worker_b.worker_calls and not native_b.callback_responses
+        assert all(row.state == "closed" for row in journal_b.capability_leases(submitted.run_id))
+        assert all(handle.closed for handle in (*executor_a.handles, *executor_b.handles))
+        assert not list(workspace_b.root.glob("payloads/*"))
     finally:
         if second is not None:
             await second.shutdown()
