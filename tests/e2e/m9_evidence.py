@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict
 
 from constructicon.core.address import ExecutionPath, RunId, ScopePath
+from constructicon.core.component import ComponentDef
 from constructicon.core.envelope import ArtifactRef
 from constructicon.core.graph import Graph, GraphNode, Ref
 from constructicon.core.identity import Digest, canonical_json, digest
@@ -16,6 +17,7 @@ from constructicon.core.journal import Journal
 from constructicon.core.ports import Port
 from constructicon.core.run import RunStatus
 from constructicon.runtime.context import NodeContext
+from tests.conftest import atomic
 from tests.e2e.m9_fixture import Case, Diagnosis
 
 DIAGNOSTIC_PATH = ExecutionPath(scope=ScopePath(segments=("m9-pilot", "report", "diagnose")))
@@ -178,3 +180,8 @@ def proposer_graph() -> Graph:
         inputs=(TRAIN,),
         outputs=(CHOICE,),
     )
+
+
+def proposer_definition() -> ComponentDef:
+    definition, _ = atomic(PROPOSER, (TRAIN,), (CHOICE,), suggest)
+    return definition.model_copy(update={"capability_requirements": ()})

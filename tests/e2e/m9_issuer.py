@@ -8,15 +8,23 @@ from dataclasses import dataclass
 from typing import Any
 
 from constructicon.core.address import ExecutionPath, RunId, ScopePath
-from constructicon.core.component import PythonRef
+from constructicon.core.component import ComponentLineage, PythonRef
 from constructicon.core.control import ControlStore
 from constructicon.core.effect import AttestationDraft, CheckResult, ComponentProofSubject
 from constructicon.core.envelope import ArtifactRef
+from constructicon.core.grants import Posture
 from constructicon.core.graph import Graph, GraphNode, Ref
-from constructicon.core.identity import ActorId, Digest, digest
+from constructicon.core.identity import ActorId, Digest, canonical_json, digest
 from constructicon.core.journal import Journal
-from constructicon.core.manifest import ExecutionManifest, manifest_hash_for, source_graph_hash_for
+from constructicon.core.manifest import (
+    SELF_BINDING,
+    SELF_CAPABILITY,
+    ExecutionManifest,
+    manifest_hash_for,
+    source_graph_hash_for,
+)
 from constructicon.core.ports import Port
+from constructicon.core.registry import RegistryStore
 from constructicon.core.run import RunStatus
 from constructicon.core.workspace import (
     AcquiredCapability,
@@ -31,7 +39,16 @@ from constructicon.core.workspace import (
 from constructicon.runtime.context import NodeContext
 from constructicon.substrate.executors.fake import FakeExecutor
 from tests.e2e import m9_evidence, m9_fixture
-from tests.e2e.m9_evidence import DIAGNOSTIC_PATH, project_case, read_projection
+from tests.e2e.m9_evidence import (
+    DIAGNOSTIC_PATH,
+    PROPOSER,
+    PROPOSER_PATH,
+    Exam,
+    project_case,
+    proposer_definition,
+    proposer_graph,
+    read_projection,
+)
 from tests.e2e.m9_fixture import DEPENDENT, PROVIDER, REVISION, TARGET, Diagnosis
 
 ISSUER = "test/m9-issuer"
@@ -108,9 +125,11 @@ def _checkpoint(
 class Issuer:
     journal: Journal
     approvals: ControlStore
+    registry: RegistryStore
     owner: ActorId
     subject: ComponentProofSubject
     seal: RunId
+    proposal: RunId
     projection: ArtifactRef
     pairs: tuple[Pair, ...]
     executor: FakeExecutor
@@ -148,7 +167,98 @@ class Issuer:
         del context
         return LeaseReconciliation(reaped=tuple(row.lease.acquisition_id for row in stale))
 
-    def verify(self) -> None:
+    def _verify_proposal(self, exam: Exam, old: Digest, new: Digest) -> ComponentLineage:
+        snapshot = self.registry.snapshot()
+        retained = snapshot.get(TARGET, new)
+        if retained is None or retained.content_hash != new:
+            raise ValueError("M9 retained candidate is missing")
+        lineage = retained.definition.metadata.lineage
+        if (
+            lineage is None
+            or lineage.parent_version != old
+            or lineage.created_by_run != self.proposal
+            or lineage.experience_set != self.projection
+        ):
+            raise ValueError(
+                "M9 retained candidate lineage disagrees with the attested baseline or exam"
+            )
+        proposal = self.journal.run_record(self.proposal)
+        origin = proposal.origin if proposal is not None else None
+        training = {"training": canonical_json(exam.training_projection())}
+        input_hash = digest("inputs", 1, training)
+        if (
+            proposal is None
+            or proposal.status != RunStatus.SUCCEEDED
+            or origin is None
+            or origin.kind != "start"
+            or origin.effects != "live"
+            or origin.capabilities != "normal"
+            or self.proposal == self.seal
+            or proposal.manifest_hash != lineage.proposer_manifest_hash
+            or proposal.input_hash != input_hash
+            or self.journal.run_inputs(self.proposal) != training
+        ):
+            raise ValueError("M9 proposer run does not match the sealed training projection")
+        manifest = load_manifest(self.journal, self.proposal)
+        graph = proposer_graph()
+        definition = proposer_definition()
+        version = definition.content_hash()
+        proposer = snapshot.get(PROPOSER, version)
+        if (
+            manifest.source_graph != graph
+            or manifest.source_graph_hash != source_graph_hash_for(graph)
+            or manifest.input_hash != input_hash
+            or manifest.resolved_loops
+            or len(manifest.resolved_components) != 1
+            or len(manifest.capability_bindings) != 1
+            or proposer is None
+            or proposer.definition != definition
+            or not isinstance(definition.body, PythonRef)
+        ):
+            raise ValueError("M9 proposal did not use the reviewed capability-free graph")
+        (resolution,) = manifest.resolved_components
+        (binding,) = manifest.capability_bindings
+        if (
+            resolution.component != PROPOSER
+            or resolution.scope != PROPOSER_PATH.scope
+            or resolution.resolved_version != version
+            or resolution.implementation_digest != definition.body.source_digest
+            or binding.scope != PROPOSER_PATH.scope
+            or binding.binding != SELF_BINDING
+            or binding.capability_id != SELF_CAPABILITY
+            or binding.effective_grants.posture != Posture.READ
+            or binding.effective_grants.network != "none"
+            or binding.effective_grants.allowed_tools
+            or binding.effective_grants.env_allowlist
+        ):
+            raise ValueError("M9 proposal graph resolved a different implementation or capability")
+        checkpoint = self.journal.checkpoint(self.proposal, PROPOSER_PATH)
+        if (
+            checkpoint is None
+            or checkpoint.run_id != self.proposal
+            or checkpoint.path != PROPOSER_PATH
+            or checkpoint.input_hash != input_hash
+            or checkpoint.resolved_version != version
+            or set(checkpoint.outputs) != {"choice"}
+        ):
+            raise ValueError("M9 proposal has no complete retained choice checkpoint")
+        choice = checkpoint.outputs["choice"]
+        if (
+            choice.run_id != self.proposal
+            or choice.path != PROPOSER_PATH
+            or choice.port != "choice"
+            or choice.payload != "cite-evidence"
+        ):
+            raise ValueError("M9 proposal did not choose the reviewed atom")
+        stripped = retained.definition.model_copy(
+            update={
+                "metadata": retained.definition.metadata.model_copy(update={"lineage": None}),
+            }
+        )
+        m9_fixture.bind_candidate(choice.payload, stripped)
+        return lineage
+
+    def verify(self) -> ComponentLineage:
         if fixture_digest(self.executor) != self.fixture:
             raise ValueError("M9 fixture or provider configuration changed")
         exam = read_projection(self.journal, self.seal, self.projection)
@@ -165,6 +275,7 @@ class Issuer:
         new = self.subject.version
         if old is None or old == new or self.subject.component != TARGET:
             raise ValueError("M9 issuer requires one candidate edge")
+        lineage = self._verify_proposal(exam, old, new)
         new_def = m9_fixture.diagnostic_definition(m9_fixture.candidate)
         if not isinstance(new_def.body, PythonRef) or new_def.content_hash() != new:
             raise ValueError("M9 issuer candidate differs from the reviewed atom")
@@ -269,6 +380,7 @@ class Issuer:
                     corrected += output != row.expected
         if not corrected:
             raise ValueError("M9 candidate corrected no baseline failure")
+        return lineage
 
 
 @dataclass(frozen=True)
@@ -293,7 +405,7 @@ class BoundIssuer:
             or approval.decision != "approved"
         ):
             raise ValueError("M9 issuance lacks affirmative exact-subject owner approval")
-        issuer.verify()
+        lineage = issuer.verify()
         draft = AttestationDraft(
             action="promote",
             subject=issuer.subject,
@@ -312,6 +424,7 @@ class BoundIssuer:
                 1,
                 {
                     "fixture": issuer.fixture,
+                    "lineage": lineage.model_dump(mode="json"),
                     "exam": issuer.projection.digest,
                     "approval": approval.approval_id,
                     "pairs": [

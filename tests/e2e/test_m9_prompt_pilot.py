@@ -29,6 +29,7 @@ from constructicon.core.effect import AttestationDraft, ComponentProofSubject
 from constructicon.core.executor import TaskSpec
 from constructicon.core.identity import canonical_json, digest
 from constructicon.core.manifest import ExecutionManifest
+from constructicon.core.registry import RegistryRevision, RegistrySnapshot
 from constructicon.core.run import AttemptCause, RunLease, RunStatus
 from constructicon.runtime.registry import CapabilityDescriptor
 from constructicon.sdk.types import DefinitionBundle
@@ -37,17 +38,15 @@ from constructicon.substrate.executors.fake import FakeExecutor
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.conftest import atomic, await_attempt_terminal, build_system
 from tests.e2e.m9_evidence import (
-    CHOICE,
     CURATOR,
     PROJECTION,
-    PROPOSER,
     PROPOSER_PATH,
     RETAINED,
-    TRAIN,
     Exam,
     curator_graph,
     project_case,
     projection_ref,
+    proposer_definition,
     proposer_graph,
     read_projection,
     retain_projection,
@@ -136,9 +135,8 @@ async def test_diagnostic_prompt_counterfactual(
     assert world.rdeps(TARGET) == [DEPENDENT]
     curator, impl = atomic(CURATOR, (PROJECTION,), (RETAINED,), retain_projection)
     world._promote_initial(component=CURATOR, version=world._register(curator, impl))
-    proposer, impl = atomic(PROPOSER, (TRAIN,), (CHOICE,), suggest)
-    proposer = proposer.model_copy(update={"capability_requirements": ()})
-    world._promote_initial(component=PROPOSER, version=world._register(proposer, impl))
+    proposer = proposer_definition()
+    world._promote_initial(component=proposer.name, version=world._register(proposer, suggest))
     graph = report_graph()
 
     control = ControlPlane(system=world, store=journal)
@@ -288,9 +286,11 @@ async def test_diagnostic_prompt_counterfactual(
         issuer = Issuer(
             journal=journal,
             approvals=journal,
+            registry=journal,
             owner=OWNER.actor_id,
             subject=ComponentProofSubject(component=TARGET, version=new, baseline_version=old),
             seal=seal.run_id,
+            proposal=proposal.run_id,
             projection=reference,
             pairs=tuple(pairs),
             executor=executor,
@@ -403,6 +403,32 @@ async def _prove_authority(
         mints.append((lease.run_id, result.attestation_id))
         return result
 
+    snapshot = journal.snapshot
+
+    def corrupted_snapshot(scenario: str, revision: RegistryRevision | None) -> RegistrySnapshot:
+        facts = snapshot(revision).model_copy(deep=True)
+        candidate = facts.get(TARGET, issuer.subject.version)
+        assert candidate is not None
+        lineage = candidate.definition.metadata.lineage
+        assert lineage is not None
+        corrupted = (
+            None
+            if scenario == "missing-lineage"
+            else lineage.model_copy(
+                update={"proposer_manifest_hash": digest("m9-altered-manifest", 1, "changed")}
+            )
+        )
+        definition = candidate.definition.model_copy(
+            update={
+                "metadata": candidate.definition.metadata.model_copy(update={"lineage": corrupted}),
+            }
+        )
+        assert definition.content_hash() == candidate.content_hash
+        facts.versions[TARGET][str(issuer.subject.version)] = candidate.model_copy(
+            update={"definition": definition},
+        )
+        return facts
+
     monkeypatch.setattr(journal, "mint_attestation", observe)
     try:
         proof_ids = []
@@ -413,6 +439,8 @@ async def _prove_authority(
             "wrong-run",
             "wrong-subject",
             "changed-config",
+            "missing-lineage",
+            "changed-lineage",
             "valid",
             "stale",
         ):
@@ -449,6 +477,15 @@ async def _prove_authority(
                 with monkeypatch.context() as fault:
                     if scenario == "changed-config":
                         fault.setattr(issuer.executor, "_script", {})
+                    if scenario in {"missing-lineage", "changed-lineage"}:
+                        fault.setattr(
+                            journal,
+                            "snapshot",
+                            lambda revision=None, scenario=scenario: corrupted_snapshot(
+                                scenario,
+                                revision,
+                            ),
+                        )
                     assert worker.launch(run.run_id) == "queued"
                     terminal = await await_attempt_terminal(
                         journal, run.run_id, baseline_event_seq=0
@@ -459,11 +496,11 @@ async def _prove_authority(
             if scenario not in {"valid", "stale"}:
                 assert terminal.kind == "RunFailed"
                 assert result is None and mints == []
-                reason = (
-                    "fixture or provider configuration changed"
-                    if scenario == "changed-config"
-                    else "affirmative exact-subject owner approval"
-                )
+                reason = {
+                    "changed-config": "fixture or provider configuration changed",
+                    "missing-lineage": "retained candidate lineage disagrees",
+                    "changed-lineage": "proposer run does not match the sealed training projection",
+                }.get(scenario, "affirmative exact-subject owner approval")
                 errors = [
                     event.payload
                     for event in journal.events(run.run_id)
