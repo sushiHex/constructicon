@@ -11316,5 +11316,64 @@ component's admission; the refusal creates no run, lease or worker attempt.
 This scripted composition does not extend historical vendor qualification.
 
 The accepted Claude and Codex READ/WRITE evidence remains revision-specific.
-Integrated M8 is open; [#42](https://github.com/sushiHex/constructicon/issues/42)
-tracks the remaining lifecycle evidence and closure decision.
+[#42](https://github.com/sushiHex/constructicon/issues/42) records the
+bounded acceptance decision and links the lifecycle evidence below.
+
+## N7 — contained WRITE through install and recovery
+
+[#358](https://github.com/sushiHex/constructicon/pull/358), merged as `7943c63`,
+composes scripted native WRITE capture, a physical contained gate and the
+production proof-gated installer through ControlPlane and RunHost. The
+[Linux run](https://github.com/sushiHex/constructicon/actions/runs/41890459802/job/126786261215)
+ran both cases. The passing gate attested the captured candidate and its
+merge commit, and the installer installed that exact merge commit. The failing
+gate ran the intended check and left the target unchanged.
+Same-key replay produced no second install.
+
+[#361](https://github.com/sushiHex/constructicon/pull/361), merged as `828b440`,
+pauses after the real ref moves and before the effect receipt is recorded. The successor
+reopens the journal and rebuilds Git authority, the workspace provider and
+the gate from disk. The [physical recovery case](https://github.com/sushiHex/constructicon/actions/runs/41896716255/job/126808157510)
+passed at `fa434fe`: reconciliation recorded the installed effect without
+rerunning WRITE or executing another install. This is host-abandonment
+recovery; literal process-death evidence is separate. No vendor call was made.
+
+## N7 — bounded integration acceptance
+
+The [owner-directed closure scope in #42](https://github.com/sushiHex/constructicon/issues/42)
+treats the unchanged-component requirement as a compatibility matrix. Rev 1
+scopes substitution to compatible executors; rev 2 N7, retained by rev 3, calls
+for substitution across the three adapters. The recorded interpretation accepts
+the unchanged workspace component on Claude and Pi, pre-dispatch refusal of
+the incompatible Codex binding, and separate positive no-workspace Codex
+evidence. It does not grant any adapter new workspace authority.
+
+The pinned local Pi smoke is independent of the credential-free durable
+provider evidence. It does not establish live Pi through ControlPlane or a
+production deployment. Claude and Codex acceptance remains historical, with
+the recorded revision, authorization, and measurement limits. Gateway
+[#39](https://github.com/sushiHex/constructicon/issues/39) and OpenRouter
+[#47](https://github.com/sushiHex/constructicon/issues/47) remain unselected.
+
+Executed Linux tests already cover
+[unsafe WRITE assembly refusal and mutable counterfactual disposal](https://github.com/sushiHex/constructicon/actions/runs/34459451137/job/102813527583).
+[Pi counterfactual evidence](https://github.com/sushiHex/constructicon/actions/runs/39391282687/job/118523134825)
+shows simulated effects and discarded executor and workspace leases. The
+[Pi real-process recovery proof](https://github.com/sushiHex/constructicon/pull/271)
+is separate from the composed WRITE host-abandonment proof. Neither
+counterfactual replay nor recovered installation authorizes a second effect.
+
+[#362](https://github.com/sushiHex/constructicon/pull/362), merged as `7c61e4e`,
+proves a malformed tail after a complete-looking Pi READ. The scripted child
+uses real subprocess pipes with portable containment substitutes. At the
+adapter boundary the partial reply and observed usage survive, while
+unreported served-model and rate-limit data stay unset. ControlPlane/RunHost
+record a failed run with no success checkpoint, join the child, discard both
+leases and leave the authority ref unchanged. Focused tests and the
+[required verification](https://github.com/sushiHex/constructicon/actions/runs/41902150796/job/126827201879)
+passed. The proof does not claim durable publication of partial output.
+
+These proofs complete the bounded N7 acceptance in #42. They establish the
+profile-specific READ, the scripted compatibility matrix, and the contained
+lifecycle without implying general production availability or new vendor
+authority.

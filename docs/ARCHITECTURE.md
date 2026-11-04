@@ -860,7 +860,7 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   PR A merged as #23 and PR B as #24. Unmapped pools and retained execution
   bytes are unchanged. See [ADR 0017](adr/0017-panel-membership-is-an-authored-map.md)
   and the [implementation record](plans/handoffs/M7.1-implementation-record.md).
-- **M8 (in progress)** — PR A supplies complete executor policy, content identity,
+- **M8 (bounded closure)** — PR A supplies complete executor policy, content identity,
   assembly/admission coherence, schema-3 introspection, and post-record
   materialization. PR B supplies the networkless Linux launcher, immutable
   per-call reaper, deferred READ/WRITE materialization and acquisition closure.
@@ -881,7 +881,9 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   Pi has a qualified bounded local READ profile on hosted Linux; the common
   workspace component also runs with scripted Claude and Pi bindings.
   Codex's no-workspace profile cannot satisfy that component's admission.
-  M8 is not complete. See the implementation record's
+  The contained WRITE proof installs the attested merge commit, reconciles an
+  interrupted install without a second write, and keeps malformed READ
+  output from checkpointing. See the implementation record's
   [historical closeout](plans/handoffs/M8-implementation-record.md#codex-historical-closeout-owner-acceptance-2026-10-13)
   and [q13 contribution](plans/handoffs/M8-implementation-record.md#q13-contribution-recovered-and-published-for-review-refs-245-186).
   Native CI evidence is described in
