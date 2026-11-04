@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from constructicon.core.component import CapabilityRequirement, ComponentDef
+from constructicon.core.component import CapabilityRequirement, ComponentDef, PythonRef
 from constructicon.core.executor import TaskSpec
 from constructicon.core.graph import Graph, GraphNode, Ref
 from constructicon.core.identity import canonical_json
@@ -123,3 +123,19 @@ def report_graph() -> Graph:
         inputs=(CASE,),
         outputs=(DIAGNOSIS,),
     )
+
+
+def bind_candidate(choice: str, definition: ComponentDef) -> ComponentDef:
+    """Accept exactly one reviewed atom and its immutable executable definition."""
+    expected = diagnostic_definition(candidate)
+    if (
+        choice != "cite-evidence"
+        or definition != expected
+        or not isinstance(expected.body, PythonRef)
+    ):
+        raise ValueError("M9 candidate is not the reviewed evidence-citation atom")
+    if str(expected.body.source_digest) != (
+        "sha256:9d5047fd08fcb9d150998e9336b79fff18a693dfc04a2c2f9ddb1ce37ef882d6"
+    ):
+        raise ValueError("M9 candidate source digest differs from the reviewed atom")
+    return definition
