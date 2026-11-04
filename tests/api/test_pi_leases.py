@@ -13,10 +13,12 @@ from constructicon.core.control import (
     RegistrationCommandResult,
     RunSubmission,
 )
+from constructicon.core.executor import ExecutorPartial
 from constructicon.core.graph import Connection, Graph, GraphNode, Ref
 from constructicon.core.run import RunStatus
 from constructicon.substrate.effects.fake import FakeAnnounceEffect
 from constructicon.substrate.executors.pi_provider import PiReadHandle
+from tests import pi_leaseworld, piworld
 from tests.api.test_control_response_loss import LOCAL_ADMIN, RUN_ACTOR
 from tests.conftest import ANNOUNCED, SUMMARY, InjectedCrash, atomic, await_attempt_terminal
 from tests.gateworld import ControlledGateProvider
@@ -341,3 +343,65 @@ async def test_scripted_read_counterfactual_simulates_effects_and_discards_both_
         if second is not None:
             await second.shutdown()
         await first.shutdown()
+
+
+async def test_malformed_pi_tail_keeps_partial_reply_but_cannot_checkpoint(
+    world, tmp_path, monkeypatch,
+):
+    # The child produces the same completed READ, then emits one malformed line.
+    # Bind those exact scripted bytes into the provider and run them over real pipes.
+    source = piworld.peer_source().replace(
+        "assert sys.stdin.buffer.read() == b''",
+        "sys.stdout.buffer.write(b'{broken-json}\\n')\nsys.stdout.buffer.flush()\n"
+        "assert sys.stdin.buffer.read() == b''",
+    )
+    monkeypatch.setattr(pi_leaseworld, "peer_source", lambda: source)
+    monkeypatch.setattr(piworld, "peer_source", lambda: source)
+    launcher = world[4]
+    system, journal, provider, workspace = await assemble(tmp_path, launcher)
+    before = workspace.authority.read_ref("refs/heads/main")
+    assert before is not None
+    observed = []
+    execute = PiReadHandle.execute
+
+    async def observe(handle, *args, **kwargs):
+        outcome = await execute(handle, *args, **kwargs)
+        observed.append(outcome)
+        return outcome
+
+    monkeypatch.setattr(PiReadHandle, "execute", observe)
+    control = ControlPlane(system=system, store=journal)
+    await control.startup()
+    try:
+        graph = await register_pi(control)
+        submitted = await control.runs_start(
+            RUN_ACTOR, proposal=graph, inputs={"issue": {"title": "malformed Pi tail"}},
+            idempotency_key="pi-malformed-tail",
+        )
+        assert isinstance(submitted, RunSubmission), submitted
+        terminal = await await_attempt_terminal(
+            journal, submitted.run_id, baseline_event_seq=0, timeout_s=60,
+        )
+        assert terminal.kind == "RunFailed", journal.events(submitted.run_id)
+    finally:
+        await control.shutdown()
+
+    (outcome,) = observed
+    assert isinstance(outcome, ExecutorPartial)
+    assert outcome.damage.malformed_records == 1
+    assert outcome.damage.evidence_excerpt == "{broken-json}\n"
+    assert outcome.raw_reply == outcome.output == "Read: leased workspace bytes"
+    assert outcome.requested_model == "fixture/pi-read"
+    assert outcome.served_model is None  # State's selected model is not an emitted responseModel.
+    assert outcome.usage is not None
+    assert (outcome.usage.input_tokens, outcome.usage.output_tokens) == (6, 4)
+    assert outcome.rate_limit is None
+
+    rows = journal.capability_leases(submitted.run_id)
+    assert len(rows) == 2 and {row.binding_id for row in rows} == {"executor", "workspace"}
+    assert all(row.state == "closed" and row.disposition == "discarded" for row in rows)
+    assert all(journal.checkpoint(submitted.run_id, row.path) is None for row in rows)
+    assert launcher.calls == 1 and launcher.joined and launcher.eof
+    assert not list(workspace.root.glob("payloads/*"))
+    assert not list(provider.acquisition_root.glob("payloads/*"))
+    assert workspace.authority.read_ref("refs/heads/main") == before
