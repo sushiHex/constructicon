@@ -11,11 +11,15 @@ from contextlib import suppress
 import pytest
 
 from constructicon.core.errors import ContractViolation
+from constructicon.core.executor import TaskSpec
 from constructicon.core.grants import Posture
 from constructicon.core.workspace import acquisition_id_for
 from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.executors._egress_bridge import PI_PORT
+from constructicon.substrate.executors.linux import ProcessExchangeError
 from constructicon.substrate.executors.pi_peer import PiPeerRoute
+from constructicon.substrate.executors.pi_protocol import parse_record
+from constructicon.substrate.executors.pi_read import PI_LIMITS, PiReadConversation
 from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
 from tests.substrate.test_linux_containment import launcher as launcher
 from tests.substrate.test_native_codex_mediation import write_evidence
@@ -38,6 +42,9 @@ PARAMETERS = {
     },
 }
 
+PROMPT = "Read fixture.txt once, then repeat its contents exactly."
+CALL_ID = "call_fixture_read"
+
 # This peer sees only its private directory; its own network namespace has no
 # external interfaces. It has no forwarding code, route or proxy handling.
 PEER = r"""
@@ -49,20 +56,45 @@ class Server(socketserver.UnixStreamServer):
         return sock, ("unix", 0)
 
 class Handler(http.server.BaseHTTPRequestHandler):
+    requests = 0
+
     def do_POST(self):
         assert self.path == "/v1/chat/completions"
         assert self.headers["Authorization"] == "Bearer fixture-key"
         size = int(self.headers["Content-Length"])
         assert 0 < size < 65536
         request = json.loads(self.rfile.read(size))
+        type(self).requests += 1
         print(json.dumps({"request": request}), flush=True)
+        if self.requests == 1:
+            deltas = [
+                ({"role": "assistant", "tool_calls": [
+                    {"index": 0, "id": "call_fixture_read", "type": "function",
+                     "function": {"name": "read", "arguments": '{"path":'}}]}, None),
+                ({"tool_calls": [
+                    {"index": 0, "function": {"arguments": '"fixture.txt"}'}}]}, None),
+                ({}, "tool_calls"),
+            ]
+        else:
+            assert self.requests == 2
+            tool = request["messages"][-1]
+            assert tool["role"] == "tool" and tool["tool_call_id"] == "call_fixture_read"
+            content = tool["content"]
+            if isinstance(content, list):
+                assert len(content) == 1 and content[0]["type"] == "text"
+                content = content[0]["text"]
+            assert isinstance(content, str) and 0 < len(content) <= 128
+            deltas = [
+                ({"role": "assistant", "content": content[:8]}, None),
+                ({"content": content[8:]}, None),
+                ({}, "stop"),
+            ]
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
-        for delta, finish in [({"role": "assistant", "content": "fixed peer reply"}, None),
-                              ({}, "stop")]:
+        for delta, finish in deltas:
             chunk = {"id": "fixture-reply", "object": "chat.completion.chunk", "created": 1,
-                     "model": "fixture-model",
+                     "model": "pi-read",
                      "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
             self.wfile.write(b"data: " + json.dumps(chunk).encode() + b"\n\n")
         self.wfile.write(b"data: [DONE]\n\n")
@@ -86,12 +118,12 @@ PI_BOOT = r"""
 import json, os, socket, sys
 from pathlib import Path
 
-host_net, alternate, model, *command = sys.argv[1:]
+host_net, alternate, model, value, *command = sys.argv[1:]
 net = os.readlink("/proc/self/ns/net")
 assert net != host_net
 assert not any(k.lower().endswith("_proxy") for k in os.environ)
 assert not Path("pi.sock").exists()
-assert Path("fixture.txt").read_text() == "read fixture"
+assert Path("fixture.txt").read_text() == value
 with socket.socket() as probe:
     probe.settimeout(1)
     denied = probe.connect_ex(("127.0.0.1", int(alternate)))
@@ -100,6 +132,9 @@ print(json.dumps({"net": net, "alternate_errno": denied}), flush=True)
 config = Path.home() / ".pi" / "agent"
 config.mkdir(parents=True)
 (config / "models.json").write_text(model)
+(config / "settings.json").write_text(
+    '{"compaction":{"enabled":false},"retry":{"enabled":false,"provider":{"maxRetries":0}},'
+    '"cacheWarming":"off"}')
 os.execv(command[0], command)
 """
 
@@ -128,21 +163,55 @@ print('{"revoked":true}', flush=True)
 """
 
 
+def wire_phases(stdout):
+    """Publish only allowlisted labels, never RPC payload values."""
+    kinds = (
+        "response", "agent_start", "agent_end", "agent_settled", "turn_start", "turn_end",
+        "message_start", "message_update", "message_end", "tool_execution_start",
+        "tool_execution_update", "tool_execution_end", "entry_appended",
+    )
+    roles = ("system", "user", "assistant", "toolResult")
+    updates = (
+        "toolcall_start", "toolcall_delta", "toolcall_end", "text_start", "text_delta",
+        "text_end", "done", "error",
+    )
+    phases = []
+    for line in stdout.splitlines()[1:49]:  # First line is the trusted bootstrap.
+        try:
+            event = parse_record(line)
+            kind = event.get("type")
+            role = event.get("message", {}).get("role")
+            update = event.get("assistantMessageEvent", {}).get("type")
+            phases.append([kind if kind in kinds else "other",
+                           role if role in roles else None,
+                           update if update in updates else None])
+        except (ValueError, TypeError, AttributeError, RecursionError):
+            phases.append(["invalid", None, None])
+    return phases
+
+
 async def test_pinned_pi_fixed_peer_wire_and_active_revocation(pi_startup_launcher, tmp_path):
     pi_launcher, receipt = pi_startup_launcher
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    (workspace / "fixture.txt").write_bytes(b"read fixture")
+    fixture = workspace / "fixture.txt"
+    value = secrets.token_hex(12)
+    fixture.write_bytes(value.encode())
     private = tmp_path / "private"
     private.mkdir(mode=0o700)
     route = PiPeerRoute(private)
     host_net = os.readlink("/proc/self/ns/net")
     ready = asyncio.get_running_loop().create_future()
     captured = asyncio.get_running_loop().create_future()
+    requests = []
+    conversation = PiReadConversation(
+        TaskSpec(instruction=PROMPT), input_limit=PI_LIMITS.input_bytes,
+    )
+    decoder = conversation.decoder
     observations = {}
     model = json.dumps({"providers": {"fixture": {
         "baseUrl": f"http://127.0.0.1:{PI_PORT}/v1", "api": "openai-completions",
-        "apiKey": "fixture-key", "models": [{"id": "fixture-model"}],
+        "apiKey": "fixture-key", "models": [{"id": "pi-read"}],
     }}})
 
     async def peer_conversation(io):
@@ -151,7 +220,9 @@ async def test_pinned_pi_fixed_peer_wire_and_active_revocation(pi_startup_launch
         assert first["net"] != host_net
         route.ready(tuple(first["ready"]))
         ready.set_result(first["net"])
-        captured.set_result((await wire.record())["request"])
+        for _ in range(2):
+            requests.append((await wire.record())["request"])
+        captured.set_result(tuple(requests))
         await asyncio.Future()
 
     async def run_peer(guard):
@@ -173,40 +244,40 @@ async def test_pinned_pi_fixed_peer_wire_and_active_revocation(pi_startup_launch
                 await peer
 
     async def proof(io):
-        wire = StartupWire(io)
-        observations["bootstrap"] = await wire.record()
-        nonce = secrets.token_hex(16)
-        prompt = {"id": nonce, "type": "prompt", "message": nonce}
-        await io.write(json.dumps(prompt).encode() + b"\n")
-        response = None
-        while True:
-            record = await wire.record()
-            if record["type"] == "response":
-                assert record["id"] == nonce and record["command"] == "prompt"
-                assert record["success"] is True
-                response = record
-            if record["type"] == "agent_settled":
-                assert record["aborted"] is False
-                break
-            if record["type"] == "agent_end":
-                message = record["messages"][-1]
-                assert message["role"] == "assistant" and message["stopReason"] == "stop"
-                assert message["content"] == [{"type": "text", "text": "fixed peer reply"}]
-                observations["reply"] = message["content"]
-        assert response is not None and "reply" in observations
-        request = await captured
-        assert request["model"] == "fixture-model" and request["stream"] is True
-        user = request["messages"][-1]
-        assert user["role"] == "user"
-        assert user["content"] in (nonce, [{"type": "text", "text": nonce}])
-        assert len(request["tools"]) == 1
-        tool = request["tools"][0]
-        assert tool["type"] == "function" and tool["function"]["name"] == "read"
-        assert tool["function"]["parameters"] == PARAMETERS
-        observations["tools"] = request["tools"]
-        observations["rpc_id"] = nonce
-        await io.close_stdin()
-        assert not wire.pending and await io.read() == b""
+        # Consume exactly the bootstrap line; every Pi byte goes to the real decoder.
+        bootstrap = bytearray()
+        while not bootstrap.endswith(b"\n"):
+            chunk = await io.read(1)
+            assert chunk and len(bootstrap) < 1024
+            bootstrap.extend(chunk)
+        observations["bootstrap"] = json.loads(bootstrap)
+        await conversation(io)
+
+    def diagnostics(result):
+        return {
+            "scope": "scripted Pi READ; no model inference",
+            "release": receipt,
+            "request_count": len(requests),
+            "returncode": result.returncode,
+            "payload_returncode": result.payload_returncode,
+            "timed_out": result.timed_out,
+            "bound_exceeded": result.bound_exceeded,
+            "state_observed": decoder.state_observed,
+            "prompt_accepted": decoder.accepted,
+            "agent_started": decoder.started,
+            "agent_ended": decoder.ended,
+            "settled": decoder.settled,
+            "eof": decoder.eof,
+            "refused": decoder.refused,
+            "damage_count": decoder.damage_count,
+            "first_error": decoder.error,
+            "wire_phases": wire_phases(result.stdout),
+            "read_count": len(decoder.calls),
+            "final_observed": decoder.final is not None,
+            "records": decoder.count,
+            "stdout_bytes": decoder.total,
+            "stderr_bytes": len(result.stderr),
+        }
 
     paths = AcquisitionPaths(tmp_path / "guards", acquisition_id_for("pi-fixed-peer", 1))
     # Both sequential worker launches share this one acquisition and peer.
@@ -223,16 +294,54 @@ async def test_pinned_pi_fixed_peer_wire_and_active_revocation(pi_startup_launch
                 with socket.create_connection(("127.0.0.1", port), timeout=1):
                     connected, _ = alternate.accept()
                     connected.close()
-                result = await pi_launcher.exchange(
-                    ("/usr/bin/python3", "-I", "-c", PI_BOOT, host_net, str(port), model,
-                     PI, *FLAGS, "--provider", "fixture", "--model", "fixture-model",
-                     "--thinking", "off"),
-                    workspace=workspace, posture=Posture.READ, guard_fds=(guard,),
-                    conversation=proof, timeout_s=25, pi_peer=route,
-                )
-            assert result.returncode == result.payload_returncode == 0, result
-            assert not result.timed_out and result.bound_exceeded is None
+                try:
+                    result = await pi_launcher.exchange(
+                        ("/usr/bin/python3", "-I", "-c", PI_BOOT, host_net, str(port), model,
+                         value, PI, *FLAGS, "--provider", "fixture", "--model", "pi-read",
+                         "--thinking", "off"),
+                        workspace=workspace, posture=Posture.READ, guard_fds=(guard,),
+                        conversation=proof, timeout_s=25, pi_peer=route,
+                    )
+                except ProcessExchangeError as exc:
+                    write_evidence(
+                        "duplex-real-pi-fixed-peer-progress.json", diagnostics(exc.result),
+                    )
+                    raise
+            progress = diagnostics(result)
+            write_evidence("duplex-real-pi-fixed-peer-progress.json", progress)
+            assert result.returncode == result.payload_returncode == 0, progress
+            assert not result.timed_out and result.bound_exceeded is None, progress
             assert observations["bootstrap"]["net"] != observations["peer_net"]
+            assert decoder.state_observed and decoder.accepted and decoder.started, progress
+            assert decoder.ended and decoder.eof and decoder.settled, progress
+            assert not decoder.damage_count and not decoder.refused, progress
+            assert set(decoder.calls) == {CALL_ID}
+            call = decoder.calls[CALL_ID]
+            assert call.arguments == {"path": "fixture.txt"} and call.started and call.ended
+            expected = [{"type": "text", "text": value}]
+            assert call.result is not None and call.content == expected
+            assert decoder.final == value
+
+            first, second = await asyncio.wait_for(captured, timeout=5)
+            for request in (first, second):
+                assert request["model"] == "pi-read" and request["stream"] is True
+                assert len(request["tools"]) == 1
+                tool = request["tools"][0]
+                assert tool["type"] == "function" and tool["function"]["name"] == "read"
+                assert tool["function"]["parameters"] == PARAMETERS
+            user = first["messages"][-1]
+            assert user["role"] == "user"
+            assert user["content"] in (PROMPT, [{"type": "text", "text": PROMPT}])
+            assistant, tool_result = second["messages"][-2:]
+            assert assistant["role"] == "assistant"
+            assert len(assistant["tool_calls"]) == 1
+            tool_call = assistant["tool_calls"][0]
+            assert tool_call["id"] == tool_result["tool_call_id"] == CALL_ID
+            assert tool_call["function"]["name"] == "read"
+            assert json.loads(tool_call["function"]["arguments"]) == {"path": "fixture.txt"}
+            assert tool_result["role"] == "tool" and tool_result["content"] in (value, expected)
+            observations["tools"] = first["tools"]
+            observations["one_read"] = observations["exact_final"] = observations["eof"] = True
 
             async def active(io):
                 wire = StartupWire(io)
@@ -257,7 +366,7 @@ async def test_pinned_pi_fixed_peer_wire_and_active_revocation(pi_startup_launch
         finally:
             await finish_owned(asyncio.create_task(stop_peer(peer)))
     assert sorted(item.name for item in workspace.iterdir()) == ["fixture.txt"]
-    assert (workspace / "fixture.txt").read_bytes() == b"read fixture"
+    assert fixture.read_bytes() == value.encode()
     (private / "pi.sock").unlink()
     private.rmdir()
     write_evidence("duplex-real-pi-fixed-peer.json", {

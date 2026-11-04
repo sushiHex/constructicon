@@ -154,6 +154,8 @@ class PiDecoder:
         self.state_observed = self.accepted = self.eof = False
         self.started = self.ended = self.settled = self.turn = False
         self.active_role: str | None = None
+        self.system_start: dict[str, Any] | None = None
+        self.user_observed = False
         self.messages: list[dict[str, Any]] = []
         self.turn_assistant: dict[str, Any] | None = None
         self.provider_completion: dict[str, Any] | None = None
@@ -269,11 +271,15 @@ class PiDecoder:
         elif kind in ("message_start", "message_end"):
             message = record["message"]
             role = message["role"]
-            if not self.turn or role not in ("user", "assistant", "toolResult"):
+            if not self.turn or role not in ("system", "user", "assistant", "toolResult"):
                 raise ValueError("unsupported message")
             if kind == "message_start":
                 if self.active_role is not None:
                     raise ValueError("overlapping message")
+                if role == "system":
+                    if self.messages:
+                        raise ValueError("system message after initial context")
+                    self.system_start = message
                 self.active_role = role
             else:
                 if self.active_role != role:
@@ -338,14 +344,43 @@ class PiDecoder:
 
     def message_end(self, message: dict[str, Any]) -> None:
         role = message["role"]
+        if role == "system":
+            # Pi v1.3.0 (71023aec1546d6d677a65669c5665c0927ce0dd0):
+            # packages/coding-agent/src/core/agent-session.ts:1748-1754,1937-1940
+            # creates the empty-content, timestamped system patch before the user;
+            # system-prompt.ts:151-156,217-228 supplies the first string sections.
+            # packages/agent/src/agent-loop.ts:347-356,368-374 adds the tool delta;
+            # packages/ai/src/utils/transcript.ts:123-129 projects its exact keys.
+            # packages/coding-agent/src/core/tools/read.ts:95-101 defines the
+            # single admitted READ and its sampling metadata.
+            # packages/agent/src/agent-loop.ts:110-121 emits both copies;
+            # packages/coding-agent/src/modes/rpc/rpc-mode.ts:355-356 forwards them
+            # unchanged via packages/coding-agent/src/modes/json-event.ts:48-51.
+            sections = message.get("sections")
+            tools = message.get("toolsAdded")
+            if (self.messages or not same(self.system_start, message)
+                    or set(message) != {"role", "content", "sections", "timestamp", "toolsAdded"}
+                    or message["content"] != "" or type(message["timestamp"]) is not int
+                    or type(sections) is not dict or not sections
+                    or any(type(value) is not str for value in sections.values())
+                    or type(tools) is not list or len(tools) != 1 or type(tools[0]) is not dict
+                    or set(tools[0]) != {"name", "description", "parameters", "constrainedSampling"}
+                    or not same(tools[0]["constrainedSampling"],
+                                {"type": "json_schema", "strict": "prefer"})
+                    or tools[0]["name"] != "read" or type(tools[0]["description"]) is not str
+                    or type(tools[0]["parameters"]) is not dict):
+                raise ValueError("unsupported initial system declaration")
+            self.system_start = None
+            return
         if role == "user":
             # Pi v1.3.0 (71023aec1546d6d677a65669c5665c0927ce0dd0):
             # packages/coding-agent/src/core/agent-session.ts:1919 creates
             # the text block; src/modes/json-event.ts:49-50 passes it through.
-            if self.messages or not same(
+            if self.user_observed or not same(
                 message.get("content"), [{"type": "text", "text": self.instruction}],
             ):
                 raise UnexpectedUserMessage
+            self.user_observed = True
             return
         if role == "toolResult":
             text_blocks(message.get("content"))
@@ -357,7 +392,7 @@ class PiDecoder:
             call.result = message
             self.turn_results.append(message)
             return
-        if not self.messages or self.turn_assistant is not None or self.final is not None:
+        if not self.user_observed or self.turn_assistant is not None or self.final is not None:
             raise ValueError("unexpected assistant response")
         if self.provider_completion is not None:
             if not same(self.provider_completion, message):

@@ -41,6 +41,48 @@ def test_clean_protocol_has_affirmative_completion():
     assert all(call.result is not None for call in decoder.calls.values())
 
 
+@pytest.mark.parametrize("variant", [
+    "pinned", "mismatched-copy", "second-system", "late", "extra-tool", "missing-user",
+    "wrong-sampling",
+])
+def test_initial_system_declaration_preserves_read_transcript_guards(variant):
+    system = {
+        "role": "system", "content": "", "sections": {"preamble": "fixture"},
+        "timestamp": 1,
+        "toolsAdded": [{
+            "name": "read", "description": "Read file", "parameters": {},
+            "constrainedSampling": {"type": "json_schema", "strict": "prefer"},
+        }],
+    }
+    if variant == "extra-tool":
+        system["toolsAdded"].append({"name": "write", "description": "", "parameters": {}})
+    if variant == "wrong-sampling":
+        system["toolsAdded"][0]["constrainedSampling"]["strict"] = True
+    end = {**system, "timestamp": 2} if variant == "mismatched-copy" else system
+    pair = [{"type": "message_start", "message": system}, {"type": "message_end", "message": end}]
+
+    def change(records):
+        index = next(i for i, event in enumerate(records) if event["type"] == "message_start")
+        if variant == "late":
+            index += 2
+        if variant == "missing-user":
+            del records[index:index + 2]
+            terminal = next(event for event in records if event["type"] == "agent_end")
+            del terminal["messages"][0]
+        declarations = pair * (2 if variant == "second-system" else 1)
+        records[index:index] = declarations
+        terminal = next(event for event in records if event["type"] == "agent_end")
+        terminal["messages"][0:0] = [end] * (len(declarations) // 2)
+        return records
+
+    decoder = decoded(transform=change)
+    if variant == "pinned":
+        assert decoder.outcome(CLEAN).status == "success"
+        assert decoder.messages[0] == system
+    else:
+        assert decoder.outcome(CLEAN).status == "partial" and decoder.damage_count
+
+
 @pytest.mark.parametrize("content", [
     "read", [{"type": "text", "text": "changed"}],
     [{"type": "text", "text": "read"}, {"type": "image", "data": "extra"}],
