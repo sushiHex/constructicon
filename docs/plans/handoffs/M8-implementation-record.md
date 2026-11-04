@@ -11359,7 +11359,7 @@ Executed Linux tests already cover
 [unsafe WRITE assembly refusal and mutable counterfactual disposal](https://github.com/sushiHex/constructicon/actions/runs/34459451137/job/102813527583).
 [Pi counterfactual evidence](https://github.com/sushiHex/constructicon/actions/runs/39391282687/job/118523134825)
 shows simulated effects and discarded executor and workspace leases. The
-[Pi real-process recovery proof](https://github.com/sushiHex/constructicon/pull/271)
+[Pi real-process recovery proof](https://github.com/sushiHex/constructicon/actions/runs/39351188781/job/118395532964)
 is separate from the composed WRITE host-abandonment proof. Neither
 counterfactual replay nor recovered installation authorizes a second effect.
 
