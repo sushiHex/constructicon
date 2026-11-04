@@ -53,12 +53,12 @@ def test_verify_retains_failed_child_status_and_runs_every_stage_once(
         ("ruff", "check", "src", "tests"),
         ("mypy",),
         ("lint-imports",),
-        ("pytest", "-q"),
+        ("pytest", "-q", "--durations=15", "--durations-min=1.0"),
     ]
     assert capsys.readouterr().out.splitlines() == [
         "== ruff: ruff check src tests",
         "== mypy: mypy",
         "== import-linter: lint-imports",
-        "== pytest: pytest -q",
+        "== pytest: pytest -q --durations=15 --durations-min=1.0",
         summary,
     ]

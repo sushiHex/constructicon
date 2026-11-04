@@ -15,7 +15,7 @@ STEPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("ruff", ("ruff", "check", "src", "tests")),
     ("mypy", ("mypy",)),
     ("import-linter", ("lint-imports",)),
-    ("pytest", ("pytest", "-q")),
+    ("pytest", ("pytest", "-q", "--durations=15", "--durations-min=1.0")),
 )
 
 
