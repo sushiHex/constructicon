@@ -3,8 +3,8 @@
 import asyncio
 import json
 import os
+import re
 import secrets
-from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
 
@@ -78,6 +78,21 @@ os.execv(command[0], command)
 """
 
 
+def answer_matches(answer, value):
+    """Accept only the exact value, optionally in a single Markdown fence."""
+    answer = answer.strip()
+    if answer == value:
+        return True
+    return re.fullmatch(r"```[A-Za-z0-9_-]*[ \t]*\r?\n" + re.escape(value)
+                        + r"\r?\n```", answer) is not None
+
+
+def tool_text_matches(content, value):
+    return (isinstance(content, list) and len(content) == 1
+            and isinstance(content[0], dict) and content[0].get("type") == "text"
+            and content[0].get("text") == value)
+
+
 async def test_one_local_model_read(pi_startup_launcher, tmp_path):
     if os.environ.get("M8_PI_LOCAL_REQUIRED") != "1":
         pytest.skip("manual local READ was not explicitly selected")
@@ -106,7 +121,8 @@ async def test_one_local_model_read(pi_startup_launcher, tmp_path):
         "apiKey": "fixture-key", "models": [{"id": "pi-read", "maxTokens": 128}],
     }}})
     conversation = PiReadConversation(TaskSpec(instruction=(
-        "Use the read tool once to read fixture.txt. Reply with its exact content only."
+        "Use the read tool once to read fixture.txt. Reply with its exact content only, "
+        "either bare or in a single Markdown code fence."
     )), input_limit=65536)
 
     async def observe(io):
@@ -118,6 +134,9 @@ async def test_one_local_model_read(pi_startup_launcher, tmp_path):
         ready.set_result(True)
         await asyncio.Future()
 
+    checks = {"tool_result_matches": None, "answer_matches": None,
+              "peer_live_through_exchange": None, "peer_joined": None,
+              "workspace_unchanged": None}
     async with acquisition_guard(paths) as guard:
         peer = asyncio.create_task(server_launcher.exchange(
             ("/usr/bin/python3", "-I", "-c", SERVER), workspace=private,
@@ -150,25 +169,50 @@ async def test_one_local_model_read(pi_startup_launcher, tmp_path):
             # Pytest short tracebacks can elide dictionary entries. Keep the
             # complete bounded progress record even when acceptance fails.
             write_evidence("duplex-real-pi-local-progress.json", diagnostics)
+            checks["peer_live_through_exchange"] = not peer.done()
+            if len(decoder.calls) == 1:
+                call = next(iter(decoder.calls.values()))
+                checks["tool_result_matches"] = tool_text_matches(call.content, value)
+            if decoder.final is not None:
+                checks["answer_matches"] = answer_matches(decoder.final, value)
             assert result.returncode == result.payload_returncode == 0
             assert not result.timed_out and result.bound_exceeded is None
             assert decoder.eof and decoder.settled, json.dumps(diagnostics)
             assert not decoder.damage_count and not decoder.refused, json.dumps(diagnostics)
             assert len(decoder.calls) == 1
             call = next(iter(decoder.calls.values()))
-            assert call.arguments == {"path": "fixture.txt"} and call.started and call.ended
+            call_valid = call.arguments == {"path": "fixture.txt"} and call.started and call.ended
+            assert call_valid
             assert call.result is not None and decoder.final is not None
-            assert decoder.final.strip() == value and value in json.dumps(call.content)
-            assert not peer.done()
+            assert checks["tool_result_matches"] is True
+            assert checks["answer_matches"] is True
+            assert checks["peer_live_through_exchange"] is True
         finally:
             try:
                 route.revoke()
             finally:
                 peer.cancel()
-                with suppress(asyncio.CancelledError):
+                try:
                     await finish_owned(peer)
-    assert peer.done() and sorted(path.name for path in workspace.iterdir()) == ["fixture.txt"]
-    assert fixture.read_text(encoding="utf-8") == value
+                except asyncio.CancelledError:
+                    checks["peer_joined"] = peer.cancelled()
+                    if not checks["peer_joined"]:
+                        raise
+                except BaseException:
+                    checks["peer_joined"] = False
+                    raise
+                else:
+                    checks["peer_joined"] = True
+                finally:
+                    try:
+                        checks["workspace_unchanged"] = (
+                            sorted(path.name for path in workspace.iterdir()) == ["fixture.txt"]
+                            and fixture.read_text(encoding="utf-8") == value
+                        )
+                    finally:
+                        write_evidence("duplex-real-pi-local-checks.json", checks)
+    assert checks["peer_joined"] is True
+    assert checks["workspace_unchanged"] is True
     write_evidence("duplex-real-pi-local-read.json", {
         "scope": "one bounded local Pi READ", "server_runtime": receipt,
         "server_archive_sha256": "70df3ef8becd405b9ebc13b925387715ae7dccb0f034fd5f46a4034b350130a1",
