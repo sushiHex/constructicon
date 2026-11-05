@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
 import sys
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -42,6 +44,17 @@ def _cli(store: Path, stage: str) -> dict:
     return json.loads(process.stdout)
 
 
+def _promotion_proofs(store: Path) -> list[str]:
+    with closing(sqlite3.connect(store / "journal.sqlite")) as connection:
+        return [
+            proof_id
+            for proof_id, in connection.execute(
+                "SELECT attestation_id FROM attestations "
+                "WHERE json_extract(attestation_json, '$.action') = 'promote'"
+            )
+        ]
+
+
 async def test_fixed_operator_trial_from_park_through_rollback(tmp_path: Path) -> None:
     store = tmp_path / "isolated"
     trial = TrialIdentity("operator")
@@ -54,6 +67,7 @@ async def test_fixed_operator_trial_from_park_through_rollback(tmp_path: Path) -
     before = journal.snapshot().revision.promotion_seq
     assert journal.snapshot().stable_version(TARGET) == old
     assert journal.checkpoint(run_id, OPERATOR_ISSUER_PATH) is None
+    assert _promotion_proofs(store) == []
     with pytest.raises(ValueError, match="original trial key"):
         await run(store, TrialIdentity("other"), "prepare")
     with pytest.raises(ValueError, match="no successful reviewed issuance"):
@@ -77,6 +91,7 @@ async def test_fixed_operator_trial_from_park_through_rollback(tmp_path: Path) -
     proof = journal.load_attestation(proof_id)
     assert proof is not None and proof.created_by_run == run_id and proof.action == "promote"
     assert journal.promotion_for_attestation(proof_id) is None
+    assert _promotion_proofs(store) == [proof_id]
 
     promoted = await run(store, trial, "promote")
     assert (promoted["from"], promoted["to"], promoted["proof"]) == (old, new, proof_id)
@@ -104,3 +119,4 @@ async def test_fixed_operator_rejection_cannot_promote(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="no successful reviewed issuance"):
         await run(store, trial, "promote")
     assert journal.snapshot().revision == before
+    assert _promotion_proofs(store) == []

@@ -8,21 +8,18 @@ from dataclasses import replace
 from constructicon.api.control import ControlPlane
 from constructicon.api.system import Constructicon
 from constructicon.core.channel import ChannelEndpoint
-from constructicon.core.component import CapabilityRequirement
 from constructicon.core.graph import Graph
 from constructicon.runtime.registry import CapabilityDescriptor
 from constructicon.substrate.channels.mailbox import MailboxChannel
 from constructicon.substrate.effects.channel import ChannelSendEffect
 from constructicon.substrate.journal.sqlite import SqliteJournal
-from tests.conftest import atomic
 from tests.e2e.m9_issuer import (
     ISSUER_CAP,
     OPERATOR_CHANNEL,
-    OPERATOR_ISSUER,
-    PROOF,
     Issuer,
     issue_from_operator_decision,
     operator_approval_bundle,
+    operator_issuer_definition,
     operator_issuer_graph,
 )
 
@@ -68,25 +65,16 @@ def assemble_operator_approval(
             )
         },
     )
-    if seed:
-        gate = operator_approval_bundle()
-        definition, impl = atomic(
-            OPERATOR_ISSUER, gate.definition.outputs, (PROOF,), issue_from_operator_decision
-        )
-        definition = definition.model_copy(
-            update={
-                "capability_requirements": (
-                    CapabilityRequirement(alias="issuer", kind=ISSUER_CAP),
-                ),
-            }
-        )
-        for component, implementation in (
-            (gate.definition, gate.implementation),
-            (definition, impl),
-        ):
-            world._promote_initial(
-                component=component.name, version=world._register(component, implementation)
-            )
+    gate = operator_approval_bundle()
+    for component, implementation in (
+        (gate.definition, gate.implementation),
+        (operator_issuer_definition(), issue_from_operator_decision),
+    ):
+        if seed:
+            world._register(component, implementation)
+        retained = journal.snapshot().get(component.name, component.content_hash())
+        if retained is None or retained.definition != component:
+            raise ValueError(f"M9 approval assembly lacks the pinned definition: {component.name}")
     return (
         ControlPlane(system=world, store=journal, fault_probe=fault_probe),
         mailbox,

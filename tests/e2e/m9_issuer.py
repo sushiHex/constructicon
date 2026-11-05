@@ -8,7 +8,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from constructicon.core.address import ExecutionPath, RunId, ScopePath
-from constructicon.core.component import ComponentLineage, PythonRef
+from constructicon.core.component import (
+    CapabilityRequirement,
+    ComponentDef,
+    ComponentLineage,
+    PythonRef,
+)
 from constructicon.core.control import ControlStore
 from constructicon.core.effect import AttestationDraft, CheckResult, ComponentProofSubject
 from constructicon.core.envelope import ArtifactRef
@@ -41,6 +46,7 @@ from constructicon.runtime.context import NodeContext
 from constructicon.sdk.std import APPROVAL_CHANNEL, APPROVAL_COMPONENT, definitions
 from constructicon.sdk.types import DefinitionBundle
 from constructicon.substrate.executors.fake import FakeExecutor
+from tests.conftest import atomic
 from tests.e2e import m9_evidence, m9_fixture
 from tests.e2e.m9_evidence import (
     DIAGNOSTIC_PATH,
@@ -494,23 +500,40 @@ def operator_approval_bundle() -> DefinitionBundle:
     return next(bundle for bundle in definitions() if bundle.name == APPROVAL_COMPONENT)
 
 
+def operator_issuer_definition() -> ComponentDef:
+    gate = operator_approval_bundle()
+    definition, _ = atomic(
+        OPERATOR_ISSUER, gate.definition.outputs, (PROOF,), issue_from_operator_decision
+    )
+    return definition.model_copy(update={
+        "capability_requirements": (CapabilityRequirement(alias="issuer", kind=ISSUER_CAP),),
+    })
+
+
 def operator_issuer_graph() -> Graph:
+    gate = operator_approval_bundle().definition
+    issuer = operator_issuer_definition()
     return Graph(
         name="m9-operator-issue",
         nodes=(
             GraphNode(
                 id="gate",
                 body=Ref(
-                    component=APPROVAL_COMPONENT,
+                    component=gate.name,
+                    version=str(gate.content_hash()),
                     bind={APPROVAL_CHANNEL: OPERATOR_CHANNEL},
                 ),
             ),
             GraphNode(
                 id="issue",
-                body=Ref(component=OPERATOR_ISSUER, bind={"issuer": ISSUER_CAP}),
+                body=Ref(
+                    component=issuer.name,
+                    version=str(issuer.content_hash()),
+                    bind={"issuer": ISSUER_CAP},
+                ),
             ),
         ),
         connections=(Connection(src="gate", dst="issue"),),
-        inputs=operator_approval_bundle().definition.inputs,
+        inputs=gate.inputs,
         outputs=(PROOF,),
     )
