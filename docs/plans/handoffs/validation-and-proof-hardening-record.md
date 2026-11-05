@@ -67,6 +67,39 @@ local suite is not duplicated after every edit under WORK_TRACKING's delivery
 policy; focused checks exercise each changed behavior and the required CI covers
 the final candidate broadly.
 
+## Git producer contract for snapshot comparison
+
+The introduced missing producer citation was adopted from PR review. The source
+was checked at Git v2.38.0, the declared minimum (`MIN_GIT = (2, 38)`), resolved
+to immutable commit `3dcec76d9df911ed8321007b1d197c1a206dc164`:
+
+- [builtin/ls-tree.c:176-230](https://github.com/git/git/blob/3dcec76d9df911ed8321007b1d197c1a206dc164/builtin/ls-tree.c#L176-L230)
+  suppresses tree rows during recursion and emits octal mode, type, object ID,
+  TAB and path. [Lines 341-346 and 375-378](https://github.com/git/git/blob/3dcec76d9df911ed8321007b1d197c1a206dc164/builtin/ls-tree.c#L341-L378)
+  implement the selected recursive, NUL and full-tree options.
+- [quote.c:341-360](https://github.com/git/git/blob/3dcec76d9df911ed8321007b1d197c1a206dc164/quote.c#L341-L360)
+  writes unquoted path bytes with the selected NUL terminator. Splitting each
+  record at its first TAB preserves tabs/newlines inside the path.
+  [object-name.c:791-793](https://github.com/git/git/blob/3dcec76d9df911ed8321007b1d197c1a206dc164/object-name.c#L791-L793)
+  returns the full object ID for the default zero abbreviation.
+- [cache.h:248-258](https://github.com/git/git/blob/3dcec76d9df911ed8321007b1d197c1a206dc164/cache.h#L248-L258)
+  produces regular 0644/0755 and symlink modes;
+  [lines 494-499](https://github.com/git/git/blob/3dcec76d9df911ed8321007b1d197c1a206dc164/cache.h#L494-L499)
+  map trees to tree, gitlinks to commit, and other entries to blob. The consumer
+  deliberately refuses gitlinks and non-allowlisted modes.
+- [object-file.c:1053-1068](https://github.com/git/git/blob/3dcec76d9df911ed8321007b1d197c1a206dc164/object-file.c#L1053-L1068)
+  builds the type/decimal-length/NUL header;
+  [lines 1787-1810](https://github.com/git/git/blob/3dcec76d9df911ed8321007b1d197c1a206dc164/object-file.c#L1787-L1810)
+  hash that header followed by payload using the selected object algorithm.
+  [Lines 2502-2527](https://github.com/git/git/blob/3dcec76d9df911ed8321007b1d197c1a206dc164/object-file.c#L2502-L2527)
+  establish regular-file blobs and symlink-target bytes as blob data. The
+  comparison hashes raw exported bytes, without working-tree content filters.
+
+Independent source review and a separate check of the literal upstream bytes
+found no parsing/hash mismatch. Windows executable-mode normalization remains
+an explicit platform limit, not a Git producer guarantee. This citation-only
+correction leaves all implementation and regression-test bytes unchanged.
+
 ## Review dispositions and practical limits
 
 A Windows host unable to materialize an exact symlink may now refuse a legacy
