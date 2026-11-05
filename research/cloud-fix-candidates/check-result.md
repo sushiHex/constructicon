@@ -52,3 +52,16 @@ or `_sync_status_and_ok`; nothing there was run.
 Lax coercion of `ok` (`"yes"`, `1`) remains accepted as before; making it strict
 would be a public-contract change left to the owner. The cross-run attestation
 collision is untouched.
+
+## Independent follow-up
+
+Independent review reproduced an introduced strict-validation regression in the
+first candidate: the agreeing-both-fields branch replaced a supplied string/int
+with a Boolean before outer strict validation. The follow-up leaves that supplied
+field unchanged; the normalized temporary value is used only to derive status and
+check agreement. The field itself therefore retains the caller's strictness policy.
+
+Executed on the follow-up: 55 focused CheckResult tests passed, including strict
+accepting Boolean and refusing string/integer cases with/without supplied status;
+ruff passed on both affected files; mypy passed on core/effect.py.
+No full verify or CI was claimed or run by this follow-up.

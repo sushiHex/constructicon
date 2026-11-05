@@ -83,3 +83,21 @@ def test_roundtrip_of_dump_is_stable() -> None:
     for status in get_args(CheckStatus):
         r = _make(status=status)
         assert CheckResult.model_validate(r.model_dump(mode="json")) == r
+
+
+@pytest.mark.parametrize("raw", ["true", "false", 1, 0])
+@pytest.mark.parametrize("include_status", [False, True])
+def test_strict_validation_refuses_non_boolean_ok(raw: object, include_status: bool) -> None:
+    payload = {**BASE, "ok": raw}
+    if include_status:
+        payload["status"] = "passed" if raw in ("true", 1) else "failed"
+    with pytest.raises(ValidationError):
+        CheckResult.model_validate(payload, strict=True)
+
+
+@pytest.mark.parametrize("ok", [False, True])
+def test_strict_validation_permits_boolean_ok(ok: bool) -> None:
+    result = CheckResult.model_validate(
+        {**BASE, "status": "passed" if ok else "failed", "ok": ok}, strict=True,
+    )
+    assert result.ok is ok
