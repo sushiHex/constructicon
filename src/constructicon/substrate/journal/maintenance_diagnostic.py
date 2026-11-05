@@ -36,6 +36,7 @@ from constructicon.substrate.journal._sqlite_execution_facts import (
     stored_event_from_row,
 )
 from constructicon.substrate.journal._sqlite_runs import run_facts_for_id
+from constructicon.substrate.journal._sqlite_schema import SCHEMA_VERSION
 from constructicon.substrate.journal.maintenance_evidence import (
     FILES,
     MAX_FILE_BYTES,
@@ -240,7 +241,7 @@ def _journal(path: Path, run_id: RunId) -> dict[str, object]:
     connection = _connection(path)
     try:
         with read_snapshot(connection):
-            _require(connection.execute("PRAGMA user_version").fetchone()[0] == 9)
+            _require(connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION)
             facts = run_facts_for_id(connection, run_id)
             if facts is None:
                 return {"observation": "missing"}

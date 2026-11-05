@@ -29,6 +29,9 @@ GENERIC = re.compile(r"[A-Z][A-Za-z0-9 /_-]* refused")
 # path (relative to src/constructicon) -> (bare _Refused(), generic messages, reason)
 _DEBT = "pre-existing at f3a8ffe; deliberate vs unnamed not yet classified"
 ALLOWED: dict[str, tuple[int, int, str]] = {
+    "api/_m9/fixture.py": (
+        0, 1, "fixed exam input observation, not an emitted refusal; exact bytes preserved",
+    ),
     "substrate/executors/claude_lane.py": (0, 1, _DEBT),
     "substrate/executors/claude_maintenance_login.py": (0, 17, _DEBT),
     "substrate/executors/claude_maintenance_mode.py": (23, 0, _DEBT),

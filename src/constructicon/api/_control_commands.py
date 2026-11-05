@@ -136,6 +136,7 @@ from constructicon.runtime.registry import (
     ComponentRegistry,
     PlannedRegistration,
     RegistryError,
+    RollbackProofConsumed,
 )
 from constructicon.sdk.types import DefinitionBundle
 
@@ -1766,6 +1767,13 @@ class _CommandExecutor:
                 planned = self._registry.plan_rollback(
                     component=component,
                     expected_stable=expected_stable,
+                )
+            except RollbackProofConsumed as exc:
+                return self._terminal_control_fault(
+                    claim,
+                    ControlCode.REGISTRY_ROLLBACK_PROOF_USED,
+                    str(exc),
+                    "inspect promotion history; this proof cannot authorize another move",
                 )
             except (AdmissionError, ContractViolation) as exc:
                 return self._terminal_control_fault(

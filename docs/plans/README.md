@@ -28,11 +28,11 @@ index; a draft is not approved merely because it is present here. After approval
 preserve the plan as written and add a successor or implementation record when
 the eventual code differs.
 
-## Proposed decisions
+## Decision proposals
 
 | Record | Status |
 | --- | --- |
-| [Run-scoped ordinary attestation identity](handoffs/run-scoped-attestation-identity-proposal.md) | Proposed for #371; pending explicit owner acceptance. Preserves historical proofs and policy IDs; authorizes no implementation |
+| [Run-scoped ordinary attestation identity](handoffs/run-scoped-attestation-identity-proposal.md) | Accepted by the owner on 2026-11-05; [ADR 0023](../adr/0023-ordinary-attestations-bind-their-minting-run.md) records adoption and implementation authority. Original proposal bytes are preserved; runtime evidence is separate |
 
 ## System-design lineage
 
@@ -67,7 +67,7 @@ the eventual code differs.
 | M8 | [Live executors rev 1](milestones/M8-live-executors-rev1.md) | Reconciled against M7.1 closure at `71c4fe3`; technical proposal confirmed at `8f0c2e5` with source-grounded review corrections | Approved: ADR 0018 accepted; PR A authorized. Plan bytes are frozen; preserved pre-decision wording is historical, not its current approval status. Linux target and gateway remain separate operator prerequisites |
 | M8 | [Native harnesses, contained tools rev 2](milestones/M8-live-executors-rev2.md) | Proposed successor after credential-free startup #62 and native recovery #64, against `3718a86` | Review draft; ADR 0020 remains proposed, neither accepted nor rejected, after ADR 0021 was accepted as the narrower alternative on 2026-09-13. No implementation or account access is authorized by its presence |
 | M8 | [Operator-bound subscription executors rev 3](milestones/M8-live-executors-rev3.md) | Owner-authorized alternative proposal against `d2b8f94`; vendor identity remains explicitly unverified | Approved: ADR 0021 accepted on 2026-09-13 at reviewed head `e228ef8`; N1 authorized as credential-free construction. Plan bytes are frozen; preserved pre-decision wording is historical, not its current approval status. N4/N5 authorizations and the private Linux deployment (#73, M8-D2) remain separate operator prerequisites |
-| M9 | [Prompt/context pilot](milestones/M9-prompt-context.md) | Finite, credential-free pilot and local operator trial | [Fixture and successor evidence](https://github.com/sushiHex/constructicon/issues/45); [trial runbook](handoffs/M9-operator-trial.md) |
+| M9 | [Prompt/context pilot](milestones/M9-prompt-context.md) | Finite, credential-free pilot and local operator trial | [Fixture and successor evidence](https://github.com/sushiHex/constructicon/issues/45); [scripted runbook](handoffs/M9-operator-trial.md); [installed selector guide](handoffs/M9-model-selector-guide.md) |
 
 ## Handoffs
 

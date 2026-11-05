@@ -70,7 +70,7 @@ def test_exact_early_m6_creator_source_mismatch_remains_readable(
             manifest_hash=manifest_hash,
         ),
     )
-    _downgrade_v7_schema_to_v6(database)
+    attestation = _downgrade_v7_schema_to_v6(database)[attestation.attestation_id]
     historical_source = RunId("run-m6-report-source")
     with sqlite3.connect(database) as connection:
         connection.execute(

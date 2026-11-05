@@ -10,7 +10,7 @@ import pytest
 
 from constructicon.core.address import RunId
 from constructicon.core.errors import JournalDamaged
-from constructicon.substrate.journal.sqlite import SqliteJournal
+from constructicon.substrate.journal.sqlite import SCHEMA_VERSION, SqliteJournal
 from tests.migrations.test_sqlite_v7_to_v8 import historical_database, retained_bytes
 from tests.run_worlds import create_test_run
 
@@ -63,7 +63,7 @@ raise AssertionError('crash seam was not reached')
     assert proofs(database) == before_proofs
     assert recovered.capability_disposal_receipt("genuinely-absent-command") is None
     with sqlite3.connect(database) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone() == (9,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
 
 
 @pytest.mark.parametrize("damage", ("unknown_family", "disposed_audit", "era_inventory"))
@@ -114,7 +114,7 @@ def test_new_schema9_run_keeps_the_named_schema8_creation_proof(tmp_path):
     run_id = RunId("created-on-nine")
     create_test_run(journal, run_id)
     with sqlite3.connect(database) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone() == (9,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
         assert connection.execute(
             "SELECT source, floor FROM capability_accounting_eras WHERE run_id = ?", (run_id,)
         ).fetchone() == ("schema8-creation", 0)

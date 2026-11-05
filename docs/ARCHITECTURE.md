@@ -350,6 +350,11 @@ runs keep their pinned resolution. A *candidate* is a query (any eligible
 unpromoted version), never a channel. `rdeps(name)` answers what a change
 touches before it is changed.
 
+A fresh rollback plan refuses with `control.registry.rollback_proof_used` when
+its deterministic policy proof already has a promotion receipt. A completed
+command replay or reconciliation of an already persisted plan retains its
+historical receipt; that receipt does not certify the current stable pointer.
+
 Atomic M5 components may declare required capability aliases and descriptor
 kinds. `None` means a historical capability-opaque definition; `()` means a
 complete declaration with no capabilities. Complete declarations participate
@@ -652,9 +657,15 @@ input hash and resolved version restores; the first miss resumes live.
 Reproduce starts a new run under a past run's exact manifest and inputs.
 
 One public `SqliteJournal` implements the separate L0 `Journal`,
-`RegistryStore`, and `ControlPlaneStore` contracts over one schema-9 WAL
+`RegistryStore`, and `ControlPlaneStore` contracts over one schema-10 WAL
 database. `ControlPlaneStore` extends the standalone `ControlStore` ledger with
-the transaction that must also own channel facts. Its private modules are named
+the transaction that must also own channel facts. New ordinary attestations
+bind their fenced minting run in the v2 identity; policy IDs remain v1.
+Migration preserves historical proof bytes, IDs, references and primary seals,
+adding exact positive witnesses for retained ordinary-v1 proofs. Current point
+and SQL readers require the same witness and creator-world authority; reopening
+does not repair missing evidence. See [ADR 0023](adr/0023-ordinary-attestations-bind-their-minting-run.md).
+Its private modules are named
 by enduring responsibility:
 
 ```text
@@ -890,8 +901,12 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   [M8_CI.md](M8_CI.md). See
   [ADR 0018](adr/0018-live-executors-are-leased-contained-processes.md) and the
   [implementation record](plans/handoffs/M8-implementation-record.md).
-- **M9** — self-improvement phase 1 (prompt/context skills); see
-  [designs/SELF_IMPROVEMENT.md](designs/SELF_IMPROVEMENT.md).
+- **M9** — self-improvement phase 1 (prompt/context skills). The installed
+  [fixed selector trial](plans/handoffs/M9-model-selector-guide.md) composes an
+  exact Codex READ catalog choice with the scripted exam, owner approval,
+  journal proof, promotion replay and rollback. Credential-free proofs
+  establish the composition, not current live availability or prompt quality.
+  See [designs/SELF_IMPROVEMENT.md](designs/SELF_IMPROVEMENT.md).
 
 ## Non-negotiable failure tests
 

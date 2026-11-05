@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Literal
@@ -15,6 +18,7 @@ from constructicon.core.effect import (
     ComponentProofSubject,
     HistoricalGitProofSubject,
     attestation_id_for,
+    attestation_id_for_run,
 )
 from constructicon.core.errors import JournalDamaged
 from constructicon.core.identity import Digest, canonical_json, parse_json_value
@@ -26,13 +30,40 @@ from constructicon.substrate.journal._sqlite_fact_seals import (
     durable_fact_hash,
     durable_fact_seal,
     require_durable_fact_seal,
+    sealed_fact_hash,
     store_durable_fact_seal,
 )
 
 ATTESTATION_FACT_FAMILY = "attestation"
 LEGACY_ATTESTATION_FACT_FAMILY = "legacy_attestation_m1_m2"
+RUN_V1_ATTESTATION_WITNESS_FAMILY = "attestation_run_v1_pre_v10"
 
-AttestationProvenance = Literal["m1-m2", "content-derived"]
+AttestationProvenance = Literal[
+    "m1-m2", "policy-v1", "run-v2", "run-v1-unproven", "run-v1-pre-v10", "run-v1-witnessed",
+]
+_PRE_V10_CONNECTION: ContextVar[sqlite3.Connection | None] = ContextVar(
+    "_pre_v10_attestation_connection", default=None,
+)
+
+
+def _pre_v10_reader(connection: sqlite3.Connection) -> bool:
+    return _PRE_V10_CONNECTION.get() is connection and connection.in_transaction
+
+
+@contextmanager
+def _pre_v10_attestation_reader(connection: sqlite3.Connection) -> Iterator[None]:
+    """Only a locked migration may project the exact pre-10 identity era."""
+
+    if not connection.in_transaction:
+        raise JournalDamaged("pre-10 attestation reader requires a migration transaction")
+    version = connection.execute("PRAGMA user_version").fetchone()[0]
+    if type(version) is not int or not 0 <= version < 10:
+        raise JournalDamaged("pre-10 attestation reader requires a checked pre-10 schema")
+    token = _PRE_V10_CONNECTION.set(connection)
+    try:
+        yield
+    finally:
+        _PRE_V10_CONNECTION.reset(token)
 
 
 @dataclass(frozen=True)
@@ -75,19 +106,21 @@ def _stored_attestation_from_json(raw: object) -> StoredAttestation:
 
     subject = attestation.subject
     derived_id: str | None = None
+    run_derived_id: str | None = None
     if not isinstance(subject, HistoricalGitProofSubject):
         try:
-            derived_id = attestation_id_for(
-                AttestationDraft(
-                    action=attestation.action,
-                    subject=subject,
-                    checks=attestation.checks,
-                    check_set_hash=attestation.check_set_hash,
-                    evidence=attestation.evidence,
-                    manifest_hash=attestation.manifest_hash,
-                    workspace_id=attestation.workspace_id,
-                )
+            draft = AttestationDraft(
+                action=attestation.action,
+                subject=subject,
+                checks=attestation.checks,
+                check_set_hash=attestation.check_set_hash,
+                evidence=attestation.evidence,
+                manifest_hash=attestation.manifest_hash,
+                workspace_id=attestation.workspace_id,
             )
+            derived_id = attestation_id_for(draft)
+            if attestation.created_by_run is not None:
+                run_derived_id = attestation_id_for_run(draft, attestation.created_by_run)
         except ValidationError:
             derived_id = None
     legacy_subject = isinstance(
@@ -99,10 +132,16 @@ def _stored_attestation_from_json(raw: object) -> StoredAttestation:
             return StoredAttestation(attestation=attestation, provenance="m1-m2")
         raise ValueError("current attestation cannot use the M1/M2 check shape")
     if derived_id == attestation.attestation_id:
+        if attestation.created_by_run is None and (
+            attestation.action != "promote" or not isinstance(subject, ComponentProofSubject)
+        ):
+            raise ValueError("run-less attestation is not a promotion policy")
         return StoredAttestation(
             attestation=attestation,
-            provenance="content-derived",
+            provenance="policy-v1" if attestation.created_by_run is None else "run-v1-unproven",
         )
+    if run_derived_id == attestation.attestation_id:
+        return StoredAttestation(attestation=attestation, provenance="run-v2")
     if (
         not checks
         and attestation.action in {"merge", "promote"}
@@ -125,7 +164,7 @@ def _require_current_creator(
     stored: StoredAttestation,
 ) -> None:
     attestation = stored.attestation
-    if stored.provenance != "content-derived" or attestation.created_by_run is None:
+    if stored.provenance == "m1-m2" or attestation.created_by_run is None:
         return
     # Local import keeps the dependency graph acyclic while making the
     # canonical attestation boundary reuse the canonical retained-world law.
@@ -172,6 +211,177 @@ def _attestation_id_from_json(raw: object) -> str | None:
         return attestation_from_json(raw).attestation_id
     except JournalDamaged:
         return None
+
+
+def _attestation_seals_match(
+    identity: object, raw: object, primary: object, legacy: object, witness: object,
+    pre_v10: object,
+) -> int:
+    """Pure SQL selector: seals are explicit inputs, never connection lookups."""
+
+    try:
+        key = _durable_text(identity, fact="attestation SQL identity")
+        stored = _stored_attestation_from_json(raw)
+        if (
+            key != stored.attestation.attestation_id
+            or type(pre_v10) is not int or pre_v10 not in (0, 1)
+        ):
+            return 0
+        family = _fact_family(stored)
+        exact = {"attestation_id": key, "attestation_json": _durable_text(
+            raw, fact="attestation SQL payload",
+        )}
+
+        def expected(named_family: str) -> str:
+            return str(sealed_fact_hash(
+                family=named_family, fact_key=key, selector=key,
+                fact=durable_fact_hash(named_family, exact),
+            ))
+
+        selected, other = (legacy, primary) if family == LEGACY_ATTESTATION_FACT_FAMILY else (
+            primary, legacy,
+        )
+        if selected != expected(family) or other is not None:
+            return 0
+        if pre_v10:
+            return int(stored.provenance != "run-v2" and witness is None)
+        if stored.provenance == "run-v1-unproven":
+            return int(witness == expected(RUN_V1_ATTESTATION_WITNESS_FAMILY))
+        return int(witness is None)
+    except (JournalDamaged, TypeError, ValueError, ValidationError):
+        return 0
+
+
+def attestation_seal_joins(alias: str, prefix: str) -> str:
+    """One relational seal projection shared by run and inbox selectors."""
+
+    return "".join(
+        f" LEFT JOIN durable_fact_seals AS {prefix}_{suffix}"
+        f" ON {prefix}_{suffix}.family = '{family}'"
+        f" AND ({prefix}_{suffix}.fact_key = {alias}.attestation_id"
+        f" OR {prefix}_{suffix}.selector = {alias}.attestation_id)"
+        for suffix, family in (
+            ("primary", ATTESTATION_FACT_FAMILY),
+            ("legacy", LEGACY_ATTESTATION_FACT_FAMILY),
+            ("witness", RUN_V1_ATTESTATION_WITNESS_FAMILY),
+        )
+    )
+
+
+def attestation_seal_anomaly(alias: str, prefix: str) -> str:
+    misplaced = " OR ".join(
+        f"({prefix}_{suffix}.fact_key IS NOT NULL AND"
+        f" ({prefix}_{suffix}.fact_key != {alias}.attestation_id"
+        f" OR {prefix}_{suffix}.selector != {alias}.attestation_id))"
+        for suffix in ("primary", "legacy", "witness")
+    )
+    return (
+        f"(constructicon_attestation_seals_match({alias}.attestation_id,"
+        f" {alias}.attestation_json, {prefix}_primary.fact_hash,"
+        f" {prefix}_legacy.fact_hash, {prefix}_witness.fact_hash,"
+        f" constructicon_attestation_pre_v10()) != 1 OR {misplaced})"
+    )
+
+
+def _attestation_creator_id(raw: object) -> str | None:
+    try:
+        creator = attestation_from_json(raw).created_by_run
+        return str(creator) if creator is not None else None
+    except JournalDamaged:
+        return None
+
+
+def _attestation_creator_matches(raw: object, run_id: object, manifest_hash: object) -> int:
+    """Pure selector relation; creator worlds are proven before filtering."""
+
+    try:
+        stored = _stored_attestation_from_json(raw)
+        proof = stored.attestation
+        if stored.provenance == "m1-m2" or proof.created_by_run is None:
+            return 1
+        return int(
+            str(proof.created_by_run) == run_id and str(proof.manifest_hash) == manifest_hash
+        )
+    except (JournalDamaged, TypeError, ValueError, ValidationError):
+        return 0
+
+
+def _attestation_current_creator_id(raw: object) -> str | None:
+    try:
+        stored = _stored_attestation_from_json(raw)
+        creator = stored.attestation.created_by_run
+        return str(creator) if stored.provenance != "m1-m2" and creator is not None else None
+    except (JournalDamaged, TypeError, ValueError, ValidationError):
+        return None
+
+
+def _validate_attestation_creator_worlds(connection: sqlite3.Connection) -> None:
+    """Prove distinct ordinary creators canonically before an actor/cursor filter.
+
+    This is not a fact inventory or a recovery scan. The global attestation
+    selector already examines these rows; materializing their distinct creators
+    lets the canonical world projector prove command plans and clone sources
+    once per creator instead of mirroring a partial authority law in SQL. The
+    caller owns the same snapshot through the subsequent bounded selection.
+    """
+
+    from constructicon.substrate.journal._sqlite_runs import validated_run_world
+
+    if not connection.in_transaction:
+        raise JournalDamaged("attestation creator prefilter requires an owned read transaction")
+    rows = connection.execute(
+        "SELECT r.*, o.origin_json, creators.creator_id FROM"
+        " (SELECT DISTINCT constructicon_attestation_current_creator_id(attestation_json)"
+        " AS creator_id FROM attestations) AS creators"
+        " LEFT JOIN runs AS r ON r.run_id = creators.creator_id"
+        " LEFT JOIN run_origins AS o ON o.run_id = r.run_id"
+        " WHERE creators.creator_id IS NOT NULL"
+    ).fetchall()
+    # Nested canonical projectors register SQL functions; no outer cursor may
+    # remain active while they do so. No proof cache outlives this snapshot.
+    for row in rows:
+        world = validated_run_world(connection, row)
+        if str(world.run_id) != row["creator_id"]:
+            raise JournalDamaged("attestation creator prefilter contradicts its retained run")
+
+
+def attestation_creator_joins(alias: str, prefix: str) -> str:
+    return (
+        f" LEFT JOIN runs AS {prefix}_run ON {prefix}_run.run_id ="
+        f" constructicon_attestation_creator_id({alias}.attestation_json)"
+    )
+
+
+def attestation_creator_anomaly(alias: str, prefix: str) -> str:
+    return (
+        f"constructicon_attestation_creator_matches({alias}.attestation_json,"
+        f" {prefix}_run.run_id, {prefix}_run.manifest_hash) != 1"
+    )
+
+
+def register_attestation_seal_guard(connection: sqlite3.Connection) -> None:
+    connection.create_function(
+        "constructicon_attestation_creator_id", 1, _attestation_creator_id, deterministic=True,
+    )
+    connection.create_function(
+        "constructicon_attestation_creator_matches", 3, _attestation_creator_matches,
+        deterministic=True,
+    )
+    connection.create_function(
+        "constructicon_attestation_seals_match", 6, _attestation_seals_match, deterministic=True,
+    )
+    connection.create_function(
+        "constructicon_attestation_current_creator_id", 1, _attestation_current_creator_id,
+        deterministic=True,
+    )
+    _validate_attestation_creator_worlds(connection)
+    # This function observes a live, exact-connection migration context. It is
+    # deliberately NOT deterministic; unlike JSON selectors it depends on the
+    # transaction and loses compatibility authority immediately on context exit.
+    connection.create_function(
+        "constructicon_attestation_pre_v10", 0, lambda: int(_pre_v10_reader(connection)),
+        deterministic=False,
+    )
 
 
 def _effect_attestation_id(raw: object) -> str | None:
@@ -241,6 +451,10 @@ def seal_attestation(connection: sqlite3.Connection, row: sqlite3.Row) -> None:
     """Write or reconcile one attestation's positive presence/content seal."""
 
     stored = stored_attestation_from_row(row)
+    if stored.provenance == "run-v1-unproven" and not _pre_v10_reader(connection):
+        raise JournalDamaged("current attestation writer cannot mint historical run-v1 evidence")
+    if stored.provenance == "run-v2" and _pre_v10_reader(connection):
+        raise JournalDamaged("pre-10 attestation writer era cannot contain run-v2 evidence")
     attestation = stored.attestation
     _require_current_creator(connection, stored)
     family = _fact_family(stored)
@@ -258,6 +472,11 @@ def seal_attestation(connection: sqlite3.Connection, row: sqlite3.Row) -> None:
         raise JournalDamaged(
             f"attestation {attestation.attestation_id!r} has contradictory provenance seals"
         )
+    if durable_fact_seal(
+        connection, family=RUN_V1_ATTESTATION_WITNESS_FAMILY,
+        fact_key=attestation.attestation_id, selector=attestation.attestation_id,
+    ) is not None:
+        raise JournalDamaged("attestation writer cannot reconcile a historical era witness")
     store_durable_fact_seal(
         connection,
         family=family,
@@ -297,15 +516,68 @@ def require_attestation_seal(
         raise JournalDamaged(
             f"attestation {attestation_id!r} has contradictory provenance seals"
         )
+    witness = durable_fact_seal(
+        connection, family=RUN_V1_ATTESTATION_WITNESS_FAMILY,
+        fact_key=attestation_id, selector=attestation_id,
+    )
+    if _pre_v10_reader(connection):
+        if witness is not None or stored.provenance == "run-v2":
+            raise JournalDamaged("pre-10 attestation era contains future identity evidence")
+        if stored.provenance == "run-v1-unproven":
+            stored = StoredAttestation(stored.attestation, "run-v1-pre-v10")
+    elif stored.provenance == "run-v1-unproven":
+        require_durable_fact_seal(
+            connection, family=RUN_V1_ATTESTATION_WITNESS_FAMILY,
+            fact_key=attestation_id, selector=attestation_id,
+            fact_hash=attestation_fact_hash(row, family=RUN_V1_ATTESTATION_WITNESS_FAMILY),
+        )
+        stored = StoredAttestation(stored.attestation, "run-v1-witnessed")
+    elif witness is not None:
+        raise JournalDamaged(f"attestation {attestation_id!r} has an ineligible run-v1 witness")
     _require_current_creator(connection, stored)
     return stored
 
 
-def validate_attestation_seal_inventory(connection: sqlite3.Connection) -> None:
+def validate_attestation_seal_inventory(connection: sqlite3.Connection) -> int:
     """Require one exact provenance seal for every retained attestation row."""
 
+    witnessed: set[str] = set()
     for row in connection.execute("SELECT * FROM attestations").fetchall():
-        require_attestation_seal(connection, row)
+        stored = require_attestation_seal(connection, row)
+        if stored.provenance == "run-v1-witnessed":
+            witnessed.add(stored.attestation.attestation_id)
+    witnesses = connection.execute(
+        "SELECT fact_key, selector FROM durable_fact_seals WHERE family = ?",
+        (RUN_V1_ATTESTATION_WITNESS_FAMILY,),
+    ).fetchall()
+    if len(witnesses) != len(witnessed) or any(
+        row["fact_key"] not in witnessed or row["selector"] != row["fact_key"]
+        for row in witnesses
+    ):
+        raise JournalDamaged(
+            "run-v1 attestation witness inventory has an orphan or ineligible fact"
+        )
+    return len(witnessed)
+
+
+def mint_pre_v10_attestation_witnesses(connection: sqlite3.Connection) -> None:
+    """Witness only the source inventory proven by the locked 9-to-10 rung."""
+
+    if not _pre_v10_reader(connection):
+        raise JournalDamaged("run-v1 era witnesses require the pre-10 migration reader")
+    if connection.execute("PRAGMA user_version").fetchone()[0] != 9:
+        raise JournalDamaged("run-v1 era witnesses require schema 9")
+    rows = connection.execute("SELECT * FROM attestations").fetchall()
+    qualifying = [row for row in rows if require_attestation_seal(
+        connection, row,
+    ).provenance == "run-v1-pre-v10"]
+    for row in qualifying:
+        identity = _durable_text(row["attestation_id"], fact="historical attestation identity")
+        store_durable_fact_seal(
+            connection, family=RUN_V1_ATTESTATION_WITNESS_FAMILY,
+            fact_key=identity, selector=identity,
+            fact_hash=attestation_fact_hash(row, family=RUN_V1_ATTESTATION_WITNESS_FAMILY),
+        )
 
 
 def attestation_for_id(
@@ -346,12 +618,14 @@ def stored_attestation_for_id(
             expected_attestation_id=attestation_id,
         )
         stored = require_attestation_seal(connection, rows[0])
-        if stored != expected:
+        if stored.attestation != expected.attestation:
             raise JournalDamaged(
                 f"attestation {attestation_id!r} contradicts its requested selector"
             )
         return stored
-    for family in (ATTESTATION_FACT_FAMILY, LEGACY_ATTESTATION_FACT_FAMILY):
+    for family in (
+        ATTESTATION_FACT_FAMILY, LEGACY_ATTESTATION_FACT_FAMILY, RUN_V1_ATTESTATION_WITNESS_FAMILY,
+    ):
         seal = durable_fact_seal(
             connection,
             family=family,

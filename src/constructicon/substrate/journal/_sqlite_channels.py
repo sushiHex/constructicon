@@ -70,7 +70,12 @@ from constructicon.core.identity import (
 )
 from constructicon.substrate.journal._sqlite_approvals import stored_approval_fact_from_row
 from constructicon.substrate.journal._sqlite_attestations import (
+    attestation_creator_anomaly,
+    attestation_creator_joins,
     attestation_from_json,
+    attestation_seal_anomaly,
+    attestation_seal_joins,
+    register_attestation_seal_guard,
     require_attestation_seal,
 )
 from constructicon.substrate.journal._sqlite_base import (
@@ -130,10 +135,13 @@ _INVALID_INBOX_ROUTING = (
     " OR m.attestation_id IS NOT NULL))"
 )
 _INBOX_REQUEST_PROOF_MISMATCH = (
-    "m.attestation_id IS NOT NULL AND"
+    "m.attestation_id IS NOT NULL AND ("
+    + attestation_seal_anomaly("a", "inbox_attestation")
+    + " OR " + attestation_creator_anomaly("a", "inbox_attestation_creator")
+    + " OR"
     " constructicon_channel_request_routing_matches("
     "m.attestation_id, a.attestation_json, m.message_id, m.channel_id,"
-    " m.kind, m.interaction, m.recipient_actor_id) != 1"
+    " m.kind, m.interaction, m.recipient_actor_id) != 1)"
 )
 
 
@@ -853,6 +861,7 @@ class _SqliteChannelsMixin:
             visible_params.extend((after[0], after[0], after[1]))
         params = [message_seq, *visible_params, limit]
         with self._read() as connection:
+            register_attestation_seal_guard(connection)
             connection.create_function(
                 "constructicon_channel_request_routing_matches",
                 7,
@@ -888,7 +897,9 @@ class _SqliteChannelsMixin:
             rows = connection.execute(
                 "SELECT m.* FROM channel_messages AS m"
                 " LEFT JOIN attestations AS a ON a.attestation_id = m.attestation_id"
-                " WHERE m.message_seq <= ? AND (("
+                + attestation_seal_joins("a", "inbox_attestation")
+                + attestation_creator_joins("a", "inbox_attestation_creator")
+                + " WHERE m.message_seq <= ? AND (("
                 + " AND ".join(visible)
                 + f") OR ({_INVALID_INBOX_ROUTING})"
                 + f" OR ({_INBOX_REQUEST_PROOF_MISMATCH}))"

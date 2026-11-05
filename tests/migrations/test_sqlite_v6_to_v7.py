@@ -43,9 +43,11 @@ from constructicon.core.control import (
 )
 from constructicon.core.effect import (
     ApprovalRecord,
+    Attestation,
     AttestationDraft,
     CheckResult,
     ComponentProofSubject,
+    attestation_id_for,
 )
 from constructicon.core.errors import JournalDamaged
 from constructicon.core.human import (
@@ -165,8 +167,8 @@ def _dump(database: Path) -> dict[str, list[tuple[object, ...]]]:
         }
 
 
-def _downgrade_v7_schema_to_v6(database: Path) -> None:
-    """Restore the exact pre-v7 relational shape used by the branch writer.
+def _downgrade_v7_schema_to_v6(database: Path) -> dict[str, Attestation]:
+    """Build a synthetic pre-v7 fixture, including its old identity law.
 
     The schema-6 developer-branch command law already stored the same schema-1
     plan envelope used here. Keeping those bytes while removing only v7
@@ -176,7 +178,39 @@ def _downgrade_v7_schema_to_v6(database: Path) -> None:
     partially rewound current database, not the migration source.
     """
 
+    projected: dict[str, Attestation] = {}
     with sqlite3.connect(database) as connection:
+        # These are synthetic fixtures, not evidence attributed to an old
+        # writer. Back-project only the three understood reference surfaces;
+        # refuse any other dependent bytes rather than emulate their hashes.
+        for identity, raw in connection.execute("SELECT * FROM attestations").fetchall():
+            proof = Attestation.model_validate_json(raw)
+            if proof.created_by_run is None:
+                continue
+            draft = AttestationDraft.model_validate({
+                field: proof.model_dump(mode="json")[field]
+                for field in AttestationDraft.model_fields
+            })
+            old_id = attestation_id_for(draft)
+            if identity == old_id:
+                continue
+            for table, column in (
+                ("effects", "request_json"), ("effects", "receipt_json"),
+                ("commands", "request_json"), ("commands", "plan_json"),
+                ("commands", "response_json"), ("events", "payload"),
+                ("checkpoints", "checkpoint_json"),
+            ):
+                assert connection.execute(
+                    f"SELECT 1 FROM {table} WHERE instr({column}, ?) > 0 LIMIT 1", (identity,),
+                ).fetchone() is None, f"synthetic downgrade cannot project {table}.{column}"
+            historical = proof.model_copy(update={"attestation_id": old_id})
+            connection.execute("UPDATE attestations SET attestation_id=?, attestation_json=?"
+                               " WHERE attestation_id=?",
+                               (old_id, historical.model_dump_json(), identity))
+            for table in ("channel_messages", "promotions"):
+                connection.execute(f"UPDATE {table} SET attestation_id=? WHERE attestation_id=?",
+                                   (old_id, identity))
+            projected[identity] = historical
         connection.execute("DROP TABLE IF EXISTS capability_accounting_eras")
         connection.execute("DROP INDEX channel_reply_command_unique")
         connection.execute("ALTER TABLE channel_messages DROP COLUMN reply_provenance_version")
@@ -191,6 +225,7 @@ def _downgrade_v7_schema_to_v6(database: Path) -> None:
         connection.execute("DROP TABLE durable_fact_seals")
         connection.execute("PRAGMA user_version = 6")
         connection.commit()
+    return projected
 
 
 def _rebuild_v6_ack_sequence(database: Path, *, storage_type: str) -> None:
@@ -322,7 +357,7 @@ def test_v6_migration_seals_a_content_derived_creator_after_its_run_world(
         ),
     )
     assert attestation.created_by_run == creator
-    _downgrade_v7_schema_to_v6(database)
+    attestation = _downgrade_v7_schema_to_v6(database)[attestation.attestation_id]
 
     migrated = SqliteJournal(database)
 

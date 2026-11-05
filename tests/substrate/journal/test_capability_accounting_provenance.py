@@ -122,7 +122,7 @@ def test_new_runs_co_commit_positive_creation_eras(tmp_path: Path) -> None:
     database = tmp_path / "creation-era.db"
     journal = SqliteJournal(database)
     create_test_run(journal, RUN)
-    assert SCHEMA_VERSION == 9
+    assert SCHEMA_VERSION == 10
     with sqlite3.connect(database) as connection:
         row = connection.execute("SELECT * FROM capability_accounting_eras").fetchone()
         assert row is not None
@@ -412,7 +412,7 @@ def test_empty_current_accounting_database_reopens(tmp_path: Path) -> None:
         assert connection.execute("SELECT COUNT(*) FROM capability_accounting_eras").fetchone() == (
             0,
         )
-        assert connection.execute("PRAGMA user_version").fetchone() == (9,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
 
 
 @pytest.mark.parametrize("populated", (False, True))
