@@ -16,6 +16,23 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## M9 fixed operator trial
+
+The [operator trial](plans/handoffs/M9-operator-trial.md) runs the reviewed
+scripted catalog in an isolated local journal. A fresh process recovers the
+retained exam and owner-addressed request, and the leased issuer checks the
+recorded decision before minting. Separate commands promote the exact edge,
+replay the result, and roll it back with earlier pins intact. The evaluator-only
+assembly must not recover issuance runs; after issuance is submitted, evaluation
+identities are reconstructed from committed command results. Wait deadlines name
+the stage, run, durable status and liveness; a failed issuance counts as owner
+rejection only when its recorded issuer failure carries the exact rejection
+cause, not merely because its status is failed.
+
+The local operator is trusted; the synthetic actors are not separate OS
+identities. This establishes repeatable scripted behavior, with no vendor
+execution, production promotion, or evidence of model improvement.
+
 ## Claude WRITE resources require Git in both stacked components
 
 The complete retained journal identified `workspace_staging_failed` before
