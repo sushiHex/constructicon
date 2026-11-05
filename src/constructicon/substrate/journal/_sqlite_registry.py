@@ -529,7 +529,9 @@ def _validate_promotion_authority(
             faults.append("historical promotion authority names another target")
         if not attestation.ok:
             faults.append("historical promotion authority did not pass")
-    elif stored.provenance != "content-derived":
+    elif stored.provenance not in {
+        "policy-v1", "run-v2", "run-v1-witnessed", "run-v1-pre-v10",
+    }:
         faults = [
             "M1/M2 caller-selected attestation identity cannot authorize a current move"
         ]

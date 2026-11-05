@@ -21,6 +21,7 @@ from constructicon.core.effect import (
     EffectReceipt,
     EffectRequest,
     attestation_id_for,
+    attestation_id_for_run,
 )
 from constructicon.core.effect import idempotency_key as effect_idempotency_key
 from constructicon.core.effect import request_hash as effect_request_hash
@@ -42,6 +43,7 @@ from constructicon.core.workspace import lease_id_for
 from constructicon.substrate.journal._sqlite_attestations import (
     attestation_for_id,
     seal_attestation,
+    stored_attestation_for_id,
 )
 from constructicon.substrate.journal._sqlite_base import (
     _checkpoint_identity,
@@ -911,7 +913,7 @@ class _SqliteExecutionMixin:
             )
             if stored is None:
                 attestation = Attestation(
-                    attestation_id=attestation_id_for(draft),
+                    attestation_id=attestation_id_for_run(draft, lease.run_id),
                     created_by_run=lease.run_id,
                     created_at=self._now(),
                     **draft.model_dump(),
@@ -919,6 +921,7 @@ class _SqliteExecutionMixin:
                 self._insert_attestation(conn, attestation)
             else:
                 attestation = stored
+            self.fault_probe("attestation.before_commit")
         self.fault_probe("attestation.after_commit")
         return attestation
 
@@ -957,21 +960,33 @@ class _SqliteExecutionMixin:
     ) -> Attestation | None:
         """Return the exact prior mint before a retry observes wall time."""
 
-        attestation_id = attestation_id_for(draft)
-        stored = attestation_for_id(conn, attestation_id)
-        if stored is None:
-            return None
-        expected = Attestation(
-            attestation_id=attestation_id,
-            created_by_run=created_by_run,
-            created_at=stored.created_at,
-            **draft.model_dump(),
-        )
-        if stored != expected:
-            raise JournalDamaged(
-                f"attestation {attestation_id!r} already minted with different content"
+        identities = (
+            (attestation_id_for(draft),) if created_by_run is None else (
+                attestation_id_for_run(draft, created_by_run), attestation_id_for(draft),
             )
-        return stored
+        )
+        for attestation_id in identities:
+            stored = stored_attestation_for_id(conn, attestation_id)
+            if stored is None:
+                continue
+            proof = stored.attestation
+            expected = Attestation(
+                attestation_id=attestation_id, created_by_run=proof.created_by_run,
+                created_at=proof.created_at, **draft.model_dump(),
+            )
+            if proof != expected:
+                raise JournalDamaged(
+                    f"attestation {attestation_id!r} already minted with different content"
+                )
+            if proof.created_by_run == created_by_run:
+                return proof
+            if created_by_run is None and stored.provenance == "run-v1-witnessed":
+                raise ContractViolation("policy_attestation_id_owned_by_history")
+            if attestation_id != attestation_id_for(draft):
+                raise JournalDamaged("run-scoped attestation identity contradicts its creator")
+            # A fully validated v1 proof belonging to policy or another run is
+            # retained history, never this run's replay and never a v2 collision.
+        return None
 
     @staticmethod
     def _insert_attestation(conn: sqlite3.Connection, attestation: Attestation) -> None:

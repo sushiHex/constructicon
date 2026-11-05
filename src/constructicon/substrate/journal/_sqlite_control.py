@@ -109,10 +109,13 @@ class _SqliteControlMixin:
             project_disposal_receipt,
         )
         from constructicon.substrate.journal._sqlite_fact_seals import store_durable_fact_seal
+        from constructicon.substrate.journal._sqlite_schema import SCHEMA_VERSION
 
         with self._txn() as connection:
-            if connection.execute("PRAGMA user_version").fetchone()[0] != 9:
-                raise ContractViolation("administrative disposal requires persistence schema 9")
+            if connection.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+                raise ContractViolation(
+                    f"administrative disposal requires persistence schema {SCHEMA_VERSION}"
+                )
             command = self._command_fenced(connection, claim)
             plan = validated_capability_disposal_command(command)
             previous = project_disposal_receipt(connection, command.command_id)

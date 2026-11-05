@@ -193,6 +193,15 @@ def attestation_id_for(draft: AttestationDraft) -> str:
     return f"att-{str(body).removeprefix('sha256:')}"
 
 
+def attestation_id_for_run(draft: AttestationDraft, run_id: RunId) -> str:
+    """Identify one ordinary proof independently of its worker epoch or clock."""
+
+    body = digest("attestation", 2, {
+        "draft": draft.model_dump(mode="json"), "created_by_run": str(run_id),
+    })
+    return f"att-{str(body).removeprefix('sha256:')}"
+
+
 class Attestation(BaseModel):
     model_config = ConfigDict(frozen=True)
 

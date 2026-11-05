@@ -30,7 +30,11 @@ from constructicon.core.run import TERMINAL_EVENT_STATUSES, TERMINAL_STATUS_EVEN
 from constructicon.substrate.journal._sqlite_attestations import (
     ATTESTATION_FACT_FAMILY,
     LEGACY_ATTESTATION_FACT_FAMILY,
+    RUN_V1_ATTESTATION_WITNESS_FAMILY,
     attestation_from_json,
+    attestation_seal_anomaly,
+    attestation_seal_joins,
+    register_attestation_seal_guard,
 )
 from constructicon.substrate.journal._sqlite_base import (
     _durable_digest,
@@ -547,6 +551,10 @@ RUN_CHILD_ORPHAN_ANOMALY = (
     " OR EXISTS (SELECT 1 FROM durable_fact_seals AS run_seal"
     " LEFT JOIN runs AS sealed_run ON sealed_run.run_id = run_seal.fact_key"
     " WHERE run_seal.family = 'run_world' AND sealed_run.run_id IS NULL)"
+    " OR EXISTS (SELECT 1 FROM durable_fact_seals AS witness"
+    " LEFT JOIN attestations AS witnessed ON witnessed.attestation_id = witness.fact_key"
+    f" WHERE witness.family = '{RUN_V1_ATTESTATION_WITNESS_FAMILY}'"
+    " AND (witnessed.attestation_id IS NULL OR witness.selector != witness.fact_key))"
     " OR EXISTS (SELECT 1 FROM attestations AS child"
     " LEFT JOIN runs AS parent"
     " ON parent.run_id = constructicon_attestation_created_by_run("
@@ -559,7 +567,9 @@ RUN_CHILD_ORPHAN_ANOMALY = (
     f" ON current_attestation.family = '{ATTESTATION_FACT_FAMILY}'"
     " AND current_attestation.fact_key = child.attestation_id"
     " AND current_attestation.selector = child.attestation_id"
-    " WHERE constructicon_attestation_is_valid(child.attestation_json) != 1"
+    + attestation_seal_joins("child", "run_attestation")
+    + " WHERE " + attestation_seal_anomaly("child", "run_attestation")
+    + " OR constructicon_attestation_is_valid(child.attestation_json) != 1"
     " OR (constructicon_attestation_created_by_run(child.attestation_json)"
     " IS NOT NULL AND parent.run_id IS NULL"
     " AND (legacy_attestation.fact_key IS NULL"
@@ -627,6 +637,7 @@ def _run_id_for_creation_command(raw: object) -> str | None:
 
 
 def register_run_origin_guard(connection: sqlite3.Connection) -> None:
+    register_attestation_seal_guard(connection)
     connection.create_function(
         "constructicon_run_origin_matches",
         3,

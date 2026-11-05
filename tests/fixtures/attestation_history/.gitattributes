@@ -1,0 +1,2 @@
+# Actual historical writer transcripts must reproduce byte-for-byte on Windows too.
+*.sql text eol=lf

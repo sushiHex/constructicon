@@ -1,5 +1,5 @@
 # mypy: disable-error-code="attr-defined"
-"""SQLite schema ownership and atomic migrations through schema 9."""
+"""SQLite schema ownership and atomic migrations through schema 10."""
 
 from __future__ import annotations
 
@@ -18,6 +18,10 @@ from constructicon.substrate.journal._sqlite_approvals import (
     stored_approval_fact_from_row,
 )
 from constructicon.substrate.journal._sqlite_attestations import (
+    RUN_V1_ATTESTATION_WITNESS_FAMILY,
+    _pre_v10_attestation_reader,
+    _pre_v10_reader,
+    mint_pre_v10_attestation_witnesses,
     seal_attestation,
     validate_attestation_seal_inventory,
 )
@@ -109,7 +113,7 @@ from constructicon.substrate.journal._sqlite_runs import (
     validated_run_world,
 )
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 _CURRENT_V7_TABLES = frozenset(
     {
@@ -403,6 +407,9 @@ class _SqliteSchemaMixin:
             if version == 8:
                 self._migrate_m8_to_m9(connection)
                 version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            if version == 9:
+                self._migrate_m9_to_m10(connection)
+                version = int(connection.execute("PRAGMA user_version").fetchone()[0])
             if version == SCHEMA_VERSION:
                 connection.executescript(_SCHEMA)
                 connection.executescript(_V5_SCHEMA)
@@ -435,6 +442,27 @@ class _SqliteSchemaMixin:
         if columns != {"run_id", "world_hash", "source", "floor", "inventory_hash"}:
             raise JournalDamaged("schema 8 capability accounting eras table has changed columns")
 
+    def _migrate_m9_to_m10(self, connection: sqlite3.Connection) -> None:
+        if not _begin_rung(connection, 9):
+            return
+        try:
+            self._require_current_v7_tables(connection)
+            self._require_current_v8_tables(connection)
+            with _pre_v10_attestation_reader(connection):
+                self._validate_v7_fact_inventory(connection, capability_provenance=True)
+                mint_pre_v10_attestation_witnesses(connection)
+            # Compatibility ends before either strict postvalidation or version
+            # publication. No current projection may infer historical authority.
+            self._validate_v7_fact_inventory(connection, capability_provenance=True)
+            self.fault_probe("attestation_identity_migration.before_version")
+            connection.execute("PRAGMA user_version = 10")
+            self.fault_probe("attestation_identity_migration.before_commit")
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        self.fault_probe("attestation_identity_migration.after_commit")
+
     def _migrate_m8_to_m9(self, connection: sqlite3.Connection) -> None:
         from constructicon.substrate.journal._sqlite_capability_disposal import (
             DISPOSAL_EVENT,
@@ -447,24 +475,27 @@ class _SqliteSchemaMixin:
             connection.rollback()
             return
         try:
-            self._require_current_v7_tables(connection)
-            self._require_current_v8_tables(connection)
-            self._validate_v7_fact_inventory(connection, capability_provenance=True)
-            audits = connection.execute(
-                "SELECT COUNT(*) FROM events WHERE kind = ?", (DISPOSAL_EVENT,),
-            ).fetchone()[0]
-            relationships = connection.execute(
-                "SELECT COUNT(*) FROM durable_fact_seals WHERE family = ?", (DISPOSAL_FAMILY,),
-            ).fetchone()[0]
-            if audits != 0 or relationships != 0:
-                raise JournalDamaged("schema 8 baseline already contains administrative disposal")
-            connection.execute("PRAGMA user_version = 9")
-            if validate_disposal_inventory(connection) != 0:
-                raise JournalDamaged(
-                    "schema 9 migration did not establish empty disposal inventory",
-                )
-            self.fault_probe("capability_disposal_migration.before_commit")
-            self._validate_v7_fact_inventory(connection, capability_provenance=True)
+            with _pre_v10_attestation_reader(connection):
+                self._require_current_v7_tables(connection)
+                self._require_current_v8_tables(connection)
+                self._validate_v7_fact_inventory(connection, capability_provenance=True)
+                audits = connection.execute(
+                    "SELECT COUNT(*) FROM events WHERE kind = ?", (DISPOSAL_EVENT,),
+                ).fetchone()[0]
+                relationships = connection.execute(
+                    "SELECT COUNT(*) FROM durable_fact_seals WHERE family = ?", (DISPOSAL_FAMILY,),
+                ).fetchone()[0]
+                if audits != 0 or relationships != 0:
+                    raise JournalDamaged(
+                        "schema 8 baseline already contains administrative disposal"
+                    )
+                connection.execute("PRAGMA user_version = 9")
+                if validate_disposal_inventory(connection) != 0:
+                    raise JournalDamaged(
+                        "schema 9 migration did not establish empty disposal inventory",
+                    )
+                self.fault_probe("capability_disposal_migration.before_commit")
+                self._validate_v7_fact_inventory(connection, capability_provenance=True)
             connection.commit()
         except BaseException:
             connection.rollback()
@@ -477,20 +508,21 @@ class _SqliteSchemaMixin:
             connection.rollback()
             return
         try:
-            self._require_current_v7_tables(connection)
-            if connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table'"
-                " AND name = 'capability_accounting_eras'"
-            ).fetchone() is not None:
-                raise JournalDamaged(
-                    "schema 7 already carries current capability accounting structure"
-                )
-            histories = self._validate_v7_fact_inventory(connection)
-            connection.execute(ERA_DDL)
-            mint_migrated_capability_provenance(connection, histories)
-            self.fault_probe("capability_migration.before_version")
-            self._validate_v7_fact_inventory(connection, capability_provenance=True)
-            connection.execute("PRAGMA user_version = 8")
+            with _pre_v10_attestation_reader(connection):
+                self._require_current_v7_tables(connection)
+                if connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table'"
+                    " AND name = 'capability_accounting_eras'"
+                ).fetchone() is not None:
+                    raise JournalDamaged(
+                        "schema 7 already carries current capability accounting structure"
+                    )
+                histories = self._validate_v7_fact_inventory(connection)
+                connection.execute(ERA_DDL)
+                mint_migrated_capability_provenance(connection, histories)
+                self.fault_probe("capability_migration.before_version")
+                self._validate_v7_fact_inventory(connection, capability_provenance=True)
+                connection.execute("PRAGMA user_version = 8")
             connection.commit()
         except BaseException:
             connection.rollback()
@@ -1004,7 +1036,7 @@ class _SqliteSchemaMixin:
             require_manifest_seal(connection, row)
         validate_event_seal_inventory(connection)
         validate_checkpoint_seal_inventory(connection)
-        validate_attestation_seal_inventory(connection)
+        attestation_witness_count = validate_attestation_seal_inventory(connection)
         resume_provenance_count = validate_run_fact_inventory(connection)
         for row in connection.execute("SELECT * FROM approvals").fetchall():
             stored_approval_fact_from_row(connection, row)
@@ -1058,10 +1090,12 @@ class _SqliteSchemaMixin:
         validate_durable_fact_seal_inventory(
             connection,
             known_families=(
-                _DURABLE_FACT_SEAL_FAMILIES | CAPABILITY_PROVENANCE_FAMILIES | disposal_families
-                if capability_provenance else _DURABLE_FACT_SEAL_FAMILIES
+                (_DURABLE_FACT_SEAL_FAMILIES | CAPABILITY_PROVENANCE_FAMILIES | disposal_families
+                if capability_provenance else _DURABLE_FACT_SEAL_FAMILIES)
+                | (frozenset() if _pre_v10_reader(connection)
+                   else frozenset({RUN_V1_ATTESTATION_WITNESS_FAMILY}))
             ),
-            expected_count=expected_count + disposal_count,
+            expected_count=expected_count + disposal_count + attestation_witness_count,
         )
         return histories
 
@@ -1101,48 +1135,49 @@ class _SqliteSchemaMixin:
         if int(connection.execute("PRAGMA user_version").fetchone()[0]) != 6:
             connection.rollback()
             return
-        legacy_ack_through = _channel_ack_sequence_max(connection)
-        legacy_message_through = _channel_message_sequence_max(connection)
-        _SqliteSchemaMixin._ensure_v7_channel_schema(
-            connection,
-            mode="migrate",
-            legacy_ack_through=legacy_ack_through,
-            legacy_message_through=legacy_message_through,
-        )
-        invalid = connection.execute(
-            "SELECT 1 FROM channel_acks WHERE ack_provenance_version"
-            " IS NOT NULL AND ack_provenance_version != 0 LIMIT 1"
-        ).fetchone()
-        if invalid is not None:
-            raise JournalDamaged(
-                "partly migrated schema-6 acknowledgements carry current provenance"
+        with _pre_v10_attestation_reader(connection):
+            legacy_ack_through = _channel_ack_sequence_max(connection)
+            legacy_message_through = _channel_message_sequence_max(connection)
+            _SqliteSchemaMixin._ensure_v7_channel_schema(
+                connection,
+                mode="migrate",
+                legacy_ack_through=legacy_ack_through,
+                legacy_message_through=legacy_message_through,
             )
-        # The migration stamps every pre-v7 acknowledgement with a positive
-        # era before hashing it.  Current rows are version 1; NULL is never a
-        # durable compatibility signal after the climb.
-        connection.execute(
-            "UPDATE channel_acks SET ack_provenance_version = 0"
-            " WHERE ack_provenance_version IS NULL"
-        )
-        _SqliteSchemaMixin._ensure_v7_effect_schema(
-            connection,
-            mode="migrate",
-        )
-        _SqliteSchemaMixin._ensure_v7_run_schema(
-            connection,
-            mode="migrate",
-        )
-        _SqliteSchemaMixin._ensure_v7_fact_seal_schema(
-            connection,
-            mode="migrate",
-        )
-        # Legacy lease classification reads its acquisition events through the
-        # canonical sealed projector, so event seals precede lease-era seals.
-        _SqliteSchemaMixin._ensure_v7_lease_schema(
-            connection,
-            mode="migrate",
-        )
-        _SqliteSchemaMixin._validate_v7_fact_inventory(connection)
+            invalid = connection.execute(
+                "SELECT 1 FROM channel_acks WHERE ack_provenance_version"
+                " IS NOT NULL AND ack_provenance_version != 0 LIMIT 1"
+            ).fetchone()
+            if invalid is not None:
+                raise JournalDamaged(
+                    "partly migrated schema-6 acknowledgements carry current provenance"
+                )
+            # The migration stamps every pre-v7 acknowledgement with a positive
+            # era before hashing it.  Current rows are version 1; NULL is never a
+            # durable compatibility signal after the climb.
+            connection.execute(
+                "UPDATE channel_acks SET ack_provenance_version = 0"
+                " WHERE ack_provenance_version IS NULL"
+            )
+            _SqliteSchemaMixin._ensure_v7_effect_schema(
+                connection,
+                mode="migrate",
+            )
+            _SqliteSchemaMixin._ensure_v7_run_schema(
+                connection,
+                mode="migrate",
+            )
+            _SqliteSchemaMixin._ensure_v7_fact_seal_schema(
+                connection,
+                mode="migrate",
+            )
+            # Legacy lease classification reads its acquisition events through the
+            # canonical sealed projector, so event seals precede lease-era seals.
+            _SqliteSchemaMixin._ensure_v7_lease_schema(
+                connection,
+                mode="migrate",
+            )
+            _SqliteSchemaMixin._validate_v7_fact_inventory(connection)
         connection.execute("PRAGMA user_version = 7")
         connection.commit()
 

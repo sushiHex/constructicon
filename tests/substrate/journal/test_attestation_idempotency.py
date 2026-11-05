@@ -268,7 +268,7 @@ def test_a_relocated_attestation_cannot_hide_or_be_reminted(
         journal.load_attestation(attestation.attestation_id)
     with pytest.raises(JournalDamaged, match="attestation"):
         journal.load_attestation(foreign_id)
-    with pytest.raises(JournalDamaged, match="attestation"):
+    with pytest.raises(JournalDamaged, match=r"attestation|run child"):
         if lease is None:
             journal.mint_policy_attestation(draft)
         else:

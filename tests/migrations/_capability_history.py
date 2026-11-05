@@ -109,6 +109,83 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory() as directory:
         database = Path(directory) / "historical.db"
+        if shape == "attestation-baseline":
+            from constructicon.core.effect import (
+                AttestationDraft,
+                CheckResult,
+                ComponentProofSubject,
+                EffectRequest,
+                MergeSubject,
+                channel_send_subject,
+                idempotency_key,
+            )
+            from constructicon.core.identity import digest
+            from constructicon.core.registry import PromotionRecord, StoredVersion
+            from tests.conftest import BRIEF, ISSUE, atomic, triage_impl
+            from tests.migrations.test_sqlite_v6_to_v7 import RUN, _intent
+
+            assert SCHEMA_VERSION == 9, "attestation baseline requires actual schema-9 writer"
+            now = datetime(2026, 1, 1, tzinfo=UTC)
+            journal = SqliteJournal(database, now_fn=lambda: now)
+            manifest = create_test_run(journal, RUN)
+            definition, _ = atomic("history/attestation", (ISSUE,), (BRIEF,), triage_impl)
+            version = definition.content_hash()
+            journal.store_version(StoredVersion(
+                definition=definition, content_hash=version, registered_at=now,
+            ))
+            with patch("os.getpid", return_value=123):
+                worker = start_test_run(journal, RUN, owner_id="historical-writer")
+            common = dict(checks=(CheckResult(name="history", status="passed",
+                          detail="actual schema-9 writer", elapsed_s=0.0),),
+                          check_set_hash=digest("check-set", 1, {"history": True}),
+                          manifest_hash=manifest.manifest_hash)
+            promotion = journal.mint_attestation(worker, AttestationDraft(
+                action="promote", subject=ComponentProofSubject(
+                    component=definition.name, version=version, baseline_version=None,
+                ), **common,
+            ))
+            journal.store_promotion(PromotionRecord(
+                component=definition.name, channel="stable", from_version=None,
+                to_version=version, attestation_id=promotion.attestation_id,
+                actor="static:historian", source_run=RUN, created_at=now,
+            ))
+            journal.mint_policy_attestation(AttestationDraft(
+                action="promote", subject=ComponentProofSubject(
+                    component="history/policy", version=version, baseline_version=None,
+                ), **common,
+            ))
+            merge = journal.mint_attestation(worker, AttestationDraft(
+                action="merge", subject=MergeSubject(
+                    repository="history/repository", target_ref="refs/heads/main",
+                    expected_base="1" * 40, candidate="2" * 40,
+                    merge_commit="3" * 40, tested_tree="4" * 40,
+                ), **common,
+            ))
+            path = ExecutionPath(scope=ScopePath(segments=("historical-effect",)))
+            subject = {"history": True}
+            request = EffectRequest(
+                run_id=RUN, manifest_hash=manifest.manifest_hash, path=path,
+                kind="history.record", subject=subject,
+                idempotency_key=idempotency_key(manifest.manifest_hash, path,
+                                                "history.record", subject),
+                attestation_id=merge.attestation_id,
+            )
+            journal.record_effect_prepared(worker, request)
+            intent = _intent()
+            send = journal.mint_attestation(worker, AttestationDraft(
+                action="send", subject=channel_send_subject(intent), **common,
+            ))
+            journal.channel_append_request(channel_id=intent.channel_id,
+                                           intent=intent, attestation_id=send.attestation_id)
+            journal.release_run(worker)
+            SqliteJournal(database)
+            with sqlite3.connect(database) as connection:
+                print(f"-- Actual journal writer {revision}; shape {shape}; schema 9.")
+                print("-- Run-owned v1 promotion, merge and send; policy v1; retained dependents.")
+                print("\n".join(connection.iterdump()))
+                print("PRAGMA user_version = 9;")
+            connection.close()
+            return
         if shape == "disposal-baseline":
             assert SCHEMA_VERSION == 8, "disposal baseline must come from the schema-8 writer"
             fixture = (Path(__file__).parents[1]
