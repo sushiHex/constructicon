@@ -381,23 +381,79 @@ class GitAuthority:
     # -- read snapshots (exported trees) --------------------------------------
 
     def read_snapshot(self, commit: GitSha) -> ReadSnapshot:
+        """Export ``commit``'s tree and prove the export IS that tree.
+
+        ``git archive`` honours ``export-ignore``/``export-subst`` attributes,
+        so its output can omit or rewrite files. A gate run over such a
+        snapshot would attest a tree it never tested, so the exported blobs,
+        types and executable bits are compared with ``ls-tree`` before the
+        snapshot is returned; any difference refuses and removes the export.
+        """
         self._snapshot_seq += 1
         dest = self._root / "snapshots" / f"{commit[:16]}-{self._snapshot_seq}"
         dest.mkdir(parents=True)
         env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
         env.update(_PINNED_ENV)
-        archive = subprocess.run(
-            [self.git_executable, "archive", "--format=tar", commit],
-            cwd=self._repo,
-            env=env,
-            capture_output=True,
-            check=True,
-            timeout=60,
-        )
-        with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
-            tar.extractall(dest, filter="data")
+        try:
+            inventory = subprocess.run(
+                [self.git_executable, "ls-tree", "-r", "-z", "--full-tree", commit],
+                cwd=self._repo,
+                env=env,
+                capture_output=True,
+                check=True,
+                timeout=60,
+            ).stdout
+            archive = subprocess.run(
+                [self.git_executable, "archive", "--format=tar", commit],
+                cwd=self._repo,
+                env=env,
+                capture_output=True,
+                check=True,
+                timeout=60,
+            )
+            with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
+                tar.extractall(dest, filter="data")
+            self._verify_export(inventory, dest)
+        except BaseException:
+            _remove_tree(dest, best_effort=True)
+            raise
         _set_write_bits(dest, writable=False)
         return ReadSnapshot(repository=self.repository_id, commit=commit, _path=str(dest))
+
+    def _verify_export(self, inventory: bytes, root: Path) -> None:
+        """Compare exported files with the exact Git tree (path, type, blob
+        id, executable bit). Gitlinks and other entries fail closed, matching
+        the contained gate's snapshot check."""
+        expected: dict[str, tuple[str, str]] = {}
+        for entry in inventory.split(b"\0"):
+            if not entry:
+                continue
+            metadata, name = entry.split(b"\t", 1)
+            mode, kind, oid = metadata.decode("ascii").split()
+            if kind != "blob" or mode not in {"100644", "100755", "120000"}:
+                raise ContractViolation("snapshot contains an unsupported Git entry")
+            if os.name == "nt" and mode == "100755":
+                mode = "100644"  # NTFS keeps no executable bit; content/path still compared
+            expected[os.fsdecode(name)] = (mode, oid)
+        observed: dict[str, tuple[str, str]] = {}
+        for path in root.rglob("*"):
+            if path.is_symlink():
+                mode, raw = "120000", os.fsencode(os.readlink(path))
+            elif path.is_file():
+                mode = "100755" if path.stat().st_mode & 0o111 else "100644"
+                raw = path.read_bytes()
+            else:
+                continue
+            oid = hashlib.new(
+                self.environment.object_format,
+                f"blob {len(raw)}\0".encode() + raw,
+            ).hexdigest()
+            observed[path.relative_to(root).as_posix()] = (mode, oid)
+        if observed != expected:
+            raise ContractViolation(
+                "snapshot export differs from the exact Git tree "
+                "(export-ignore/export-subst or lossy export)"
+            )
 
     def discard_snapshot(self, snapshot: ReadSnapshot) -> None:
         _remove_tree(Path(snapshot.path), best_effort=True)
