@@ -9,7 +9,14 @@ from __future__ import annotations
 
 from typing import Any, Literal, Protocol
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    TypeAdapter,
+    ValidationError,
+    model_validator,
+)
 
 from constructicon.core.address import ExecutionPath, GitSha, RunId
 from constructicon.core.channel import (
@@ -33,6 +40,7 @@ CheckStatus = Literal[
     "infrastructure_error",
 ]
 EffectMode = Literal["live", "simulated"]
+_BOOL: TypeAdapter[bool] = TypeAdapter(bool)
 
 
 class CheckResult(BaseModel):
@@ -49,16 +57,28 @@ class CheckResult(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _sync_status_and_ok(cls, data: Any) -> Any:
-        if isinstance(data, dict):
-            status, ok = data.get("status"), data.get("ok")
-            if status is None and ok is not None:
-                data["status"] = "passed" if ok else "failed"
-            elif status is not None and ok is None:
-                data["ok"] = status == "passed"
-            elif status is not None and ok is not None and ok != (status == "passed"):
-                raise ValueError(
-                    f"check {data.get('name')!r}: ok={ok} contradicts status={status!r}"
-                )
+        if not isinstance(data, dict):
+            return data
+        status, ok = data.get("status"), data.get("ok")
+        if ok is not None:
+            # Judge ``ok`` after the same bool coercion the field applies, never by
+            # raw truthiness ("false" is truthy). Uncoercible values are left for
+            # field validation to refuse.
+            try:
+                ok = _BOOL.validate_python(ok)
+            except ValidationError:
+                return data
+        if status is None and ok is None:
+            return data
+        data = dict(data)  # never mutate the caller's mapping
+        if status is None:
+            data["status"] = "passed" if ok else "failed"
+        elif ok is None:
+            data["ok"] = status == "passed"
+        elif ok != (status == "passed"):
+            raise ValueError(f"check {data.get('name')!r}: ok={ok} contradicts status={status!r}")
+        else:
+            data["ok"] = ok
         return data
 
 
