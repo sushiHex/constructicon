@@ -137,6 +137,9 @@ def test_accounting_snapshot_keeps_status_and_cut_before_concurrent_commit(tmp_p
 
     def interleaved(connection, run_id, *, observe, disposal_proofs=None):
         transactions.append(connection.in_transaction)
+        # Prove the caller's snapshot before a deeper fail-closed reader can
+        # refuse it; a transaction-removal mutant must fail by assertion.
+        assert connection.in_transaction, "accounting projection lost its owned snapshot"
         result = original(connection, run_id, observe=observe, disposal_proofs=disposal_proofs)
         if not commits:
             writer.transition_capability_lease(

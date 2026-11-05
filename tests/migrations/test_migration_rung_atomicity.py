@@ -188,10 +188,19 @@ def test_a_rung_publishes_its_tables_and_its_version_together(
         return connection
 
     monkeypatch.setattr(_sqlite_base._SqliteBase, "_connect", traced)
-    SqliteJournal(database, now_fn=clock.now)
-    monkeypatch.undo()
+    failure = None
+    try:
+        SqliteJournal(database, now_fn=clock.now)
+    except JournalDamaged as exc:
+        failure = exc
+    finally:
+        monkeypatch.undo()
 
+    # A later transaction guard may refuse a premature-commit mutant. Keep
+    # the actual cross-connection publication observation as the first oracle.
+    assert seen, "the migration observer never ran"
     assert (version, True) not in seen, sorted(seen)
+    assert failure is None, f"a valid old store did not finish migration: {failure}"
 
 
 def test_a_malformed_old_store_is_still_refused_and_left_at_its_version(
