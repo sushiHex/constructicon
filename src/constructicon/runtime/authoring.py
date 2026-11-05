@@ -55,6 +55,12 @@ _LOCATED_FAULTS: dict[str, tuple[AdmissionCode, str]] = {
         "name a declared node for each connection endpoint; repair the retained definition "
         "or pin a compatible version when definition_path is present",
     ),
+    "graph_cycle": (
+        AdmissionCode.GRAPH_CYCLE,
+        "remove one connection of the cycle or express bounded feedback through Loop; "
+        "repair the retained definition or pin a compatible version when "
+        "definition_path is present",
+    ),
     "unused_map_destination": (
         AdmissionCode.GRAPH_CONTRACT_INVALID,
         "map a declared destination input; repair the retained definition or pin "
