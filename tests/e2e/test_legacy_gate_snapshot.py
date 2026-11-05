@@ -61,8 +61,15 @@ async def test_export_ignored_failing_test_cannot_pass_gates_or_merge(
 
     assert result.status is not RunStatus.SUCCEEDED
     assert world.authority.resolve_ref("refs/heads/main") == base  # nothing merged
-    kinds = [e.kind for e in journal.events(RunId("run-ignore"), limit=400)]
+    events = journal.events(RunId("run-ignore"), limit=400)
+    kinds = [e.kind for e in events]
     assert "EffectCommitted" not in kinds
+    (failure,) = [
+        event for event in events
+        if event.kind == "NodeFailed" and event.path is not None
+        and event.path.scope.segments == ("build-fix", "gate")
+    ]
+    assert "snapshot export differs from the exact Git tree" in str(failure.payload)
     snapshots = tmp_path / "workspaces" / "snapshots"
     assert not snapshots.exists() or list(snapshots.iterdir()) == []
 

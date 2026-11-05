@@ -143,6 +143,28 @@ MUTANTS = (
         "or repository != repository.resolve()", "",
         TEST + "test_absolute_repository_alias_is_not_a_canonical_recovery_route",
     ),
+    (
+        "legacy exported tree equality is load bearing",
+        "constructicon.substrate.git.authority:GitAuthority._verify_export",
+        "if observed != expected:",
+        "if False:",
+        "tests/substrate/test_git_authority.py::test_snapshot_refuses_exports_that_differ_from_the_git_tree[export-ignore]",
+    ),
+    (
+        "check result derives status after Boolean coercion",
+        "constructicon.core.effect:CheckResult._sync_status_and_ok",
+        "_BOOL.validate_python(ok)",
+        "bool(ok)",
+        "tests/core/test_check_result_status_ok.py::test_legacy_falsy_ok_without_status_fails",
+    ),
+    (
+        "merge reconciliation validates immutable proof",
+        "constructicon.substrate.effects.git:MergeVerifiedEffect.reconcile",
+        "self._verified_subject(request)",
+        "self._subject(request)",
+        "tests/e2e/test_merge_effect.py::test_walker_refuses_unproved_reconciliation_of_an_installed_merge",
+    ),
+
 )
 
 if __name__ == "__main__":

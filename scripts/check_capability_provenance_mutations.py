@@ -160,6 +160,20 @@ MUTANTS = (
         "pass  # point world proof is not a complete accounting snapshot",
         JOURNAL_TESTS + "test_external_accounting_still_requires_complete_committed_event_extent",
     ),
+    (
+        "stale early migration rung cannot overwrite a current version",
+        "constructicon.substrate.journal._sqlite_schema:_begin_rung",
+        'if int(connection.execute("PRAGMA user_version").fetchone()[0]) != expected:',
+        "if False:",
+        "tests/migrations/test_migration_rung_atomicity.py::test_every_stale_rung_is_a_no_op_on_a_current_store[5]",
+    ),
+    (
+        "early migration rung retains its write transaction through DDL",
+        "constructicon.substrate.journal._sqlite_schema:_begin_rung",
+        "return True",
+        "connection.commit()\n    return True",
+        "tests/migrations/test_migration_rung_atomicity.py::test_a_rung_publishes_its_tables_and_its_version_together[5]",
+    ),
 )
 
 

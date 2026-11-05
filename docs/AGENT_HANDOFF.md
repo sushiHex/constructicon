@@ -16,6 +16,22 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Admission, migration and Git proof correctness
+
+The [delivery record](plans/handoffs/validation-and-proof-hardening-record.md)
+covers authored cycle refusal, transactional early migration rungs, exact legacy
+snapshot/tree comparison, consistent CheckResult validation and proof-checked merge
+reconciliation. Focused permitting/refusing tests and seven assertion-killed mutants
+exercise the changed boundaries. Final CI receipts remain in the delivery PR.
+
+Independent review found defects inside three initial fixes: strict coercion,
+Windows extension-derived modes and uncapped cycle evidence. Those were corrected.
+Failing closed when an exact snapshot cannot be represented is intentional;
+accepting copied symlink contents would repeat the false tested-tree claim.
+This adds no provider availability, physical containment or live model evidence.
+Ordinary proof identity and recurring policy-edge semantics have separate decision
+issues; retained provenance and collision guards were not weakened.
+
 ## M9 fixed operator trial
 
 The [operator trial](plans/handoffs/M9-operator-trial.md) runs the reviewed
