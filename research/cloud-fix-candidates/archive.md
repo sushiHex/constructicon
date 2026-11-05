@@ -53,3 +53,16 @@ claimed.
 - Delivery handoff / implementation record left to the orchestrator.
 
 Issue: #369
+
+## Independent Windows follow-up
+
+Independent review found that Windows Python derives executable stat bits from
+extensions such as .cmd/.exe. The first candidate normalized only expected modes,
+so an ordinary exported .cmd file could falsely refuse. The follow-up normalizes
+observed regular-file modes on Windows too; POSIX exec checks remain intact.
+The ordinary accepting test now includes a harmless run.cmd file.
+
+Observed locally on Windows: the initial affected archive tests passed (20);
+after the narrow correction, the accepting attributes/modes test passed, Ruff
+and mypy on authority.py passed. Independent review of this delta found no further
+issue. Full verify/CI and physical Linux proof remain unclaimed.
