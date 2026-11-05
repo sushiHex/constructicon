@@ -101,6 +101,8 @@ source_modules = [
     "constructicon.api._maintenance_source",
     "constructicon.api._maintenance_identity",
     "constructicon.api.qualification",
+    "constructicon.api.m9_trial",
+    "constructicon.api._m9",
     "constructicon.api._qualification_write_graph",
     "constructicon.api._qualification_write_assembly",
     "constructicon.api._qualification_write_report",
@@ -116,6 +118,8 @@ type = "forbidden"
 source_modules = ["constructicon.api.mcp"]
 forbidden_modules = [
     "constructicon.api.qualification",
+    "constructicon.api.m9_trial",
+    "constructicon.api._m9",
     "constructicon.api.maintenance_entry",
     "constructicon.api._maintenance_source",
     "constructicon.api._maintenance_identity",

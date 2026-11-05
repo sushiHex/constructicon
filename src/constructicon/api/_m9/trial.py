@@ -1,0 +1,321 @@
+"""Run the fixed M9 rehearsal locally: python -m constructicon.api._m9.trial."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+from pathlib import Path
+
+from constructicon.api._m9.approval import assemble_operator_approval
+from constructicon.api._m9.evaluator import (
+    OPERATOR,
+    OWNER,
+    PROMOTER,
+    Evaluator,
+    wait_deadline,
+)
+from constructicon.api._m9.evidence import TrialIdentity
+from constructicon.api._m9.fixture import TARGET, baseline, candidate, diagnostic_definition
+from constructicon.api._m9.issuer import (
+    OPERATOR_ISSUER_PATH,
+    OPERATOR_REJECTION,
+    OperatorRejected,
+    load_manifest,
+    operator_issuer_graph,
+)
+from constructicon.api._m9.refusal import TrialRefused, check_control
+from constructicon.api._m9.safety import before_startup
+from constructicon.api.control import ControlPlane
+from constructicon.api.system import Constructicon
+from constructicon.core.address import RunId
+from constructicon.core.control import (
+    ApprovalCommandResult,
+    PromotionCommandResult,
+    RunSubmission,
+    command_id_for,
+)
+from constructicon.core.effect import ComponentProofSubject
+from constructicon.core.human import ApprovalRequestPayload
+from constructicon.core.identity import Digest, json_value
+from constructicon.core.journal import JournalEvent
+from constructicon.core.run import RunStatus
+from constructicon.substrate.journal.sqlite import SqliteJournal
+
+
+def _open(root: Path, trial: TrialIdentity, *, initialize: bool) -> SqliteJournal:
+    marker = root / "trial-id"
+    from constructicon.api._m9.proposer import source_revision
+
+    identity = f"m9-installed-v2:{trial.trial_id}:{source_revision()}\n".encode()
+    if initialize:
+        try:
+            root.mkdir()
+        except FileExistsError:
+            pass
+        else:
+            with marker.open("xb") as file:
+                file.write(identity)
+    if not marker.is_file() or marker.read_bytes() != identity:
+        raise ValueError(
+            "M9_STORE_SOURCE_OR_IDENTITY_DRIFT: use a fresh directory or the original trial key, "
+            "source and directory"
+        )
+    database = root / "journal.sqlite"
+    if not initialize and not database.is_file():
+        raise ValueError("The original trial journal is missing")
+    return SqliteJournal(database)
+
+
+def _issuance(journal: SqliteJournal, trial: TrialIdentity) -> RunSubmission:
+    command = journal.command(command_id_for(OPERATOR.actor_id, "runs_start", trial.key("issue")))
+    if command is None or command.state != "committed":
+        raise ValueError("No committed issuance submission for this trial")
+    return RunSubmission.model_validate(command.response)
+
+
+async def run(
+    root: Path, trial: TrialIdentity, stage: str, *, selection: RunId | None = None,
+) -> dict[str, object]:
+    journal = _open(root, trial, initialize=stage == "prepare")
+    from constructicon.api._m9.proposer import retained as read_selection
+    from constructicon.api._m9.safety import selector_run
+
+    selected = selector_run(trial)
+    if journal.run_record(selected) is not None:
+        if read_selection(journal, selected).choice == "baseline":
+            raise ValueError("M9_SELECTOR_BASELINE_NO_PROMOTION")
+        if selection is not None and selection != selected:
+            raise ValueError("M9_SELECTOR_RUN_IDENTITY_MISMATCH")
+        selection = selected
+    elif selection is not None:
+        raise ValueError("M9_SELECTOR_REQUIRES_COMPLETED_SELECTION")
+    if stage in ("promote", "rollback"):
+        return await _move(journal, trial, stage, selection=selection)
+
+    issue_command = journal.command(
+        command_id_for(
+            OPERATOR.actor_id,
+            "runs_start",
+            trial.key("issue"),
+        )
+    )
+    if stage != "prepare" and (issue_command is None or issue_command.state != "committed"):
+        raise ValueError("Prepare the trial before recording an owner decision")
+    initialize = stage == "prepare" and issue_command is None
+    evaluator = Evaluator.assemble(journal, initialize=initialize)
+    issuer = await evaluator.prepare(
+        trial, retained=issue_command is not None, selection=selection,
+    )
+    if issuer is None:
+        raise ValueError("M9 trial preparation produced no issuer")
+    control, _, graph = assemble_operator_approval(journal, issuer, seed=initialize)
+    before_startup(journal, trial, role="issue")
+    await control.startup()
+    try:
+        if stage == "prepare":
+            request = ApprovalRequestPayload(
+                subject=json_value(issuer.subject.model_dump(mode="json"))
+            )
+            result = await control.runs_start(
+                OPERATOR,
+                proposal=graph,
+                inputs={"request": request.model_dump(mode="json")},
+                idempotency_key=trial.key("issue"),
+            )
+            check_control(result, "prepare")
+            if not isinstance(result, RunSubmission):
+                raise TrialRefused("prepare", "M9_UNEXPECTED_CONTROL_RESULT")
+            run_id = result.run_id
+            async with wait_deadline(journal, run_id, "prepare-issuance"):
+                while True:
+                    record = journal.run_record(run_id)
+                    if record is None:
+                        raise ValueError("Issuance lacks a durable record")
+                    if record.status == RunStatus.PARKED:
+                        break
+                    if record.status not in (RunStatus.PENDING, RunStatus.RUNNING):
+                        raise ValueError(f"Issuance no longer waiting: {record.status}")
+                    await asyncio.sleep(0.01)
+            (wait,) = (wait for wait in journal.parked_waits() if wait.run_id == run_id)
+            (message,) = wait.requests
+            return {
+                "status": "awaiting-owner",
+                "run": run_id,
+                "request": message,
+                "subject": issuer.subject.model_dump(mode="json"),
+                "seal": issuer.seal,
+                "exam": issuer.projection.digest,
+            }
+
+        submission = _issuance(journal, trial)
+        run_id = submission.run_id
+        key = trial.key("decision")
+        prior = journal.command(command_id_for(OWNER.actor_id, "runs_approve", key))
+        if prior is None:
+            (wait,) = (wait for wait in journal.parked_waits() if wait.run_id == run_id)
+            (message,) = wait.requests
+        else:
+            if not isinstance(prior.request, dict) or not isinstance(
+                message_raw := prior.request.get("request_message_id"), str
+            ):
+                raise ValueError("Stored decision has no bound request")
+            message = Digest(message_raw)
+        decision = "approved" if stage == "approve" else "rejected"
+        decision_result = await control.runs_approve(
+            OWNER,
+            run_id=run_id,
+            subject=issuer.subject,
+            decision=decision,
+            reason="Local trial owner decision",
+            idempotency_key=key,
+            request_message_id=message,
+        )
+        check_control(decision_result, stage)
+        if not isinstance(decision_result, ApprovalCommandResult):
+            raise TrialRefused(stage, "M9_UNEXPECTED_CONTROL_RESULT")
+        if decision == "approved":
+            await evaluator.succeeded(submission, stage="approve-issuance", resuming=True)
+        else:
+            async with wait_deadline(journal, run_id, "reject-issuance"):
+                while True:
+                    record = journal.run_record(run_id)
+                    if record is not None and record.status == RunStatus.FAILED:
+                        break
+                    if record is None or record.status not in {
+                        RunStatus.PARKED,
+                        RunStatus.PENDING,
+                        RunStatus.RUNNING,
+                    }:
+                        raise ValueError("M9_OWNER_REJECTION_TERMINATION_MISMATCH")
+                    await asyncio.sleep(0.01)
+            _verify_rejection(journal, run_id)
+        return {"status": decision, "run": run_id, "approval": decision_result.approval_id}
+    finally:
+        await control.shutdown()
+
+
+def _verify_rejection(journal: SqliteJournal, run_id: RunId) -> None:
+    if journal.checkpoint(run_id, OPERATOR_ISSUER_PATH) is not None:
+        raise ValueError("Rejected issuance produced a proof checkpoint")
+    # runtime/walker.py: Walker._execute_or_restore emits NodeFailed from the
+    # actual exception type/message; Walker._execute then emits RunFailed.
+    head = journal.run_head(run_id)
+    expected_payload = {"error": OPERATOR_REJECTION, "error_type": OperatorRejected.__name__}
+    after = 0
+    failures: list[JournalEvent] = []
+    while events := journal.events(run_id, after_seq=after, limit=100):
+        failures.extend(event for event in events if event.kind == "NodeFailed")
+        after = events[-1].seq
+    if (
+        head is None
+        or head.record.status != RunStatus.FAILED
+        or head.event_kind != "RunFailed"
+        or len(failures) != 1
+        or failures[0].path != OPERATOR_ISSUER_PATH
+        or failures[0].payload != expected_payload
+    ):
+        raise ValueError("M9_REJECTION_CAUSE_MISMATCH: issuance did not fail on owner rejection")
+
+
+async def _move(
+    journal: SqliteJournal,
+    trial: TrialIdentity,
+    stage: str,
+    *, selection: RunId | None = None,
+) -> dict[str, object]:
+    run_id = _issuance(journal, trial).run_id
+    record = journal.run_record(run_id)
+    checkpoint = journal.checkpoint(run_id, OPERATOR_ISSUER_PATH)
+    if (
+        record is None
+        or record.status != RunStatus.SUCCEEDED
+        or checkpoint is None
+        or load_manifest(journal, run_id).source_graph != operator_issuer_graph()
+    ):
+        raise ValueError("Trial has no successful reviewed issuance")
+    proof_id = checkpoint.outputs["proof"].payload
+    proof = journal.load_attestation(proof_id)
+    subject = ComponentProofSubject(
+        component=TARGET,
+        version=diagnostic_definition(candidate).content_hash(),
+        baseline_version=diagnostic_definition(baseline).content_hash(),
+    )
+    if (
+        proof is None
+        or not proof.ok
+        or proof.action != "promote"
+        or proof.subject != subject
+        or proof.created_by_run != run_id
+        or proof.manifest_hash != record.manifest_hash
+    ):
+        raise ValueError("Trial proof does not match the successful issuance and exact edge")
+    promotion = journal.command(
+        command_id_for(
+            PROMOTER.actor_id,
+            "registry_promote",
+            trial.key("promote"),
+        )
+    )
+    if stage == "promote" and (
+        promotion is None
+        or (promotion.state == "prepared" and journal.promotion_for_attestation(proof_id) is None)
+    ):
+        await Evaluator.assemble(journal).prepare(trial, retained=True, selection=selection)
+    control = ControlPlane(system=Constructicon(journal=journal), store=journal)
+    before_startup(journal, trial, role="evaluate")
+    try:
+        await control.startup()
+        if stage == "promote":
+            result = await control.registry_promote(
+                PROMOTER,
+                component=TARGET,
+                version=subject.version,
+                attestation_id=proof_id,
+                idempotency_key=trial.key("promote"),
+            )
+            expected: tuple[str, Digest | None, Digest | None] = (
+                "promoted", subject.baseline_version, subject.version
+            )
+        else:
+            if promotion is None or promotion.state != "committed":
+                raise ValueError("Trial has no committed promotion to roll back")
+            result = await control.registry_rollback(
+                PROMOTER,
+                component=TARGET,
+                expected_stable=subject.version,
+                idempotency_key=trial.key("rollback"),
+            )
+            expected = ("rolled_back", subject.version, subject.baseline_version)
+        check_control(result, stage)
+        if (
+            not isinstance(result, PromotionCommandResult)
+            or (result.status, result.from_version, result.to_version) != expected
+        ):
+            raise TrialRefused(stage, "M9_UNEXPECTED_CONTROL_RESULT")
+        return {
+            "status": result.status,
+            "from": result.from_version,
+            "to": result.to_version,
+            "proof": proof_id,
+            "replayed": result.command.replayed,
+        }
+    finally:
+        await control.shutdown()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("stage", choices=("prepare", "approve", "reject", "promote", "rollback"))
+    parser.add_argument("--trial", required=True)
+    parser.add_argument("--store", required=True, type=Path)
+    args = parser.parse_args()
+    try:
+        result = asyncio.run(run(args.store, TrialIdentity(args.trial), args.stage))
+    except (ValueError, TimeoutError) as error:
+        parser.exit(1, f"Trial stopped: {error}\n")
+    print(json.dumps(json_value(result), sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()

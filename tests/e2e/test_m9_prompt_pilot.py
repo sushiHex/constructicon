@@ -6,6 +6,7 @@ from dataclasses import replace
 
 import pytest
 
+from constructicon.api._m9.component import atomic
 from constructicon.api.control import ControlPlane
 from constructicon.api.run_host import LaunchDisposition, RunHost
 from constructicon.api.system import Constructicon
@@ -36,7 +37,7 @@ from constructicon.sdk.types import DefinitionBundle
 from constructicon.substrate.effects.fake import FakeAnnounceEffect
 from constructicon.substrate.executors.fake import FakeExecutor
 from constructicon.substrate.journal.sqlite import SqliteJournal
-from tests.conftest import atomic, await_attempt_terminal, build_system
+from tests.conftest import await_attempt_terminal, build_system
 from tests.e2e.m9_evidence import (
     CURATOR,
     PROJECTION,
