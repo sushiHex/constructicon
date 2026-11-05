@@ -1,4 +1,4 @@
-"""Prove both registry-store duplicate guards use canonical definitions."""
+"""Prove canonical registry definitions and fresh rollback proof custody."""
 
 from _mutations import run
 
@@ -21,6 +21,14 @@ MUTANTS = (
         "if same_definition(retained.definition, version.definition):",
         "if retained.definition == version.definition:",
         TEST,
+    ),
+    (
+        "fresh rollback cannot reuse a consumed policy proof",
+        "constructicon.runtime.registry:ComponentRegistry.plan_rollback",
+        "if prior is not None:",
+        "if False:",
+        "tests/api/test_control_response_loss.py::"
+        "test_recurring_rollback_refuses_used_proof_and_replays_history",
     ),
 )
 

@@ -350,6 +350,11 @@ runs keep their pinned resolution. A *candidate* is a query (any eligible
 unpromoted version), never a channel. `rdeps(name)` answers what a change
 touches before it is changed.
 
+A fresh rollback plan refuses with `control.registry.rollback_proof_used` when
+its deterministic policy proof already has a promotion receipt. A completed
+command replay or reconciliation of an already persisted plan retains its
+historical receipt; that receipt does not certify the current stable pointer.
+
 Atomic M5 components may declare required capability aliases and descriptor
 kinds. `None` means a historical capability-opaque definition; `()` means a
 complete declaration with no capabilities. Complete declarations participate

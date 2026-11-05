@@ -28,11 +28,11 @@ index; a draft is not approved merely because it is present here. After approval
 preserve the plan as written and add a successor or implementation record when
 the eventual code differs.
 
-## Proposed decisions
+## Decision proposals
 
 | Record | Status |
 | --- | --- |
-| [Run-scoped ordinary attestation identity](handoffs/run-scoped-attestation-identity-proposal.md) | Proposed for #371; pending explicit owner acceptance. Preserves historical proofs and policy IDs; authorizes no implementation |
+| [Run-scoped ordinary attestation identity](handoffs/run-scoped-attestation-identity-proposal.md) | Accepted by the owner on 2026-11-05; [ADR 0023](../adr/0023-ordinary-attestations-bind-their-minting-run.md) records adoption and implementation authority. Original proposal bytes are preserved; runtime evidence is separate |
 
 ## System-design lineage
 

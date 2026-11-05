@@ -69,3 +69,9 @@ cleanup. The owner accepted the decision and implementation sequence on
 2026-10-13, tracked by [#143](https://github.com/sushiHex/constructicon/issues/143).
 Acceptance does not implement or expose disposal. Implementation follows in
 separate provenance, accounting and command slices after #132's merge.
+
+Accepted [ADR 0023](0023-ordinary-attestations-bind-their-minting-run.md)
+records run-scoped ordinary attestation identities and a positively witnessed,
+closed historical v1 era. The owner accepted the proposal and implementation
+in the 2026-11-05 wave. Policy IDs, historical proof bytes and one-proof/one-move
+semantics remain unchanged; implementation evidence belongs in the delivery PR.
