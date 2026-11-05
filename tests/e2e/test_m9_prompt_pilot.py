@@ -44,10 +44,12 @@ from tests.e2e.m9_evidence import (
     RETAINED,
     Exam,
     curator_graph,
+    fixed_exam,
     project_case,
     projection_ref,
     proposer_definition,
     proposer_graph,
+    read_fixed_projection,
     read_projection,
     retain_projection,
     suggest,
@@ -180,6 +182,12 @@ async def test_diagnostic_prompt_counterfactual(
         with pytest.raises(ValueError, match="non-overlapping"):
             Exam(fixture=fixture, cases=(projected[0], projected[0], projected[2])).canonical()
         raw = Exam(fixture=fixture, cases=tuple(projected)).canonical()
+        source_runs = tuple(row.source_run for row in projected)
+        assert fixed_exam(
+            journal, source_runs, fixture=fixture, baseline=old, impact=report
+        ).canonical() == raw
+        with pytest.raises(ValueError, match="allowlisted case"):
+            fixed_exam(journal, source_runs[::-1], fixture=fixture, baseline=old, impact=report)
         reference = projection_ref(raw)
         seal = await control.runs_start(
             OPERATOR,
@@ -192,6 +200,44 @@ async def test_diagnostic_prompt_counterfactual(
             await await_attempt_terminal(journal, seal.run_id, baseline_event_seq=0)
         ).kind == "RunSucceeded"
         exam = read_projection(journal, seal.run_id, reference)
+        assert read_fixed_projection(
+            journal,
+            seal.run_id,
+            reference,
+            source_runs=source_runs,
+            fixture=fixture,
+            baseline=old,
+            impact=report,
+        ) == exam
+        tampered_rows = (
+            projected[0].model_copy(
+                update={
+                    "expected": Diagnosis(classification="storage", evidence_id="train-1"),
+                },
+            ),
+            *projected[1:],
+        )
+        tampered_raw = Exam(fixture=fixture, cases=tampered_rows).canonical()
+        tampered = await control.runs_start(
+            OPERATOR,
+            proposal=curator_graph(),
+            inputs={"projection": tampered_raw},
+            idempotency_key="seal-tampered-label",
+        )
+        assert isinstance(tampered, RunSubmission)
+        assert (
+            await await_attempt_terminal(journal, tampered.run_id, baseline_event_seq=0)
+        ).kind == "RunSucceeded"
+        with pytest.raises(ValueError, match="sealed bytes differ from the fixed trial exam"):
+            read_fixed_projection(
+                journal,
+                tampered.run_id,
+                projection_ref(tampered_raw),
+                source_runs=source_runs,
+                fixture=fixture,
+                baseline=old,
+                impact=report,
+            )
         train = exam.training_projection()
         training_bytes = canonical_json(train)
         assert "train-1" in training_bytes

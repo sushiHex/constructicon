@@ -13,7 +13,8 @@ from constructicon.core.control import ControlStore
 from constructicon.core.effect import AttestationDraft, CheckResult, ComponentProofSubject
 from constructicon.core.envelope import ArtifactRef
 from constructicon.core.grants import Posture
-from constructicon.core.graph import Graph, GraphNode, Ref
+from constructicon.core.graph import Connection, Graph, GraphNode, Ref
+from constructicon.core.human import ApprovalDecisionPayload
 from constructicon.core.identity import ActorId, Digest, canonical_json, digest
 from constructicon.core.journal import Journal
 from constructicon.core.manifest import (
@@ -37,6 +38,8 @@ from constructicon.core.workspace import (
     lease_id_for,
 )
 from constructicon.runtime.context import NodeContext
+from constructicon.sdk.std import APPROVAL_CHANNEL, APPROVAL_COMPONENT, definitions
+from constructicon.sdk.types import DefinitionBundle
 from constructicon.substrate.executors.fake import FakeExecutor
 from tests.e2e import m9_evidence, m9_fixture
 from tests.e2e.m9_evidence import (
@@ -53,6 +56,9 @@ from tests.e2e.m9_fixture import DEPENDENT, PROVIDER, REVISION, TARGET, Diagnosi
 
 ISSUER = "test/m9-issuer"
 ISSUER_CAP = "m9-issuer"
+OPERATOR_ISSUER = "test/m9-operator-issuer"
+OPERATOR_CHANNEL = "channel/m9-trial-approval"
+OPERATOR_ISSUER_PATH = ExecutionPath(scope=ScopePath(segments=("m9-operator-issue", "issue")))
 ISSUER_PATH = ExecutionPath(scope=ScopePath(segments=("m9-issue", "issue")))
 APPROVAL = Port(name="approval", type_id="test/M9ApprovalId", schema_hash="m9-approval-v1")
 PROOF = Port(name="proof", type_id="test/M9ProofId", schema_hash="m9-proof-v1")
@@ -136,11 +142,17 @@ class Issuer:
     fixture: Digest
     reverse_dependencies: Callable[[str], list[str]]
     current_manifest: Callable[[dict[str, Any]], ExecutionManifest]
+    operator_mailbox: bool = False
 
     async def acquire(self, context: LeaseContext) -> AcquiredCapability:
+        path, graph = (
+            (OPERATOR_ISSUER_PATH, operator_issuer_graph())
+            if self.operator_mailbox
+            else (ISSUER_PATH, issuer_graph())
+        )
         if (
-            context.path != ISSUER_PATH
-            or context.source_graph_hash != source_graph_hash_for(issuer_graph())
+            context.path != path
+            or context.source_graph_hash != source_graph_hash_for(graph)
             or context.binding.capability_id != ISSUER_CAP
             or context.binding.revision != "1"
         ):
@@ -295,10 +307,13 @@ class Issuer:
             expected_inputs = {"case": row.case.model_dump(mode="json")}
             if source.source_graph_hash != source_graph_hash_for(m9_fixture.report_graph()):
                 raise ValueError("M9 source is not the reviewed impact graph")
-            if (
-                self.current_manifest(expected_inputs).capability_bindings
-                != source.capability_bindings
+            current = self.current_manifest(expected_inputs)
+            if self.operator_mailbox and (
+                current.resolved_components != source.resolved_components
+                or current.resolved_connections != source.resolved_connections
             ):
+                raise ValueError("M9 current baseline or impact revision changed")
+            if current.capability_bindings != source.capability_bindings:
                 raise ValueError("M9 capability grants or provider revision changed")
             targets = tuple(r for r in source.resolved_components if r.component == TARGET)
             dependents = tuple(r for r in source.resolved_components if r.component == DEPENDENT)
@@ -456,5 +471,46 @@ def issuer_graph() -> Graph:
         name="m9-issue",
         nodes=(GraphNode(id="issue", body=Ref(component=ISSUER, bind={"issuer": ISSUER_CAP})),),
         inputs=(APPROVAL,),
+        outputs=(PROOF,),
+    )
+
+
+async def issue_from_operator_decision(
+    ctx: NodeContext, inputs: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    authority = ctx.capability("issuer")
+    if not isinstance(authority, BoundIssuer):
+        raise ValueError("M9 operator issuance requires its exact lease")
+    approval = ApprovalDecisionPayload.model_validate(inputs["decision"]).approval
+    retained = authority.issuer.approvals.approval(approval.approval_id)
+    if retained != approval:
+        raise ValueError("M9 operator issuance requires the exact retained decision")
+    if approval.decision == "rejected":
+        raise ValueError("M9 operator rejected this candidate")
+    return {"proof": authority.issue(approval.approval_id)}
+
+
+def operator_approval_bundle() -> DefinitionBundle:
+    return next(bundle for bundle in definitions() if bundle.name == APPROVAL_COMPONENT)
+
+
+def operator_issuer_graph() -> Graph:
+    return Graph(
+        name="m9-operator-issue",
+        nodes=(
+            GraphNode(
+                id="gate",
+                body=Ref(
+                    component=APPROVAL_COMPONENT,
+                    bind={APPROVAL_CHANNEL: OPERATOR_CHANNEL},
+                ),
+            ),
+            GraphNode(
+                id="issue",
+                body=Ref(component=OPERATOR_ISSUER, bind={"issuer": ISSUER_CAP}),
+            ),
+        ),
+        connections=(Connection(src="gate", dst="issue"),),
+        inputs=operator_approval_bundle().definition.inputs,
         outputs=(PROOF,),
     )
