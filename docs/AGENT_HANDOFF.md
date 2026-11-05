@@ -16,6 +16,22 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Installed M9 fixed model selector
+
+The [guide and evidence](plans/handoffs/M9-model-selector-guide.md) cover the
+installed local entry: existing Codex READ selects one catalog ID from sealed
+training only, then the scripted exam and owner mailbox control proof,
+promotion, replay and rollback. The accepting path uses the actual adapter
+with a scripted peer and the runtime-only CLI. Completed selection replays
+without host assembly; an incomplete attempt stops before another dispatch.
+A baseline choice is a valid no-promotion result.
+
+The move exposed a fixture's nonexistent lease acquisition field and implicit
+startup inside mutations. The entry uses the existing acquisition identity
+producer and guards startup roles before those calls. Pins/mint assemble trusted
+Git state; they are not read-only probes. No live model, current host
+qualification or real prompt-quality result is established here.
+
 ## Ordinary proof identity and recurring rollback
 
 [ADR 0023](adr/0023-ordinary-attestations-bind-their-minting-run.md) records the

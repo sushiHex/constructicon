@@ -901,8 +901,12 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   [M8_CI.md](M8_CI.md). See
   [ADR 0018](adr/0018-live-executors-are-leased-contained-processes.md) and the
   [implementation record](plans/handoffs/M8-implementation-record.md).
-- **M9** — self-improvement phase 1 (prompt/context skills); see
-  [designs/SELF_IMPROVEMENT.md](designs/SELF_IMPROVEMENT.md).
+- **M9** — self-improvement phase 1 (prompt/context skills). The installed
+  [fixed selector trial](plans/handoffs/M9-model-selector-guide.md) composes an
+  exact Codex READ catalog choice with the scripted exam, owner approval,
+  journal proof, promotion replay and rollback. Credential-free proofs
+  establish the composition, not current live availability or prompt quality.
+  See [designs/SELF_IMPROVEMENT.md](designs/SELF_IMPROVEMENT.md).
 
 ## Non-negotiable failure tests
 
