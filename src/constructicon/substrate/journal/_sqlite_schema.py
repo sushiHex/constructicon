@@ -295,6 +295,30 @@ def _ddl_statements(*scripts: str) -> tuple[str, ...]:
 
 
 _CURRENT_SCHEMA_DDL = _ddl_statements(_SCHEMA, _V5_SCHEMA, _V6_SCHEMA)
+_BASE_SCHEMA_DDL = _ddl_statements(_SCHEMA)
+_V5_SCHEMA_DDL = _ddl_statements(_V5_SCHEMA)
+_V6_SCHEMA_DDL = _ddl_statements(_V6_SCHEMA)
+
+
+def _begin_rung(connection: sqlite3.Connection, expected: int) -> bool:
+    """Take the write lock for one ladder rung, or say the rung is not ours.
+
+    The version that chose a rung was read before this opener held the write
+    lock, so another process may have climbed it — or the whole ladder — in
+    between. Running a stale rung can downgrade `user_version` or re-stamp
+    current rows as history, and ADR 0016 forbids healing on open, so the loser
+    would condemn a healthy store for good. Re-reading the version under the
+    held lock is what makes each rung a no-op for a stale opener.
+
+    Every rung must keep the lock until its own commit: no `executescript`
+    (which commits first) may sit between this call and that commit.
+    """
+
+    connection.execute("BEGIN IMMEDIATE")
+    if int(connection.execute("PRAGMA user_version").fetchone()[0]) != expected:
+        connection.rollback()
+        return False
+    return True
 
 
 class _SqliteSchemaMixin:
@@ -487,8 +511,10 @@ class _SqliteSchemaMixin:
 
     @staticmethod
     def _migrate_m4_to_m5(connection: sqlite3.Connection) -> None:
-        connection.execute("BEGIN IMMEDIATE")
-        connection.executescript(_V5_SCHEMA)
+        if not _begin_rung(connection, 4):
+            return
+        for statement in _V5_SCHEMA_DDL:
+            connection.execute(statement)
         connection.execute("PRAGMA user_version = 5")
         connection.commit()
 
@@ -1128,8 +1154,10 @@ class _SqliteSchemaMixin:
         promotion row is read or rewritten.
         """
 
-        connection.execute("BEGIN IMMEDIATE")
-        connection.executescript(_V6_SCHEMA)
+        if not _begin_rung(connection, 5):
+            return
+        for statement in _V6_SCHEMA_DDL:
+            connection.execute(statement)
         connection.execute("PRAGMA user_version = 6")
         connection.commit()
 
@@ -1258,7 +1286,8 @@ class _SqliteSchemaMixin:
     def _migrate_m1_to_m2(self, conn: sqlite3.Connection) -> None:
         """In-place M1 -> M2: additive columns, new tables, inputs backfilled
         from each run's RunStarted event, sequence counters backfilled."""
-        conn.execute("BEGIN IMMEDIATE")
+        if not _begin_rung(conn, 0):
+            return
         run_columns = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
         additions = {
             "inputs_json": "TEXT NOT NULL DEFAULT '{}'",
@@ -1288,7 +1317,8 @@ class _SqliteSchemaMixin:
                     "UPDATE checkpoints SET identity = ? WHERE run_id = ? AND path_key = ?",
                     (_checkpoint_identity(checkpoint), row["run_id"], row["path_key"]),
                 )
-        conn.executescript(_SCHEMA)  # creates the tables M1 lacked
+        for statement in _BASE_SCHEMA_DDL:  # creates the tables M1 lacked
+            conn.execute(statement)
         # backfill durable inputs from RunStarted events (M1's archaeology, once)
         for row in conn.execute("SELECT run_id FROM runs").fetchall():
             run_id = _durable_text(
@@ -1345,6 +1375,8 @@ class _SqliteSchemaMixin:
 
     def _migrate_m2_to_m3(self, conn: sqlite3.Connection) -> None:
         """Add the historical M3 capability lease table (static scope)."""
+        if not _begin_rung(conn, 2):
+            return
         conn.execute(
             """CREATE TABLE IF NOT EXISTS capability_leases (
                 lease_id          TEXT NOT NULL,
@@ -1372,7 +1404,8 @@ class _SqliteSchemaMixin:
         resource refs remain byte-identical for row-driven reconciliation.
         """
 
-        conn.execute("BEGIN IMMEDIATE")
+        if not _begin_rung(conn, 3):
+            return
         rows = conn.execute(
             "SELECT lease_id, acquisition_epoch, scope_json, lifetime, state,"
             " disposition FROM capability_leases"
