@@ -28,6 +28,12 @@ index; a draft is not approved merely because it is present here. After approval
 preserve the plan as written and add a successor or implementation record when
 the eventual code differs.
 
+## Proposed decisions
+
+| Record | Status |
+| --- | --- |
+| [Run-scoped ordinary attestation identity](handoffs/run-scoped-attestation-identity-proposal.md) | Proposed for #371; pending explicit owner acceptance. Preserves historical proofs and policy IDs; authorizes no implementation |
+
 ## System-design lineage
 
 | Record | Provenance | Status |
