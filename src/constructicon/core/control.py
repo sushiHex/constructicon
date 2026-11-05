@@ -90,6 +90,7 @@ class ControlCode(StrEnum):
     RUN_NOT_RESUMABLE = "control.run.not_resumable"
     COUNTERFACTUAL_LOCK_MISMATCH = "control.counterfactual.lock_mismatch"
     REGISTRY_STABLE_MOVED = "control.registry.stable_moved"
+    REGISTRY_ROLLBACK_PROOF_USED = "control.registry.rollback_proof_used"
     REGISTRY_VERSION_UNKNOWN = "control.registry.version_unknown"
     APPROVAL_INVALID_SUBJECT = "control.approval.invalid_subject"
     APPROVAL_RUN_MISMATCH = "control.approval.run_mismatch"

@@ -255,3 +255,17 @@ def test_rdeps_names_dependents(world: Constructicon) -> None:
     )
     world._register(composite)
     assert "test/pipeline" in world.rdeps("test/triage")
+
+
+def test_direct_recurring_rollback_refuses_consumed_proof(system: Constructicon) -> None:
+    definition, impl = atomic("test/recurring-direct", (ISSUE,), (BRIEF,), triage_impl)
+    v1 = system._register(definition, impl)
+    system._promote_initial(component="test/recurring-direct", version=v1)
+    v2 = system._register(definition.model_copy(update={"role": "component"}), impl)
+    evaluated_promotion(system, "test/recurring-direct", v2, baseline=v1)
+    system._rollback_version(component="test/recurring-direct", actor="operator")
+    system._rollback_version(component="test/recurring-direct", actor="operator")
+    with pytest.raises(AdmissionError, match=r"rollback policy proof.*already used"):
+        system._rollback_version(component="test/recurring-direct", actor="operator")
+    assert system._registry.stable_version("test/recurring-direct") == v2
+    assert len(system._registry.snapshot().history["test/recurring-direct"]) == 4

@@ -2062,3 +2062,120 @@ async def test_current_resume_wire_downgrade_requires_migration_era_evidence(
     ):
         await control.runs_resume(RUN_ACTOR, run_id=run_id, idempotency_key=key)
     await control.shutdown()
+
+
+async def test_recurring_rollback_refuses_used_proof_and_replays_history(
+    world: Any, journal: SqliteJournal,
+) -> None:
+    component = "control/recurring-rollback"
+    v1, v2, attestation_id = _candidate(world, component)
+    control = _fresh_control(world, journal, "recurrence")
+    promoted = await control.registry_promote(
+        AUTHORITY_ACTOR, component=component, version=v2,
+        attestation_id=attestation_id, idempotency_key="promote-v2",
+    )
+    assert isinstance(promoted, PromotionCommandResult)
+    first = await control.registry_rollback(
+        AUTHORITY_ACTOR, component=component, expected_stable=v2,
+        idempotency_key="rollback-v2-first",
+    )
+    assert isinstance(first, PromotionCommandResult) and first.to_version == v1
+    second = await control.registry_rollback(
+        AUTHORITY_ACTOR, component=component, expected_stable=v1,
+        idempotency_key="rollback-v1",
+    )
+    assert isinstance(second, PromotionCommandResult) and second.to_version == v2
+    third = await control.registry_rollback(
+        AUTHORITY_ACTOR, component=component, expected_stable=v2,
+        idempotency_key="rollback-v2-again",
+    )
+    assert isinstance(third, ControlRejected)
+    assert third.faults[0].code is ControlCode.REGISTRY_ROLLBACK_PROOF_USED
+    assert await control.registry_rollback(
+        AUTHORITY_ACTOR, component=component, expected_stable=v2,
+        idempotency_key="rollback-v2-again",
+    ) == third
+    replay = await control.registry_rollback(
+        AUTHORITY_ACTOR, component=component, expected_stable=v2,
+        idempotency_key="rollback-v2-first",
+    )
+    assert isinstance(replay, PromotionCommandResult)
+    assert replay.to_version == v1 and replay.command.replayed is True
+    assert world._registry.stable_version(component) == v2
+    assert len(world._registry.snapshot().history[component]) == 4
+    await control.shutdown()
+
+
+async def test_preplanned_rollback_reconciles_receipt_after_later_move(
+    world: Any, journal: SqliteJournal, clock: FakeClock,
+) -> None:
+    component = "control/preplanned-rollback"
+    v1, v2, attestation = _candidate(world, component)
+    world._promote_version(
+        component=component, version=v2, attestation_id=attestation, actor="setup",
+    )
+    crashing = _fresh_control(
+        world, journal, "preplanned-a", fault_probe=_crash_at("registry_rollback", "after_plan"),
+    )
+    with pytest.raises(InjectedCrash):
+        await crashing.registry_rollback(
+            AUTHORITY_ACTOR, component=component, expected_stable=v2, idempotency_key="preplanned",
+        )
+    other = _fresh_control(world, journal, "preplanned-b")
+    first = await other.registry_rollback(
+        AUTHORITY_ACTOR, component=component, expected_stable=v2, idempotency_key="other-first",
+    )
+    assert isinstance(first, PromotionCommandResult)
+    second = await other.registry_rollback(
+        AUTHORITY_ACTOR, component=component, expected_stable=v1, idempotency_key="other-second",
+    )
+    assert isinstance(second, PromotionCommandResult)
+    clock.advance(31)
+    recovered = await other.registry_rollback(
+        AUTHORITY_ACTOR, component=component, expected_stable=v2, idempotency_key="preplanned",
+    )
+    assert isinstance(recovered, PromotionCommandResult)
+    assert recovered.to_version == v1 and recovered.command.replayed is False
+    assert world._registry.stable_version(component) == v2
+    assert len(world._registry.snapshot().history[component]) == 4
+    await crashing.shutdown()
+    await other.shutdown()
+
+
+@pytest.mark.parametrize("seam", ("after_plan", "after_command_completion"))
+async def test_consumed_rollback_refusal_recovers(
+    seam: str, world: Any, journal: SqliteJournal, clock: FakeClock,
+) -> None:
+    component = f"control/consumed-{seam.replace('_', '-')}"
+    v1, v2, attestation = _candidate(world, component)
+    setup = _fresh_control(world, journal, "consumed-setup")
+    promoted = await setup.registry_promote(
+        AUTHORITY_ACTOR, component=component, version=v2,
+        attestation_id=attestation, idempotency_key="promote",
+    )
+    assert isinstance(promoted, PromotionCommandResult)
+    for baseline, key in ((v2, "first"), (v1, "second")):
+        result = await setup.registry_rollback(
+            AUTHORITY_ACTOR, component=component, expected_stable=baseline, idempotency_key=key,
+        )
+        assert isinstance(result, PromotionCommandResult)
+    crashing = _fresh_control(
+        world, journal, "consumed-crash", fault_probe=_crash_at("registry_rollback", seam),
+    )
+    with pytest.raises(InjectedCrash):
+        await crashing.registry_rollback(
+            AUTHORITY_ACTOR, component=component, expected_stable=v2, idempotency_key="refused",
+        )
+    clock.advance(31)
+    result = await setup.registry_rollback(
+        AUTHORITY_ACTOR, component=component, expected_stable=v2, idempotency_key="refused",
+    )
+    assert isinstance(result, ControlRejected)
+    assert result.faults[0].code is ControlCode.REGISTRY_ROLLBACK_PROOF_USED
+    assert await setup.registry_rollback(
+        AUTHORITY_ACTOR, component=component, expected_stable=v2, idempotency_key="refused",
+    ) == result
+    assert world._registry.stable_version(component) == v2
+    assert len(world._registry.snapshot().history[component]) == 4
+    await setup.shutdown()
+    await crashing.shutdown()

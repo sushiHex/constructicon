@@ -60,6 +60,10 @@ class RegistryError(ConstructiconError):
     pass
 
 
+class RollbackProofConsumed(AdmissionError):
+    """A fresh rollback cannot spend an already-used policy proof."""
+
+
 @dataclass(frozen=True)
 class CapabilityDescriptor:
     """What the catalog exposes about an injectable capability — never the object."""
@@ -823,37 +827,11 @@ class ComponentRegistry:
         actor: str,
         expected_stable: Digest | None = None,
     ) -> PromotionRecord:
-        snapshot = self.store.snapshot()
-        current = snapshot.stable_version(component)
-        if expected_stable is not None and current != expected_stable:
-            raise AdmissionError(
-                [
-                    f"rollback of {component!r} refused: expected stable "
-                    f"{expected_stable}, found {current}"
-                ]
-            )
-        if current is None:
-            raise RegistryError(f"component {component!r} has no stable version to roll back")
-        previous: str | None = None
-        for from_version, to_version in reversed(snapshot.history.get(component, ())):
-            if to_version == str(current):
-                previous = from_version
-                break
-        if previous is None:
-            raise RegistryError(
-                f"component {component!r} has no earlier stable version to roll back to"
-            )
-        attestation = self._mint_policy_attestation(
-            journal,
-            component=component,
-            version=Digest(previous),
-            baseline=current,
-            policy="rollback",
-            detail=f"pointer move back from {current} to retained {previous}",
-        )
+        planned = self.plan_rollback(component=component, expected_stable=expected_stable)
+        attestation = journal.mint_policy_attestation(planned.draft)
         return self.promote(
             component=component,
-            version=Digest(previous),
+            version=planned.target,
             attestation_id=attestation.attestation_id,
             actor=actor,
             journal=journal,
@@ -909,11 +887,25 @@ class ComponentRegistry:
             raise RegistryError(
                 f"component {component!r} has no earlier stable version to roll back to"
             )
-        return self.plan_rollback_edge(
+        planned = self.plan_rollback_edge(
             component=component,
             baseline=current,
             target=Digest(previous),
         )
+        prior = self.store.promotion_for_attestation(planned.attestation_id)
+        if prior is not None:
+            if (
+                prior.component != component
+                or prior.channel != "stable"
+                or prior.from_version != current
+                or prior.to_version != planned.target
+                or prior.source_run is not None
+            ):
+                raise JournalDamaged("rollback policy proof names a contradictory promotion")
+            raise RollbackProofConsumed(
+                [f"rollback policy proof for {component!r} was already used for this edge"]
+            )
+        return planned
 
     def plan_rollback_edge(
         self,
