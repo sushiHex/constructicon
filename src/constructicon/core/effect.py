@@ -77,8 +77,6 @@ class CheckResult(BaseModel):
             data["ok"] = status == "passed"
         elif ok != (status == "passed"):
             raise ValueError(f"check {data.get('name')!r}: ok={ok} contradicts status={status!r}")
-        else:
-            data["ok"] = ok
         return data
 
 
