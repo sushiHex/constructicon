@@ -66,7 +66,10 @@ class MergeVerifiedEffect:
         )
 
     async def reconcile(self, request: EffectRequest) -> EffectReceipt | None:
-        subject = self._subject(request)
+        # Reconciliation may restore an external marker, so an installed object
+        # is not a substitute for the request's proof. These checks bind only
+        # immutable evidence; a later target move must not erase a valid install.
+        subject = self._verified_subject(request)
         committed = self._authority.reconcile_install(subject, request.idempotency_key)
         if committed:
             return EffectReceipt(
