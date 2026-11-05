@@ -16,6 +16,23 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Ordinary proof identity and recurring rollback
+
+[ADR 0023](adr/0023-ordinary-attestations-bind-their-minting-run.md) records the
+owner's adoption of run-scoped ordinary proofs and a closed historical v1 era.
+The [delivery record](plans/handoffs/run-attestation-v2-and-rollback-record.md)
+explains schema 10, retained historical bytes, exact retries, positive era
+witnesses and canonical creator validation before filtered reads. Policy IDs
+and one-proof/one-move semantics remain unchanged. A fresh rollback refuses an
+already used policy proof; historical command/plan recovery still returns its
+original receipt, which does not certify the current pointer.
+
+Independent review exposed that a partial SQL creator check still omitted the
+creation-command/clone chain; sharing the canonical projector closed that
+class. Historical fixture and old-reader behavior were reproduced rather than
+inferred. The distinct-creator prefilter's scaling cost remains unmeasured.
+No live executor or model-quality claim follows from this slice.
+
 ## Admission, migration and Git proof correctness
 
 The [delivery record](plans/handoffs/validation-and-proof-hardening-record.md)

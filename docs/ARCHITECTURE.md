@@ -657,9 +657,15 @@ input hash and resolved version restores; the first miss resumes live.
 Reproduce starts a new run under a past run's exact manifest and inputs.
 
 One public `SqliteJournal` implements the separate L0 `Journal`,
-`RegistryStore`, and `ControlPlaneStore` contracts over one schema-9 WAL
+`RegistryStore`, and `ControlPlaneStore` contracts over one schema-10 WAL
 database. `ControlPlaneStore` extends the standalone `ControlStore` ledger with
-the transaction that must also own channel facts. Its private modules are named
+the transaction that must also own channel facts. New ordinary attestations
+bind their fenced minting run in the v2 identity; policy IDs remain v1.
+Migration preserves historical proof bytes, IDs, references and primary seals,
+adding exact positive witnesses for retained ordinary-v1 proofs. Current point
+and SQL readers require the same witness and creator-world authority; reopening
+does not repair missing evidence. See [ADR 0023](adr/0023-ordinary-attestations-bind-their-minting-run.md).
+Its private modules are named
 by enduring responsibility:
 
 ```text
