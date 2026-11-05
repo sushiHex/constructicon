@@ -312,3 +312,67 @@ def test_discarding_an_already_removed_tree_is_never_a_caller_fault(
     )
     assert authority.discard_staging("acq-discard") is True
     assert authority.discard_staging("acq-discard") is False
+
+
+def _commit_files(
+    authority: GitAuthority, tag: str, files: dict[str, str], *, executable: str | None = None
+) -> GitSha:
+    workspace = authority.acquire_write(
+        acquisition_id=f"acq-{tag}",
+        target_ref="refs/heads/main",
+        candidate_ref=f"refs/candidates/run-test/acq-{tag}",
+    )
+    for name, content in files.items():
+        Path(workspace.path, name).write_text(content, newline="\n")
+    if executable is not None:
+        os.chmod(Path(workspace.path, executable), 0o755)
+    return workspace.commit_all(f"candidate {tag}")
+
+
+def _snapshot_dirs(authority: GitAuthority, tmp_path: Path) -> list[str]:
+    root = tmp_path / "workspaces" / "snapshots"
+    return sorted(p.name for p in root.iterdir()) if root.exists() else []
+
+
+@pytest.mark.parametrize(
+    ("files", "attributes"),
+    [
+        pytest.param({"test_bad.py": "def test_x():\n    assert False\n"},
+                     "test_bad.py export-ignore\n", id="export-ignore"),
+        pytest.param({"stamp.txt": "$Format:%H$\n"},
+                     "stamp.txt export-subst\n", id="export-subst"),
+        pytest.param({"crlf.txt": "a\nb\n"},
+                     "crlf.txt text eol=crlf\n", id="eol-conversion"),
+    ],
+)
+def test_snapshot_refuses_exports_that_differ_from_the_git_tree(
+    authority: GitAuthority, tmp_path: Path, files: dict[str, str], attributes: str
+) -> None:
+    candidate = _commit_files(authority, "attr", {**files, ".gitattributes": attributes})
+    with pytest.raises(ContractViolation, match="differs from the exact Git tree"):
+        authority.read_snapshot(candidate)
+    assert _snapshot_dirs(authority, tmp_path) == []  # refused export is removed
+
+
+def test_snapshot_accepts_ordinary_candidate_with_attributes_and_modes(
+    authority: GitAuthority, tmp_path: Path
+) -> None:
+    candidate = _commit_files(
+        authority,
+        "ok",
+        {
+            "run.sh": "#!/bin/sh\n", "run.cmd": "echo candidate\n", "doc.txt": "x\n",
+            ".gitattributes": "*.txt text eol=lf\n",
+        },
+        executable="run.sh",
+    )
+    snapshot = authority.read_snapshot(candidate)
+    try:
+        assert Path(snapshot.path, "doc.txt").read_text() == "x\n"
+        assert Path(snapshot.path, "run.sh").exists()
+        assert Path(snapshot.path, "run.cmd").read_text() == "echo candidate\n"
+        if os.name != "nt":
+            assert os.stat(Path(snapshot.path, "run.sh")).st_mode & 0o111
+    finally:
+        authority.discard_snapshot(snapshot)
+    assert _snapshot_dirs(authority, tmp_path) == []

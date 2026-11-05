@@ -7,10 +7,13 @@ one install ever, at every seam."""
 from __future__ import annotations
 
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from constructicon.api.system import Constructicon
 from constructicon.core.address import ExecutionPath, RunId, ScopePath
 from constructicon.core.effect import (
     AttestationDraft,
@@ -20,12 +23,15 @@ from constructicon.core.effect import (
     idempotency_key,
 )
 from constructicon.core.errors import AdmissionError, ContractViolation
+from constructicon.core.graph import Graph, GraphNode, Ref
 from constructicon.core.identity import Digest, digest
+from constructicon.core.ports import Port
 from constructicon.core.run import RunStatus
+from constructicon.runtime.context import NodeContext
 from constructicon.substrate.effects.git import MergeVerifiedEffect
 from constructicon.substrate.git.authority import GitAuthority, PreparedMerge
 from constructicon.substrate.journal.sqlite import SqliteJournal
-from tests.conftest import LEASE_TTL_S, FakeClock, InjectedCrash
+from tests.conftest import LEASE_TTL_S, FakeClock, InjectedCrash, atomic
 from tests.gitworld import GOOD_FIX, build_git_system, build_graph, seed_authority
 from tests.run_attestations import mint_run_attestation
 from tests.run_worlds import sealed_test_manifest
@@ -82,16 +88,21 @@ def request_for(
     )
 
 
+@pytest.mark.parametrize("operation", ["execute", "reconcile"])
 async def test_the_forgery_matrix_leaves_no_receipt_and_moves_nothing(
-    tmp_path: Path, journal: SqliteJournal
+    tmp_path: Path, journal: SqliteJournal, operation: str
 ) -> None:
     authority, effect, subject, attestation_id = prepared_world(tmp_path, journal)
+    if operation == "reconcile":
+        assert (await effect.execute(request_for(subject, attestation_id))).status == "committed"
     before = authority.resolve_ref("refs/heads/main")
 
     async def refused(request: EffectRequest, match: str) -> None:
+        marker_before = authority.read_ref(authority.marker_ref(request.idempotency_key))
         with pytest.raises(AdmissionError, match=match):
-            await effect.execute(request)
+            await getattr(effect, operation)(request)
         assert journal.receipt_for(request.idempotency_key) is None  # not poisoned
+        assert authority.read_ref(authority.marker_ref(request.idempotency_key)) == marker_before
         assert authority.resolve_ref("refs/heads/main") == before
 
     # fabricated attestation id
@@ -151,6 +162,59 @@ async def test_the_forgery_matrix_leaves_no_receipt_and_moves_nothing(
     receipt = await effect.execute(request_for(subject, attestation_id))
     assert receipt.status == "committed"
     assert authority.resolve_ref("refs/heads/main") == subject.merge_commit
+
+
+async def unproved_merge_impl(
+    ctx: NodeContext, inputs: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    receipt = await ctx.effect("merge_verified", inputs["subject"])
+    return {"receipt": receipt.model_dump(mode="json")}
+
+
+async def test_walker_refuses_unproved_reconciliation_of_an_installed_merge(
+    tmp_path: Path, journal: SqliteJournal
+) -> None:
+    authority, effect, subject, attestation_id = prepared_world(tmp_path, journal)
+    assert (await effect.execute(request_for(subject, attestation_id))).status == "committed"
+    system = Constructicon(journal=journal, capabilities={}, catalog={},
+                          effects={"merge_verified": effect}, owner_id="unproved-worker")
+    incoming = Port(name="subject", type_id="test/MergeSubject", schema_hash="s1")
+    outgoing = Port(name="receipt", type_id="test/Receipt", schema_hash="s1")
+    definition, impl = atomic("test/unproved-merge", (incoming,), (outgoing,), unproved_merge_impl)
+    version = system._register(definition, impl)
+    system._promote_initial(component=definition.name, version=version)
+    graph = Graph(name="unproved-merge", nodes=(
+        GraphNode(id="merge", body=Ref(component=definition.name)),
+    ), connections=(), inputs=(incoming,), outputs=(outgoing,))
+    run_id = RunId("run-unproved-reconciliation")
+    result = await system._start_direct(
+        graph, {"subject": subject.model_dump(mode="json")}, run_id=run_id,
+    )
+    assert result.status is RunStatus.FAILED
+    assert any("requires an attestation id" in failure for failure in result.failures.values())
+    events = journal.events(run_id, limit=100)
+    assert any(event.kind == "NodeFailed" for event in events)
+    assert not any(event.kind in {"EffectCommitted", "EffectReconciled"} for event in events)
+    manifest_hash = journal.run_manifest_hash(run_id)
+    assert manifest_hash is not None
+    path = ExecutionPath(scope=ScopePath(segments=(graph.name, "merge")))
+    key = idempotency_key(manifest_hash, path, "merge_verified", subject.model_dump(mode="json"))
+    assert journal.receipt_for(key) is None
+    assert authority.read_ref(authority.marker_ref(key)) is None
+    assert authority.resolve_ref(subject.target_ref) == subject.merge_commit
+
+
+async def test_reconciliation_keeps_valid_install_proof_after_target_moves(
+    tmp_path: Path, journal: SqliteJournal
+) -> None:
+    authority, effect, subject, attestation_id = prepared_world(tmp_path, journal)
+    request = request_for(subject, attestation_id)
+    assert await effect.reconcile(request) is None
+    committed = await effect.execute(request)
+    authority._run("update-ref", subject.target_ref, subject.expected_base)
+    assert await effect.reconcile(request) == committed
+    assert authority.resolve_ref(subject.target_ref) == subject.expected_base
+    assert authority.read_ref(authority.marker_ref(request.idempotency_key)) == subject.merge_commit
 
 
 @pytest.mark.parametrize("operation", ["execute", "reconcile", "simulate"])

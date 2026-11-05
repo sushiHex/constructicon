@@ -1,4 +1,4 @@
-c9535a26428b40eef523f87e83b153c736778e05828ad28ea46c1af566083179  README.md
+1f509017381c8564dd4ff9f24cf7195fea4510696f9156ac347957ba7f3d34cd  README.md
 40dee5d5540368c77bc95818b61d61f9b05780cdfe10776893b8fa44c0fa9966  handoffs/M8-N5-read-session.md
 8b93f511f42d665ddb8d24707a2739d540c9e44c82cc372ac2da616bcacab394  handoffs/M8-N5-stage3-read.md
 f11045d5e3b0f0494f9760f5b31d4c083e5fb6477fe11a513a12d12299f76cad  handoffs/M8-N5-host-session.md
@@ -122,3 +122,5 @@ c67012b250bba6f8e8f386235759ede34a301b248baced4e11c92370f05a7675  handoffs/M8-cl
 74e800a7dbe672f4d6371876c1246fc8a487105aa7539289295bd1f158b518a0  handoffs/M8-Pi-fixed-peer.md
 1e2e07a2984086874c08e33f1a1fcc334f515afbdd578d5412cbdea74d1af369  milestones/M9-prompt-context.md
 af8568cfb5aeab22d09219be07c0516aad21e95a3f223da745f0b4f3a1dbf792  handoffs/M9-operator-trial.md
+99e75a452d185dae85f2d974c4dccb8f884d76db01b82999835a778b02e11e7f  handoffs/validation-and-proof-hardening-record.md
+eeb8bb43aaeda3baeb6a816977e3d8e06149caf6cc852ec8ff692a6c1685df5e  handoffs/run-scoped-attestation-identity-proposal.md

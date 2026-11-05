@@ -22,6 +22,7 @@ from constructicon.core.control import ResolutionLock, ResolutionPin
 from constructicon.core.errors import AdmissionError
 from constructicon.core.grants import EffectiveGrants
 from constructicon.core.graph import Graph, Loop, Ref
+from constructicon.core.identity import canonical_json
 from constructicon.core.introspection import AdmissionLimits
 from constructicon.core.manifest import ExecutionManifest
 from constructicon.core.registry import RegistrySnapshot
@@ -54,6 +55,12 @@ _LOCATED_FAULTS: dict[str, tuple[AdmissionCode, str]] = {
         AdmissionCode.GRAPH_CONTRACT_INVALID,
         "name a declared node for each connection endpoint; repair the retained definition "
         "or pin a compatible version when definition_path is present",
+    ),
+    "graph_cycle": (
+        AdmissionCode.GRAPH_CYCLE,
+        "remove one connection of the cycle or express bounded feedback through Loop; "
+        "repair the retained definition or pin a compatible version when "
+        "definition_path is present",
     ),
     "unused_map_destination": (
         AdmissionCode.GRAPH_CONTRACT_INVALID,
@@ -435,6 +442,20 @@ def _classify_fault(
                 for key, value in carried.items()
                 if key not in {"path", "scope", "candidate_selectors"}
             }
+            cycle = carried.get("cycle")
+            if carried["defect"] == "graph_cycle" and isinstance(cycle, list):
+                preview = cycle[: limits.max_fault_detail_items]
+                bounded = {
+                    "cycle": preview,
+                    "cycle_total": len(cycle),
+                    "truncated": len(preview) < len(cycle),
+                }
+                details.update(bounded)
+                head, _, _ = message.rpartition(FAULT_DETAILS_SEPARATOR)
+                message = (
+                    f"{head}{FAULT_DETAILS_SEPARATOR}"
+                    f"{canonical_json({**carried, **bounded})}"
+                )
             candidate_value = carried.get("candidate_selectors")
             candidates = (
                 [item for item in candidate_value if isinstance(item, str)]

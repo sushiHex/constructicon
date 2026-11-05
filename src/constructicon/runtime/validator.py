@@ -264,6 +264,9 @@ def _compile_graph(
         # An invalid level has no compiled boundary. Unwind before parents bind
         # its outputs, loops inspect its body, or unvisited pins look unused.
         raise AdmissionError(comp.faults)
+    # A cyclic level has no topological order; the closure below would silently
+    # drop the back edge, so refuse (raising) before it is computed.
+    _reject_cycles(comp, graph, scope=scope, location=location)
     _validate_unique_ports(comp, graph.inputs, where=f"{scope.render()} graph inputs")
     _validate_unique_ports(comp, graph.outputs, where=f"{scope.render()} graph outputs")
 
@@ -1501,6 +1504,55 @@ def _validate_connection_endpoints(
                 destination_node=connection.dst, missing_roles=missing,
             )
     return valid
+
+
+def _reject_cycles(
+    comp: _Compilation,
+    graph: Graph,
+    *,
+    scope: ScopePath,
+    location: _GraphLocation,
+) -> None:
+    """Refuse authored connection cycles (endpoints already verified declared).
+
+    Explicit Loop feedback lives in ``Loop.feedback``, never in connections, so
+    every connection cycle at one graph level is illegal. Depth-first search in
+    declaration order; each back edge yields one fault naming its cycle.
+    """
+
+    outgoing: dict[str, list[tuple[int, str]]] = {}
+    for index, connection in enumerate(graph.connections):
+        outgoing.setdefault(connection.src, []).append((index, connection.dst))
+    state: dict[str, int] = {}  # absent = unseen, 1 = on stack, 2 = done
+    valid = True
+    for node in graph.nodes:
+        if node.id in state:
+            continue
+        state[node.id] = 1
+        trail: list[str] = [node.id]
+        frames = [iter(outgoing.get(node.id, ()))]
+        while frames:
+            step = next(frames[-1], None)
+            if step is None:
+                state[trail.pop()] = 2
+                frames.pop()
+                continue
+            index, target = step
+            if state.get(target) == 1:
+                valid = False
+                cycle = [*trail[trail.index(target):], target]
+                _located_fault(
+                    comp, location.child("connections", index), scope, "graph_cycle",
+                    f"cycle outside Loop at connection {trail[-1]!r} -> {target!r}",
+                    connection_index=index, source_node=trail[-1],
+                    destination_node=target, cycle=cycle,
+                )
+            elif target not in state:
+                state[target] = 1
+                trail.append(target)
+                frames.append(iter(outgoing.get(target, ())))
+    if not valid:
+        raise AdmissionError(comp.faults)
 
 
 def _upstream_closure(graph: Graph) -> dict[str, list[str]]:

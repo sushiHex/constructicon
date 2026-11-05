@@ -56,6 +56,20 @@ MUTANTS = (
         "published = candidates",
         "tests/runtime/test_fault_coordinates.py::test_ambiguity_advertises_only_applicable_level_local_selectors",
     ),
+    (
+        "authored cycle check cannot be skipped",
+        "constructicon.runtime.validator:_compile_graph",
+        "_reject_cycles(comp, graph, scope=scope, location=location)",
+        "pass",
+        "tests/runtime/test_graph_cycles.py::test_connection_cycles_are_refused_with_the_cycle_named[two-node-root]",
+    ),
+    (
+        "cycle evidence publication is bounded",
+        "constructicon.runtime.authoring:_classify_fault",
+        "preview = cycle[: limits.max_fault_detail_items]",
+        "preview = cycle",
+        "tests/runtime/test_graph_cycles.py::test_cycle_preview_obeys_public_detail_limit[1]",
+    ),
 )
 
 
