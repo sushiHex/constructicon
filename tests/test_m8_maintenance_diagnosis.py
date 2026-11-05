@@ -151,6 +151,8 @@ def test_historical_helper_pins_and_successor_source_are_distinct():
     text = DOCUMENT.read_text(encoding="utf-8")
     successor = (ROOT / "docs/plans/handoffs/M8-maintenance-installed-diagnostics.md").read_text(
         encoding="utf-8")
+    schema10 = (ROOT / "docs/plans/handoffs/run-attestation-v2-and-rollback-record.md").read_text(
+        encoding="utf-8")
     historical = {
         "EVIDENCE": "2f654a218fcb55eee65a59c1c8ae63bc8a761db3fe71143f41dff69e22a1b578",
         "DIAGNOSTIC": "f0555df16b076b7a5d65d786d9ffd5febb9878b3065e1a2fbc7565d0197a6c69",
@@ -165,6 +167,15 @@ def test_historical_helper_pins_and_successor_source_are_distinct():
         assert b"\r" not in raw
         current = re.search(rf"^CURRENT_{label}_SHA256=([0-9a-f]{{64}})$", successor, re.M)
         assert current is not None
+        if label == "DIAGNOSTIC":
+            # The older installed note pins its schema-9 bytes, not all
+            # future helpers. Preserve that pin and verify the new era's bytes.
+            assert current.group(1) == (
+                "421790bb5f850627f2828179efcc28bbd346134a35ccb5097356b3262f6d39c3"
+            )
+            newer = re.search(r"^SCHEMA10_DIAGNOSTIC_SHA256=([0-9a-f]{64})$", schema10, re.M)
+            assert newer is not None and newer.group(1) != current.group(1)
+            current = newer
         assert hashlib.sha256(raw).hexdigest() == current.group(1)
 
 

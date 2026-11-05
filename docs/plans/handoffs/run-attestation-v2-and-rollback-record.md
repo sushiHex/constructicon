@@ -87,6 +87,23 @@ manifest equality and consumed rollback proof reuse. Baselines and assertion
 kills are required; errors do not earn kill credit. Final combined inventory
 and required CI receipts belong in the delivery PR.
 
+## Read-only diagnostic successor
+
+The [installed diagnostic note](M8-maintenance-installed-diagnostics.md) pins
+the prior schema-9 helper. The actual blob at `15e87ef` reproduced its
+`421790bb5f850627f2828179efcc28bbd346134a35ccb5097356b3262f6d39c3` digest.
+That note and the older sidecar procedure are unchanged. The evidence helper
+bytes are unchanged as well. The current diagnostic reads the current schema
+version and retains the existing read-only snapshot and output contract:
+
+```text
+SCHEMA10_DIAGNOSTIC_SHA256=0e89e8f6c6cfcaf37d1a785dd1b2e1198d2d101c6605361dcc682e3c36c637b8
+```
+
+The pin test distinguishes all three source eras without requiring Git
+ancestry in CI. This is a source-byte comparison, not a host installation,
+permission to inspect a live writer or a reinterpretation of old evidence.
+
 ## Limits
 
 The creator prefilter validates distinct retained ordinary-proof creators per
