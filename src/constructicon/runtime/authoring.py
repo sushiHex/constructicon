@@ -22,6 +22,7 @@ from constructicon.core.control import ResolutionLock, ResolutionPin
 from constructicon.core.errors import AdmissionError
 from constructicon.core.grants import EffectiveGrants
 from constructicon.core.graph import Graph, Loop, Ref
+from constructicon.core.identity import canonical_json
 from constructicon.core.introspection import AdmissionLimits
 from constructicon.core.manifest import ExecutionManifest
 from constructicon.core.registry import RegistrySnapshot
@@ -441,6 +442,20 @@ def _classify_fault(
                 for key, value in carried.items()
                 if key not in {"path", "scope", "candidate_selectors"}
             }
+            cycle = carried.get("cycle")
+            if carried["defect"] == "graph_cycle" and isinstance(cycle, list):
+                preview = cycle[: limits.max_fault_detail_items]
+                bounded = {
+                    "cycle": preview,
+                    "cycle_total": len(cycle),
+                    "truncated": len(preview) < len(cycle),
+                }
+                details.update(bounded)
+                head, _, _ = message.rpartition(FAULT_DETAILS_SEPARATOR)
+                message = (
+                    f"{head}{FAULT_DETAILS_SEPARATOR}"
+                    f"{canonical_json({**carried, **bounded})}"
+                )
             candidate_value = carried.get("candidate_selectors")
             candidates = (
                 [item for item in candidate_value if isinstance(item, str)]

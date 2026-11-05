@@ -1543,7 +1543,7 @@ def _reject_cycles(
                 cycle = [*trail[trail.index(target):], target]
                 _located_fault(
                     comp, location.child("connections", index), scope, "graph_cycle",
-                    f"cycle outside Loop involving {' -> '.join(cycle)}",
+                    f"cycle outside Loop at connection {trail[-1]!r} -> {target!r}",
                     connection_index=index, source_node=trail[-1],
                     destination_node=target, cycle=cycle,
                 )
