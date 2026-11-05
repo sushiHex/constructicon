@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from constructicon.api.control import ControlPlane
@@ -72,6 +73,28 @@ REGISTRAR = _actor("registrar", ADMIN_SCOPE)
 PROMOTER = _actor("promoter", PROMOTE_SCOPE)
 
 
+@asynccontextmanager
+async def wait_deadline(
+    journal: SqliteJournal, run_id: RunId, stage: str, *, timeout_s: float = 10
+) -> AsyncIterator[None]:
+    """Bound an operator wait without hiding a still-owned or lost run."""
+    timer = asyncio.timeout(timeout_s)
+    try:
+        async with timer:
+            yield
+    except TimeoutError:
+        if not timer.expired():
+            raise
+        state = journal.run_state(run_id)
+        status = state.status.value if state is not None else "missing"
+        liveness = state.liveness if state is not None else "unknown"
+        raise TimeoutError(
+            f"M9_WAIT_TIMEOUT stage={stage} run={run_id} status={status} "
+            f"liveness={liveness}; preserve the store, inspect recorded owner liveness, "
+            "and retry the same command only when its run/command lease permits recovery"
+        ) from None
+
+
 @dataclass(frozen=True)
 class Evaluator:
     journal: SqliteJournal
@@ -112,10 +135,12 @@ class Evaluator:
                 raise ValueError(f"Trial baseline changed: {definition.name}")
         return cls(journal, executor, system)
 
-    async def succeeded(self, result: object, *, resuming: bool = False) -> RunId:
+    async def succeeded(
+        self, result: object, *, stage: str, resuming: bool = False
+    ) -> RunId:
         if not isinstance(result, RunSubmission):
             raise ValueError(f"Trial run was not admitted: {result}")
-        async with asyncio.timeout(10):
+        async with wait_deadline(self.journal, result.run_id, stage):
             while True:
                 record = self.journal.run_record(result.run_id)
                 if record is None:
@@ -172,7 +197,8 @@ class Evaluator:
                             inputs=inputs,
                             idempotency_key=trial.key(stage),
                         ),
-                    )
+                    ),
+                    stage=stage,
                 )
 
             sources = tuple(
@@ -246,7 +272,8 @@ class Evaluator:
                                 overrides=overrides,
                                 idempotency_key=trial.key(stage),
                             ),
-                        )
+                        ),
+                        stage=stage,
                     )
 
                 old_run = await counterfactual(f"baseline-{row.case.evidence_id}", {})

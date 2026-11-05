@@ -481,6 +481,13 @@ def issuer_graph() -> Graph:
     )
 
 
+class OperatorRejected(ValueError):
+    """The retained owner decision refused the exact candidate."""
+
+
+OPERATOR_REJECTION = "M9_OPERATOR_REJECTED"
+
+
 async def issue_from_operator_decision(
     ctx: NodeContext, inputs: Mapping[str, Any]
 ) -> Mapping[str, Any]:
@@ -492,7 +499,7 @@ async def issue_from_operator_decision(
     if retained != approval:
         raise ValueError("M9 operator issuance requires the exact retained decision")
     if approval.decision == "rejected":
-        raise ValueError("M9 operator rejected this candidate")
+        raise OperatorRejected(OPERATOR_REJECTION)
     return {"proof": authority.issue(approval.approval_id)}
 
 

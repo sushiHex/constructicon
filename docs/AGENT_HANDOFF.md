@@ -24,7 +24,10 @@ retained exam and owner-addressed request, and the leased issuer checks the
 recorded decision before minting. Separate commands promote the exact edge,
 replay the result, and roll it back with earlier pins intact. The evaluator-only
 assembly must not recover issuance runs; after issuance is submitted, evaluation
-identities are reconstructed from committed command results.
+identities are reconstructed from committed command results. Wait deadlines name
+the stage, run, durable status and liveness; a failed issuance counts as owner
+rejection only when its recorded issuer failure carries the exact rejection
+cause, not merely because its status is failed.
 
 The local operator is trusted; the synthetic actors are not separate OS
 identities. This establishes repeatable scripted behavior, with no vendor

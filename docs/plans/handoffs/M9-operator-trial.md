@@ -29,9 +29,17 @@ uv run python -m tests.e2e.m9_operator_trial reject --trial demo --store ../m9-d
 Run only the selected decision. Approval wakes the parked issuance through its
 recorded reply. The issuer verifies the retained evidence and owner decision
 before minting proof; no stable move occurs. Rejection is terminal for this
-trial. If a process dies after the approval exchange commits, rerun the same
-decision: the normal command lease must expire before a dead claimant can be
-recovered. Never replace the key or submit a different decision to recover.
+trial. Its failed issuance must record the issuer's exact
+`M9_OPERATOR_REJECTED` cause; another execution failure is not an owner rejection.
+
+If a process dies during any stage, rerun the same command with the original
+key and store. The normal run and command leases must expire before a dead
+claimant can be recovered. An immediate retry can report `COMMAND_IN_PROGRESS`
+or `M9_WAIT_TIMEOUT`. The latter names the stage, run, durable status and
+read-time liveness; it does not cancel the run or imply that its owner died.
+Preserve the store, inspect recorded owner liveness, and retry the same command
+only when its run/command lease permits recovery. Never replace the key or
+submit a different decision to recover.
 
 After approval succeeds, exercise promotion, its replay, then rollback:
 

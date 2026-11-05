@@ -9,6 +9,7 @@ from pathlib import Path
 
 from constructicon.api.control import ControlPlane
 from constructicon.api.system import Constructicon
+from constructicon.core.address import RunId
 from constructicon.core.control import (
     ApprovalCommandResult,
     PromotionCommandResult,
@@ -22,9 +23,21 @@ from constructicon.core.run import RunStatus
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.e2e.m9_evidence import TrialIdentity
 from tests.e2e.m9_fixture import TARGET, baseline, candidate, diagnostic_definition
-from tests.e2e.m9_issuer import OPERATOR_ISSUER_PATH, load_manifest, operator_issuer_graph
+from tests.e2e.m9_issuer import (
+    OPERATOR_ISSUER_PATH,
+    OPERATOR_REJECTION,
+    OperatorRejected,
+    load_manifest,
+    operator_issuer_graph,
+)
 from tests.e2e.m9_operator_approval import assemble_operator_approval
-from tests.e2e.m9_operator_evaluator import OPERATOR, OWNER, PROMOTER, Evaluator
+from tests.e2e.m9_operator_evaluator import (
+    OPERATOR,
+    OWNER,
+    PROMOTER,
+    Evaluator,
+    wait_deadline,
+)
 
 
 def _open(root: Path, trial: TrialIdentity, *, initialize: bool) -> SqliteJournal:
@@ -86,7 +99,7 @@ async def run(root: Path, trial: TrialIdentity, stage: str) -> dict[str, object]
             if not isinstance(result, RunSubmission):
                 raise ValueError(f"Issuance refused: {result}")
             run_id = result.run_id
-            async with asyncio.timeout(10):
+            async with wait_deadline(journal, run_id, "prepare-issuance"):
                 while True:
                     record = journal.run_record(run_id)
                     if record is None:
@@ -133,9 +146,9 @@ async def run(root: Path, trial: TrialIdentity, stage: str) -> dict[str, object]
         if not isinstance(result, ApprovalCommandResult):
             raise ValueError(f"Owner decision refused: {result}")
         if decision == "approved":
-            await evaluator.succeeded(submission, resuming=True)
+            await evaluator.succeeded(submission, stage="approve-issuance", resuming=True)
         else:
-            async with asyncio.timeout(10):
+            async with wait_deadline(journal, run_id, "reject-issuance"):
                 while True:
                     record = journal.run_record(run_id)
                     if record is not None and record.status == RunStatus.FAILED:
@@ -147,11 +160,33 @@ async def run(root: Path, trial: TrialIdentity, stage: str) -> dict[str, object]
                     }:
                         raise ValueError("Rejected issuance did not terminate as refused")
                     await asyncio.sleep(0.01)
-            if journal.checkpoint(run_id, OPERATOR_ISSUER_PATH) is not None:
-                raise ValueError("Rejected issuance produced a proof checkpoint")
+            _verify_rejection(journal, run_id)
         return {"status": decision, "run": run_id, "approval": result.approval_id}
     finally:
         await control.shutdown()
+
+
+def _verify_rejection(journal: SqliteJournal, run_id: RunId) -> None:
+    if journal.checkpoint(run_id, OPERATOR_ISSUER_PATH) is not None:
+        raise ValueError("Rejected issuance produced a proof checkpoint")
+    # runtime/walker.py: Walker._execute_or_restore emits NodeFailed from the
+    # actual exception type/message; Walker._execute then emits RunFailed.
+    head = journal.run_head(run_id)
+    expected_payload = {"error": OPERATOR_REJECTION, "error_type": OperatorRejected.__name__}
+    after = 0
+    failures = []
+    while events := journal.events(run_id, after_seq=after, limit=100):
+        failures.extend(event for event in events if event.kind == "NodeFailed")
+        after = events[-1].seq
+    if (
+        head is None
+        or head.record.status != RunStatus.FAILED
+        or head.event_kind != "RunFailed"
+        or len(failures) != 1
+        or failures[0].path != OPERATOR_ISSUER_PATH
+        or failures[0].payload != expected_payload
+    ):
+        raise ValueError("M9_REJECTION_CAUSE_MISMATCH: issuance did not fail on owner rejection")
 
 
 async def _move(
