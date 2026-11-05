@@ -360,13 +360,17 @@ def test_snapshot_accepts_ordinary_candidate_with_attributes_and_modes(
     candidate = _commit_files(
         authority,
         "ok",
-        {"run.sh": "#!/bin/sh\n", "doc.txt": "x\n", ".gitattributes": "*.txt text eol=lf\n"},
+        {
+            "run.sh": "#!/bin/sh\n", "run.cmd": "echo candidate\n", "doc.txt": "x\n",
+            ".gitattributes": "*.txt text eol=lf\n",
+        },
         executable="run.sh",
     )
     snapshot = authority.read_snapshot(candidate)
     try:
         assert Path(snapshot.path, "doc.txt").read_text() == "x\n"
         assert Path(snapshot.path, "run.sh").exists()
+        assert Path(snapshot.path, "run.cmd").read_text() == "echo candidate\n"
         if os.name != "nt":
             assert os.stat(Path(snapshot.path, "run.sh")).st_mode & 0o111
     finally:

@@ -440,7 +440,7 @@ class GitAuthority:
             if path.is_symlink():
                 mode, raw = "120000", os.fsencode(os.readlink(path))
             elif path.is_file():
-                mode = "100755" if path.stat().st_mode & 0o111 else "100644"
+                mode = "100755" if os.name != "nt" and path.stat().st_mode & 0o111 else "100644"
                 raw = path.read_bytes()
             else:
                 continue
