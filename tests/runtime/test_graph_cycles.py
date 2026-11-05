@@ -16,6 +16,7 @@ from constructicon.core.admission import (
 from constructicon.core.component import ComponentDef
 from constructicon.core.errors import AdmissionError
 from constructicon.core.graph import Connection, Graph, GraphNode, Loop, Ref
+from constructicon.core.introspection import AdmissionLimits
 from constructicon.runtime import validator
 from constructicon.runtime.validator import admit
 from tests.conftest import BRIEF, ISSUE, SUMMARY, atomic, summarize_impl
@@ -29,6 +30,32 @@ from tests.runtime.test_loop_validator import (
 
 ROOT = "cycle-root"
 INPUTS = {"issue": {}}
+
+
+@pytest.mark.parametrize("cap", [1, 2, 5, 25])
+def test_cycle_preview_obeys_public_detail_limit(system: Constructicon, cap: int) -> None:
+    register(system)
+    names = [f"vertex-{i}" for i in range(5)]
+    graph = cyclic(
+        tuple(node(name, "cycle/triage") for name in names),
+        tuple(zip(names, [*names[1:], names[0]], strict=True)),
+    )
+    bounded = Constructicon(
+        journal=system._journal, admission_limits=AdmissionLimits(max_fault_detail_items=cap),
+    )
+    result = bounded.admit_graph(graph, INPUTS)
+    assert isinstance(result, AdmissionRejected)
+    (fault,) = result.faults
+    expected = [*names, names[0]][:cap]
+    assert fault.details["cycle"] == expected
+    assert fault.details["cycle_total"] == 6
+    assert fault.details["truncated"] is (cap < 6)
+    framed = json.loads(fault.message.rpartition(FAULT_DETAILS_SEPARATOR)[2])
+    assert framed["cycle"] == expected
+    assert framed["cycle_total"] == 6
+    assert framed["truncated"] is (cap < 6)
+    if cap < 3:
+        assert names[2] not in fault.message
 
 
 def raw_admit(system: Constructicon, graph: Graph):

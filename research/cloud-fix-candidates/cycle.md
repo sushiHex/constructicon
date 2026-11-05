@@ -25,7 +25,7 @@ declaration order; each back edge yields one located `graph_cycle` fault
 connection) and then raises `AdmissionError`. `authoring.py` maps the defect to
 `AdmissionCode.GRAPH_CYCLE` with a repair hint.
 
-- Linear time; no new graph syntax. Loop feedback lives only in `Loop.feedback`
+- Iterative traversal with output-proportional cycle-path rendering; no new graph syntax. Loop feedback lives only in `Loop.feedback`
   (M4 rev2), never in connections, so every connection cycle at one level is
   illegal; Loop bodies and retained bodies are compiled through the same
   `_compile_graph`, so they are covered at their own scope/coordinates.
@@ -67,3 +67,17 @@ The `tests/sdk` + `tests/api` run is reported in the hand-off message.
   suites listed above.
 - Refs #367. Delivery handoff and implementation record are left to the
   orchestrator's reviewed PR.
+
+## Independent follow-up
+
+Independent review found that the new public cycle evidence exceeded
+max_fault_detail_items. The validator prose now names the closing edge only;
+typed admission publishes a capped cycle preview in both details and the framed
+message, with cycle_total and truncated fields. The internal validator retains
+the full evidence. Caps 1/2/5 exercise truncation; cap25 permits the complete
+six-item preview.
+
+Observed locally on Windows: the initial cycle/endpoint/inventory selection passed
+81 tests. On the follow-up, cycle and endpoint tests passed (40), Ruff passed on
+all three affected files, and mypy passed on both runtime modules. Independent
+narrow review found no further blocker. Full verify/CI remains unclaimed.
