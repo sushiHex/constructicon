@@ -1,5 +1,5 @@
 # mypy: disable-error-code="attr-defined"
-"""SQLite schema ownership and atomic migrations through schema 10."""
+"""SQLite schema ownership and atomic migrations through schema 11."""
 
 from __future__ import annotations
 
@@ -95,6 +95,13 @@ from constructicon.substrate.journal._sqlite_leases import (
     legacy_lease_initial_lifecycle_json,
     validate_legacy_lease_seal_inventory,
 )
+from constructicon.substrate.journal._sqlite_metering import (
+    METERING_FAMILIES,
+    mint_metering_era,
+    require_metering_absence,
+    require_metering_era,
+    validate_metering_inventory,
+)
 from constructicon.substrate.journal._sqlite_registry import (
     seal_component_registration,
     seal_promotion,
@@ -113,7 +120,7 @@ from constructicon.substrate.journal._sqlite_runs import (
     validated_run_world,
 )
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 _CURRENT_V7_TABLES = frozenset(
     {
@@ -410,6 +417,9 @@ class _SqliteSchemaMixin:
             if version == 9:
                 self._migrate_m9_to_m10(connection)
                 version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            if version == 10:
+                self._migrate_m10_to_m11(connection)
+                version = int(connection.execute("PRAGMA user_version").fetchone()[0])
             if version == SCHEMA_VERSION:
                 connection.executescript(_SCHEMA)
                 connection.executescript(_V5_SCHEMA)
@@ -441,6 +451,22 @@ class _SqliteSchemaMixin:
         }
         if columns != {"run_id", "world_hash", "source", "floor", "inventory_hash"}:
             raise JournalDamaged("schema 8 capability accounting eras table has changed columns")
+
+    def _migrate_m10_to_m11(self, connection: sqlite3.Connection) -> None:
+        if not _begin_rung(connection, 10):
+            return
+        try:
+            self._validate_v7_fact_inventory(connection, capability_provenance=True)
+            for run in connection.execute("SELECT * FROM runs"):
+                mint_metering_era(connection, run, "legacy")
+            connection.execute("PRAGMA user_version = 11")
+            self._validate_v7_fact_inventory(connection, capability_provenance=True)
+            self.fault_probe("metering_migration.before_commit")
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        self.fault_probe("metering_migration.after_commit")
 
     def _migrate_m9_to_m10(self, connection: sqlite3.Connection) -> None:
         if not _begin_rung(connection, 9):
@@ -1087,6 +1113,11 @@ class _SqliteSchemaMixin:
             )
             disposal_count = validate_disposal_inventory(connection)
             disposal_families = frozenset({DISPOSAL_FAMILY})
+        metering_count = 0
+        metering_families: frozenset[str] = frozenset()
+        if connection.execute("PRAGMA user_version").fetchone()[0] >= 11:
+            metering_count = validate_metering_inventory(connection)
+            metering_families = METERING_FAMILIES
         validate_durable_fact_seal_inventory(
             connection,
             known_families=(
@@ -1094,8 +1125,10 @@ class _SqliteSchemaMixin:
                 if capability_provenance else _DURABLE_FACT_SEAL_FAMILIES)
                 | (frozenset() if _pre_v10_reader(connection)
                    else frozenset({RUN_V1_ATTESTATION_WITNESS_FAMILY}))
+                | metering_families
             ),
-            expected_count=expected_count + disposal_count + attestation_witness_count,
+            expected_count=expected_count + disposal_count + attestation_witness_count
+            + metering_count,
         )
         return histories
 
@@ -1253,6 +1286,7 @@ class _SqliteSchemaMixin:
             if run is not None:
                 validated_run_world(connection, run)
                 require_accounting_era(connection, run)
+                require_metering_era(connection, run)
                 if (
                     run["manifest_hash"] != str(manifest_hash)
                     or run["input_hash"] != str(input_hash)
@@ -1287,6 +1321,7 @@ class _SqliteSchemaMixin:
             register_run_origin_guard(connection)
             validate_no_orphan_run_facts(connection)
             require_accounting_absence(connection, run_id)
+            require_metering_absence(connection, run_id)
             connection.execute(
                 "INSERT INTO runs (run_id, manifest_hash, input_hash, inputs_json,"
                 " status, created_at, creation_command_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -1315,6 +1350,7 @@ class _SqliteSchemaMixin:
                 raise JournalDamaged(f"run {run_id!r} disappeared during creation")
             seal_run_world(connection, created)
             mint_creation_accounting_era(connection, created)
+            mint_metering_era(connection, created, "current")
             validated_run_world(connection, created)
         self.fault_probe("create.after_commit")
 

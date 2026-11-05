@@ -12,7 +12,7 @@ from constructicon.api.run_host import RunHost
 from constructicon.core.control import (
     CapabilityAcquisitionPair,
     CapabilityDisposalResult,
-    RunResultPreviewV2,
+    RunResultPreviewV3,
     RunSubmission,
 )
 from constructicon.core.errors import ContractViolation
@@ -198,7 +198,7 @@ async def test_fresh_resume_clears_actual_failure_deferral_and_preserves_next_at
             assert len(rows) == 2 and rows[1].state == "closed"
             assert rows[1].acquisition_epoch > rows[0].acquisition_epoch
         preview = control.runs_result(READER, run_id)
-        assert isinstance(preview, RunResultPreviewV2)
+        assert isinstance(preview, RunResultPreviewV3)
         assert preview.status is expected and preview.capability_accounting.disposed_count == 1
         if not cancelled:
             assert preview.outputs == {"summary": {"text": "materialized"}}

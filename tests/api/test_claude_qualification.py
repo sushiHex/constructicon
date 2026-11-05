@@ -472,3 +472,84 @@ def test_cli_only_run_dispatches_and_passes_exact_parsed_inputs(
     assert calls[1][1].store_root == tmp_path / "store"
     assert calls[2] == ("qualify", "provider")
     assert json.loads(capsys.readouterr().out) == {"status": RunStatus.SUCCEEDED.value}
+
+
+@pytest.mark.parametrize("mode", ("success", "partial", "control_failure"))
+async def test_scripted_claude_metering_reaches_versioned_result(qualified, monkeypatch, mode):
+    from constructicon.api.control import ControlPlane
+    from constructicon.api.system import Constructicon
+    from constructicon.core.control import READ_SCOPE, AuthenticatedActor, RunResultPreviewV3
+
+    class MeteredPeer(FixedPeer):
+        def emit(self, value):
+            if value.get("type") == "result":
+                value["usage"] = {"input_tokens": 17, "output_tokens": 23}
+                value["modelUsage"]["model"]["inputTokens"] = 1700
+                value["modelUsage"]["model"]["outputTokens"] = 2300
+            super().emit(value)
+            if mode == "partial" and value.get("type") == "result":
+                super().emit({"type": "system", "subtype": "unknown-after-result"})
+
+    a = qualified
+    a.state.peer = MeteredPeer()
+    handoff = {"observed": False, "refused": False}
+    if mode == "control_failure":
+        original_run = native.ClaudeOperatorHandle._run
+        original_check = native.ClaudeOperatorHandle._check
+        pending = [False]
+
+        async def arm_after_result(self, task, worker):
+            value = await original_run(self, task, worker)
+            assert value.usage is not None and value.usage.input_tokens == 17
+            handoff["observed"] = True
+            pending[0] = True
+            return value
+
+        def fail_outer_control(self):
+            if pending[0]:
+                pending[0] = False
+                handoff["refused"] = True
+                raise ContractViolation("injected post-result control failure")
+            return original_check(self)
+
+        monkeypatch.setattr(native.ClaudeOperatorHandle, "_run", arm_after_result)
+        monkeypatch.setattr(native.ClaudeOperatorHandle, "_check", fail_outer_control)
+    authorization = a.executor.qualification
+    status = await entry.qualify(a.executor)
+    assert status is (RunStatus.SUCCEEDED if mode == "success" else RunStatus.FAILED)
+    assert len(a.state.peer.users) == 1 and len(a.state.workers) == 1
+    if mode == "control_failure":
+        assert handoff == {"observed": True, "refused": True}
+    journal = SqliteJournal(authorization.journal)
+    control = ControlPlane(system=Constructicon(journal=journal), store=journal)
+    actor = AuthenticatedActor(actor_id="static:meter", auth_method="static",
+                               scopes=frozenset({READ_SCOPE}))
+    result = control.runs_result(actor, authorization.run_id)
+    assert isinstance(result, RunResultPreviewV3), result
+    assert result.metering.coverage == "supported_observations"
+    assert result.metering.attempt_count == 1
+    (group,) = result.metering.groups
+    assert group.source == "claude_main_loop_v1"
+    chunk = control.details_read(actor, result.metering.detail, max_bytes=64_000)
+    assert chunk.next_cursor is None
+    (attempt,) = json.loads(chunk.text)["attempts"]
+    assert attempt["intent"]["source"] == group.source
+    assert attempt["outcome"]["served_model"] is None
+    if mode == "control_failure":
+        # Usage never crosses the subsequent outer control check.
+        assert (group.unavailable, group.partial, group.observed) == (1, 0, 0)
+        assert (group.known_input_tokens, group.known_output_tokens) == (None, None)
+        assert attempt["outcome"]["coverage"] == "unavailable"
+        assert (attempt["outcome"]["input_tokens"], attempt["outcome"]["output_tokens"]) == (
+            None, None,
+        )
+    else:
+        expected = (0, 1, 0) if mode == "partial" else (0, 0, 1)
+        assert (group.unavailable, group.partial, group.observed) == expected
+        assert (group.known_input_tokens, group.known_output_tokens) == (17, 23)
+        assert (attempt["outcome"]["input_tokens"], attempt["outcome"]["output_tokens"]) == (
+            17, 23,
+        )
+    assert attempt["intent_evidence"]["event_seq"] < attempt["outcome_evidence"]["event_seq"]
+    assert attempt["estimate"] is attempt["confirmed_charge"] is None
+    assert control.runs_result(actor, authorization.run_id) == result

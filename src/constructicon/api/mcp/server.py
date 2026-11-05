@@ -40,7 +40,7 @@ from constructicon.core.control import (
     NamePage,
     PromotionCommandResult,
     RunPage,
-    RunResultPreviewV2,
+    RunResultPreviewV3,
     RunSubmission,
     RunSummary,
     VersionPage,
@@ -135,7 +135,7 @@ def create_mcp_server(
         return control.runs_events(await actor(), RunId(run_id), cursor=cursor, limit=limit)
 
     @server.tool(description="Read one bounded run-result preview plus full-detail reference.")
-    async def runs_result(run_id: str) -> RunResultPreviewV2 | ControlRejected:
+    async def runs_result(run_id: str) -> RunResultPreviewV3 | ControlRejected:
         return control.runs_result(await actor(), RunId(run_id))
 
     @server.tool(description="Read one durable command and its stored result.")
@@ -375,6 +375,17 @@ def _register_detail_resources(
     )
     async def run_result(run_id: str) -> str:
         return await chunk(f"constructicon://runs/{run_id}/result")
+
+    @server.resource(
+        "constructicon://runs/{run_id}/metering/{through_event_seq}/{after_intent_seq}",
+        name="run-metering",
+        description="Bounded metering attempts at an immutable event cut.",
+        mime_type="application/json",
+    )
+    async def run_metering(run_id: str, through_event_seq: str, after_intent_seq: str) -> str:
+        return await chunk(
+            f"constructicon://runs/{run_id}/metering/{through_event_seq}/{after_intent_seq}"
+        )
 
     @server.resource(
         "constructicon://runs/{run_id}/accounting/{through_event_seq}",

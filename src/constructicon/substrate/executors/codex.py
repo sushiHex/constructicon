@@ -80,6 +80,7 @@ from constructicon.core.executor import (
 from constructicon.core.grants import EffectiveGrants, Posture
 from constructicon.core.identity import Digest, canonical_json, digest, parse_json_value
 from constructicon.core.maintenance import MaintenanceAttemptAuthorization
+from constructicon.core.metering import MeteringWriter
 from constructicon.core.native_operator import (
     NativeEgressIdentityV1,
     NativeOperatorExecutorProfileV3,
@@ -88,6 +89,7 @@ from constructicon.core.native_operator import (
 )
 from constructicon.core.process import ProcessIO
 from constructicon.core.qualification import QualificationAuthorization
+from constructicon.core.run import OwnershipLost
 from constructicon.core.workspace import (
     AcquiredCapability,
     Disposition,
@@ -373,6 +375,7 @@ class CodexConversation:
         deadline: float | None = None, startup_only: bool = False,
         provider: str = OPENAI_PROVIDER, pause: Callable[[], Awaitable[None]] | None = None,
         before_turn: Callable[[], str | None] | None = None,
+        before_task_write: Callable[[], None] | None = None,
         observe_callbacks: Callable[[int, int], None] | None = None,
         request_refresh: bool = False,
     ) -> None:
@@ -432,6 +435,7 @@ class CodexConversation:
         self._turn_requested = False
         # The last word before `turn/start` is written: a refusal, never a raise.
         self._before_turn = before_turn
+        self._before_task_write = before_task_write
         # True once the write of `turn/start` began. Until then nothing was
         # dispatched, whatever else failed; from then the client may hold it.
         self.turn_sent = False
@@ -775,6 +779,8 @@ class CodexConversation:
         if self._spent + len(raw) > self._input_limit:
             self._refuse("the conversation reached its cumulative input budget")
             return False
+        if value.get("method") == "turn/start" and self._before_task_write is not None:
+            self._before_task_write()
         # Set as the write begins, not when it returns: the transport may hold
         # the bytes before a drain fails or is cancelled.
         self.turn_sent = self.turn_sent or value.get("method") == "turn/start"
@@ -1532,6 +1538,7 @@ class CodexOperatorHandle:
         self.dispatch = dispatch
         # A read qualification's one attempt record, reserved at acquire.
         self.attempt = attempt
+        self._meter: MeteringWriter | None = None
         self._conversation: CodexConversation | None = None
         self.entered = False
         self.ready = False
@@ -1723,14 +1730,37 @@ class CodexOperatorHandle:
             return ExecutorFailure(error=ExecutorError(
                 kind="unavailable", detail=bounded_detail("; ".join(faults)),
             ))
-        if self.attempt is None:
-            return await self._converse(task, grants, write_workspace)
         outcome: ExecutorOutcome | None = None
         try:
-            outcome = await self._converse(task, grants, write_workspace)
-            return outcome
-        finally:
-            self._settle_attempt(outcome)
+            try:
+                outcome = await self._converse(task, grants, write_workspace)
+            finally:
+                self._settle_attempt(outcome)
+        except Exception as exc:
+            if self._meter is not None and not isinstance(exc, OwnershipLost):
+                self._meter.settle(None)
+            raise
+        if self._meter is not None:
+            self._meter.settle(outcome if self.terminal_check is not None else None)
+        return outcome
+
+    def install_meter(self, meter: MeteringWriter) -> None:
+        if self.entered or self._meter is not None:
+            raise ContractViolation("meter must bind before materialization")
+        self._meter = meter
+
+    def _before_task_write(self) -> None:
+        meter = self._meter
+        assert meter is not None
+        self._require_open_sync()
+        if refusal := self._expired():
+            raise ContractViolation(refusal)
+        meter.intend()
+        # A durable commit does not extend authorization or physical custody.
+        self._require_open_sync()
+        meter.check_dispatch()
+        if refusal := self._expired():
+            raise ContractViolation(refusal)
 
     def _intend(self) -> str | None:
         """The record's intent, the last word before `turn/start` is written.
@@ -1883,6 +1913,7 @@ class CodexOperatorHandle:
             deadline=deadline if worker is not None else None,
             provider=configured_provider(provider.configuration),
             before_turn=self._intend if self.attempt is not None else None,
+            before_task_write=self._before_task_write if self._meter is not None else None,
             observe_callbacks=observer,
         )
         self._conversation = conversation

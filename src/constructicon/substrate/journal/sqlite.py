@@ -20,6 +20,7 @@ from constructicon.substrate.journal._sqlite_base import (
 from constructicon.substrate.journal._sqlite_channels import _SqliteChannelsMixin
 from constructicon.substrate.journal._sqlite_control import _SqliteControlMixin
 from constructicon.substrate.journal._sqlite_execution import _SqliteExecutionMixin
+from constructicon.substrate.journal._sqlite_metering import _SqliteMeteringMixin
 from constructicon.substrate.journal._sqlite_queries import _SqliteQueriesMixin
 from constructicon.substrate.journal._sqlite_registry import _SqliteRegistryMixin
 from constructicon.substrate.journal._sqlite_schema import (
@@ -32,6 +33,7 @@ class SqliteJournal(
     _SqliteChannelsMixin,
     _SqliteControlMixin,
     _SqliteQueriesMixin,
+    _SqliteMeteringMixin,
     _SqliteSchemaMixin,
     _SqliteExecutionMixin,
     _SqliteRegistryMixin,

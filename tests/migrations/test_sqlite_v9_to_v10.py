@@ -14,7 +14,8 @@ import pytest
 from constructicon.core.address import RunId
 from constructicon.core.effect import Attestation, attestation_id_for_run
 from constructicon.core.errors import ContractViolation, JournalDamaged
-from constructicon.substrate.journal.sqlite import SqliteJournal
+from constructicon.substrate.journal._sqlite_metering import ERA_FAMILY
+from constructicon.substrate.journal.sqlite import SCHEMA_VERSION, SqliteJournal
 from tests.run_worlds import create_test_run
 from tests.substrate.journal.test_attestation_idempotency import RefusingClock
 from tests.substrate.journal.test_run_attestation_identity import draft_of
@@ -40,7 +41,7 @@ def logical_facts(database, *, include_witness=False):
         )]
         return {table: connection.execute(
             f"SELECT * FROM {table}"
-            + (" WHERE family != '" + FAMILY + "'"
+            + (f" WHERE family NOT IN ('{FAMILY}', '{ERA_FAMILY}')"
                if table == "durable_fact_seals" and not include_witness else "")
             + " ORDER BY 1, 2",
         ).fetchall() for table in tables}
@@ -66,7 +67,7 @@ def test_actual_schema9_proofs_and_all_dependents_migrate_without_rewriting(tmp_
     assert logical_facts(database) == before
     assert [journal.load_attestation(p.attestation_id) for p in proofs] == proofs
     with sqlite3.connect(database) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone() == (10,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
         assert connection.execute(
             "SELECT COUNT(*) FROM durable_fact_seals WHERE family=?", (FAMILY,),
         ).fetchone() == (3,)

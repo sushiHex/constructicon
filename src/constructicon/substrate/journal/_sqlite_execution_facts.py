@@ -185,6 +185,13 @@ def stored_event_from_row(
             _capability_lease_from_row(
                 lease_row, connection=connection, expected_run_id=event.run_id,
             )
+    from constructicon.substrate.journal._sqlite_metering import (
+        METERING_EVENT,
+        verify_metering_event,
+    )
+
+    if event.kind == METERING_EVENT:
+        verify_metering_event(connection, row)
     return event
 
 

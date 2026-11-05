@@ -23,7 +23,7 @@ from constructicon.core.control import (
     CapabilityDisposalResult,
     ControlCode,
     ControlRejected,
-    RunResultPreviewV2,
+    RunResultPreviewV3,
 )
 from constructicon.core.errors import ContractViolation, JournalDamaged
 from constructicon.core.identity import canonical_json
@@ -145,7 +145,7 @@ def public_bundle(world: DisposalWorld, result: CapabilityDisposalResult):
     events = world.control.runs_events(READER, world.run_id, limit=100)
     preview = world.control.runs_result(READER, world.run_id)
     assert not isinstance(events, ControlRejected)
-    assert isinstance(preview, RunResultPreviewV2)
+    assert isinstance(preview, RunResultPreviewV3)
     receipt = world.control.details_read(READER, result.receipt, max_bytes=64_000)
     accounting = world.control.details_read(
         READER, preview.capability_accounting.detail, max_bytes=64_000,

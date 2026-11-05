@@ -122,7 +122,7 @@ def test_new_runs_co_commit_positive_creation_eras(tmp_path: Path) -> None:
     database = tmp_path / "creation-era.db"
     journal = SqliteJournal(database)
     create_test_run(journal, RUN)
-    assert SCHEMA_VERSION == 10
+    assert SCHEMA_VERSION == 11
     with sqlite3.connect(database) as connection:
         row = connection.execute("SELECT * FROM capability_accounting_eras").fetchone()
         assert row is not None

@@ -10,15 +10,21 @@ import pytest
 
 from constructicon.core.address import RunId
 from constructicon.core.errors import JournalDamaged
+from constructicon.substrate.journal._sqlite_metering import ERA_FAMILY
 from constructicon.substrate.journal.sqlite import SCHEMA_VERSION, SqliteJournal
 from tests.migrations.test_sqlite_v7_to_v8 import historical_database, retained_bytes
 from tests.run_worlds import create_test_run
 
 
-def proofs(database):
+def proofs(database, *, include_metering=True):
     with sqlite3.connect(database) as connection:
         return {
-            table: connection.execute(f"SELECT * FROM {table} ORDER BY 1, 2").fetchall()
+            table: connection.execute(
+                f"SELECT * FROM {table}"
+                + (f" WHERE family != '{ERA_FAMILY}'"
+                   if table == "durable_fact_seals" and not include_metering else "")
+                + " ORDER BY 1, 2",
+            ).fetchall()
             for table in ("capability_accounting_eras", "durable_fact_seals")
         }
 
@@ -60,7 +66,7 @@ raise AssertionError('crash seam was not reached')
     assert proofs(database) == before_proofs
     recovered = SqliteJournal(database)
     assert retained_bytes(database) == before
-    assert proofs(database) == before_proofs
+    assert proofs(database, include_metering=False) == before_proofs
     assert recovered.capability_disposal_receipt("genuinely-absent-command") is None
     with sqlite3.connect(database) as connection:
         assert connection.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)

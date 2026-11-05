@@ -73,7 +73,7 @@ def test_schema8_writer_fixture_migrates_without_rewriting_eras_or_history(tmp_p
             "SELECT * FROM capability_accounting_eras ORDER BY run_id"
         ).fetchall()
     journal = SqliteJournal(database)
-    assert SCHEMA_VERSION == 10
+    assert SCHEMA_VERSION == 11
     assert retained_bytes(database) == before
     with sqlite3.connect(database) as connection:
         assert connection.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)

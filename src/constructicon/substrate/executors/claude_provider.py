@@ -32,12 +32,14 @@ from constructicon.core.executor import (
 )
 from constructicon.core.grants import EffectiveGrants, Posture
 from constructicon.core.identity import Digest, canonical_json, digest
+from constructicon.core.metering import MeteringWriter
 from constructicon.core.native_operator import (
     NativeOperatorExecutorProfileV3,
     NativeOperatorLaunchIdentityV3,
 )
 from constructicon.core.qualification import QualificationAuthorization
 from constructicon.core.qualification_write import CallbackObservation, WorkerResultCategory
+from constructicon.core.run import OwnershipLost
 from constructicon.core.workspace import (
     AcquiredCapability,
     Disposition,
@@ -358,8 +360,9 @@ class ClaudeOperatorProvider:
         })
         if self.write:
             attempt.enable_callbacks()
-        handle = ClaudeOperatorHandle(self, context, AcquisitionPaths(self.acquisition_root,
-                                                                      acquisition), attempt)
+        handle = ClaudeOperatorHandle(
+            self, context, AcquisitionPaths(self.acquisition_root, acquisition), attempt,
+        )
         self._handles[handle] = context, attempt
         return AcquiredCapability(
             resource=handle, lease_id=logical, acquisition_id=acquisition,
@@ -440,6 +443,7 @@ class ClaudeOperatorHandle:
     def __init__(self, provider: ClaudeOperatorProvider, context: LeaseContext,
                  paths: AcquisitionPaths, attempt: AttemptRecord) -> None:
         self.provider, self.context, self.paths, self.attempt = provider, context, paths, attempt
+        self._meter: MeteringWriter | None = None
         self.entered = self.ready = self.closed = self.executed = False
         self._deadline: float | None = None
         self._guard_owner: AbstractAsyncContextManager[int] | None = None
@@ -551,6 +555,11 @@ class ClaudeOperatorHandle:
             self._check()
         self.ready = True
 
+    def install_meter(self, meter: MeteringWriter) -> None:
+        if self.entered or self._meter is not None:
+            raise ContractViolation("meter must bind before materialization")
+        self._meter = meter
+
     def _before_user(self) -> None:
         self._check()
         self.provider._check_workspace_base()
@@ -561,6 +570,10 @@ class ClaudeOperatorHandle:
             raise ContractViolation("Claude READ could not retain dispatch intent")
         # Durability may block past expiry; it never supplies a renewed authorization.
         self._check()
+        if self._meter is not None:
+            self._meter.intend()
+            self._meter.check_dispatch()
+            self._check()
         self._intent = True
 
     def _settle(self, outcome: ExecutorOutcome | None) -> None:
@@ -595,6 +608,18 @@ class ClaudeOperatorHandle:
         if self.closed or not self.ready or self.executed:
             raise ContractViolation("Claude READ executes one materialized task only")
         self.executed = True
+        try:
+            outcome = await self._execute(task, workspace=workspace, grants=grants)
+        except Exception as exc:
+            if self._meter is not None and not isinstance(exc, OwnershipLost):
+                self._meter.settle(None)
+            raise
+        if self._meter is not None:
+            self._meter.settle(outcome)
+        return outcome
+
+    async def _execute(self, task: TaskSpec, *, workspace: WorkspaceView | None,
+                       grants: EffectiveGrants) -> ExecutorOutcome:
         outcome: ExecutorOutcome | None = None
         try:
             self._check()

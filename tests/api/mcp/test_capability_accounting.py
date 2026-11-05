@@ -27,7 +27,7 @@ async def test_mcp_result_v2_and_cut_accounting_resource(world, journal):
     )
     async with Client(server, raise_exceptions=True) as client:
         result = _structured(await client.call_tool("runs_result", {"run_id": str(run)}))
-        assert result["result_schema_version"] == 2
+        assert result["result_schema_version"] == 3
         assert result["failures_partial"] is False
         accounting = result["capability_accounting"]
         assert accounting["active_count"] == 1

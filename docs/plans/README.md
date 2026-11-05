@@ -32,6 +32,7 @@ the eventual code differs.
 
 | Record | Status |
 | --- | --- |
+| [Executor metering observations](handoffs/executor-metering-observations-proposal.md) | Accepted by the owner on 2026-11-05 for [#376](https://github.com/sushiHex/constructicon/issues/376); [ADR 0024](../adr/0024-retain-native-executor-metering.md) records adoption. Original proposal bytes are preserved; runtime evidence is separate |
 | [Run-scoped ordinary attestation identity](handoffs/run-scoped-attestation-identity-proposal.md) | Accepted by the owner on 2026-11-05; [ADR 0023](../adr/0023-ordinary-attestations-bind-their-minting-run.md) records adoption and implementation authority. Original proposal bytes are preserved; runtime evidence is separate |
 
 ## System-design lineage

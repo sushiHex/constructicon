@@ -75,3 +75,8 @@ records run-scoped ordinary attestation identities and a positively witnessed,
 closed historical v1 era. The owner accepted the proposal and implementation
 in the 2026-11-05 wave. Policy IDs, historical proof bytes and one-proof/one-move
 semantics remain unchanged; implementation evidence belongs in the delivery PR.
+
+Accepted [ADR 0024](0024-retain-native-executor-metering.md) records the
+owner's 2026-11-05 adoption for [#376](https://github.com/sushiHex/constructicon/issues/376).
+The decision allows bounded native usage observations in the existing journal
+and preserves unknown monetary values and the previous custody decisions.
