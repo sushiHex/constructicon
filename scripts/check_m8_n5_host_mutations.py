@@ -1,4 +1,4 @@
-"""M8 N5 host assembly: one mutant per check; each must fail an assertion.
+"""M8 N5 host assembly and its bounded M9 operator consumer authorities.
 
 Run as the service on the provisioned lane, where the Linux assembly tests run.
 The account's well-formedness has none: the returned seal validates it again,
@@ -88,6 +88,27 @@ MUTANTS = (
      'if (host.session / "config.toml").read_text(encoding="utf-8") != configuration:',
      "if False:",
      TEST + "test_a_session_configuration_other_than_production_is_refused"),
+    # The same unavailable-by-default host provider serves the finite M9 selector.
+    # These target new application authorities, not the already-proved exclusive
+    # AttemptRecord/epoch budget law or redundant native adapter defenses.
+    ("M9 dispatch carries the sealed training projection",
+     "constructicon.api._m9.proposer:task",
+     'f"Catalog: {canonical_json(CATALOG)}\\nTraining: {training()}"',
+     'f"Catalog: {canonical_json(CATALOG)}\\nTraining: []"',
+     "tests/e2e/test_m9_executor_trial.py::test_fixed_training_bytes_reach_task_seam_before_selection"),
+    ("M9 evaluator cannot recover an issuer assembly",
+     "constructicon.api._m9.safety:before_startup",
+     'role != "issue"', "False",
+     "tests/e2e/test_m9_executor_trial.py::test_evaluator_rejects_parked_issuance_before_startup"),
+    ("M9 checkpoint evidence requires terminal success before issuance",
+     "constructicon.api._m9.proposer:retained",
+     "record.status != RunStatus.SUCCEEDED", "False",
+     "tests/e2e/test_m9_executor_trial.py::test_nonterminal_checkpoint_is_refused_before_issuance"),
+    ("M9 observation fields satisfy their published accepting-path bounds",
+     "constructicon.api._m9.proposer:checked_observation",
+     "return Observation.model_validate(payload)", "return Observation.model_construct(**payload)",
+     "tests/e2e/test_m9_executor_trial.py::"
+     "test_every_public_observation_field_has_a_binding_bound_and_refusal_is_closed"),
 )
 
 if __name__ == "__main__":

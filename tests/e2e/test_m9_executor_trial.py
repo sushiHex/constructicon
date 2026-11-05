@@ -316,6 +316,77 @@ async def test_exact_authorization_and_source_drift_refuse_before_dispatch(
     assert _open(root, trial, initialize=False).run_record(selector_run(trial)) is None
 
 
+async def test_fixed_training_bytes_reach_task_seam_before_selection(
+    tmp_path, portable_binding, substituted_guard, monkeypatch,
+):
+    """Pin the actual instruction, independently of its reported task digest."""
+    root, trial = tmp_path / "trial", TrialIdentity("task-input")
+    await m9_trial.seed(root, trial)
+    native = adapter.clean_native(records=[completed(answer="cite-evidence")])
+    executor = provider(root, trial, portable_binding, native, tmp_path / "acquisitions")
+    monkeypatch.setattr(m9_trial, "read_authorization", lambda path: executor.qualification)
+    monkeypatch.setattr(m9_trial, "_provider", lambda options, authorization: executor)
+    result = await m9_trial.dispatch(Namespace(
+        stage="propose", trial=trial.trial_id, store=root, authorization=tmp_path / "owner.json",
+    ))
+    assert result["status"] == "selected"
+    (turn,) = [message for message in native.received if message.get("method") == "turn/start"]
+    instruction = turn["params"]["input"][0]["text"]
+    _, separator, received_training = instruction.partition("\nTraining: ")
+    assert separator == "\nTraining: "
+    assert received_training == proposer.training()
+    assert "train-1" in received_training
+    assert "held-1" not in instruction and "held-2" not in instruction
+
+
+async def test_evaluator_rejects_parked_issuance_before_startup(tmp_path, monkeypatch):
+    root, trial = tmp_path / "trial", TrialIdentity("assembly-role")
+    parked = await run(root, trial, "prepare")
+    journal = _open(root, trial, initialize=False)
+    record = journal.run_record(parked["run"])
+    assert record is not None and record.status == RunStatus.PARKED
+
+    async def unadmitted_startup(control):
+        raise AssertionError("evaluator assembly reached issuer recovery")
+
+    monkeypatch.setattr(ControlPlane, "startup", unadmitted_startup)
+    with pytest.raises(ValueError, match="M9_STARTUP_ISSUANCE_ASSEMBLY_REQUIRED"):
+        await m9_trial.seed(root, trial)
+    assert journal.run_record(parked["run"]) == record
+
+
+async def test_nonterminal_checkpoint_is_refused_before_issuance(
+    tmp_path, portable_binding, substituted_guard, monkeypatch,
+):
+    root, trial = tmp_path / "trial", TrialIdentity("terminal-evidence")
+    await m9_trial.seed(root, trial)
+    native = adapter.clean_native(records=[completed(answer="cite-evidence")])
+    await m9_trial.execute_selection(
+        root, trial, provider(root, trial, portable_binding, native, tmp_path / "acquisitions"),
+    )
+    journal = _open(root, trial, initialize=False)
+    selected = selector_run(trial)
+    assert journal.checkpoint(selected, proposer.PATH) is not None
+    assert proposer.retained(journal, selected).choice == "cite-evidence"
+    original = SqliteJournal.run_record
+
+    def nonterminal(store, run_id):
+        record = original(store, run_id)
+        if run_id == selected and record is not None:
+            # The checkpoint-before-terminal window is a lawful state. Replace
+            # only its read projection; no contradictory SQLite history is forged.
+            return record.model_copy(update={"status": RunStatus.RUNNING})
+        return record
+
+    monkeypatch.setattr(SqliteJournal, "run_record", nonterminal)
+    with pytest.raises(ValueError, match="M9_SELECTOR_INCOMPLETE_PRESERVE_STORE_NO_RETRY"):
+        await run(root, trial, "prepare")
+    assert journal.run_record(selected).status == RunStatus.RUNNING
+    assert journal.snapshot().stable_version(TARGET) == (
+        diagnostic_definition(baseline).content_hash()
+    )
+
+
 @pytest.mark.parametrize("choice", ["cite-evidence\n", "baseline"])
 async def test_real_adapter_selection_composes_with_scripted_exam_and_owner(
     tmp_path, portable_binding, substituted_guard, monkeypatch, choice,
