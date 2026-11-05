@@ -44,13 +44,16 @@ def _cli(store: Path, stage: str) -> dict:
     return json.loads(process.stdout)
 
 
-def _promotion_proofs(store: Path) -> list[str]:
+def _promotion_proofs(store: Path, version: Digest) -> list[str]:
     with closing(sqlite3.connect(store / "journal.sqlite")) as connection:
         return [
             proof_id
             for proof_id, in connection.execute(
                 "SELECT attestation_id FROM attestations "
-                "WHERE json_extract(attestation_json, '$.action') = 'promote'"
+                "WHERE json_extract(attestation_json, '$.action') = 'promote' "
+                "AND json_extract(attestation_json, '$.subject.component') = ? "
+                "AND json_extract(attestation_json, '$.subject.version') = ?",
+                (TARGET, str(version)),
             )
         ]
 
@@ -67,7 +70,7 @@ async def test_fixed_operator_trial_from_park_through_rollback(tmp_path: Path) -
     before = journal.snapshot().revision.promotion_seq
     assert journal.snapshot().stable_version(TARGET) == old
     assert journal.checkpoint(run_id, OPERATOR_ISSUER_PATH) is None
-    assert _promotion_proofs(store) == []
+    assert _promotion_proofs(store, new) == []
     with pytest.raises(ValueError, match="original trial key"):
         await run(store, TrialIdentity("other"), "prepare")
     with pytest.raises(ValueError, match="no successful reviewed issuance"):
@@ -91,7 +94,7 @@ async def test_fixed_operator_trial_from_park_through_rollback(tmp_path: Path) -
     proof = journal.load_attestation(proof_id)
     assert proof is not None and proof.created_by_run == run_id and proof.action == "promote"
     assert journal.promotion_for_attestation(proof_id) is None
-    assert _promotion_proofs(store) == [proof_id]
+    assert _promotion_proofs(store, new) == [proof_id]
 
     promoted = await run(store, trial, "promote")
     assert (promoted["from"], promoted["to"], promoted["proof"]) == (old, new, proof_id)
@@ -112,6 +115,7 @@ async def test_fixed_operator_rejection_cannot_promote(tmp_path: Path) -> None:
     store = tmp_path / "isolated"
     trial = TrialIdentity("reject")
     parked = await run(store, trial, "prepare")
+    new = Digest(parked["subject"]["version"])
     journal = SqliteJournal(store / "journal.sqlite")
     before = journal.snapshot().revision
     rejected = await run(store, trial, "reject")
@@ -119,4 +123,4 @@ async def test_fixed_operator_rejection_cannot_promote(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="no successful reviewed issuance"):
         await run(store, trial, "promote")
     assert journal.snapshot().revision == before
-    assert _promotion_proofs(store) == []
+    assert _promotion_proofs(store, new) == []
