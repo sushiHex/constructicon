@@ -197,8 +197,6 @@ def test_pre10_context_is_connection_scoped_reentrant_and_resets_on_error(tmp_pa
     first, second = sqlite3.connect(database), sqlite3.connect(database)
     first.row_factory = second.row_factory = sqlite3.Row
     try:
-        register_attestation_seal_guard(first)
-        register_run_origin_guard(first)
         with (
             pytest.raises(JournalDamaged, match="transaction"),
             _pre_v10_attestation_reader(first),
@@ -206,6 +204,8 @@ def test_pre10_context_is_connection_scoped_reentrant_and_resets_on_error(tmp_pa
             pytest.fail("unlocked pre10 context was accepted")
         first.execute("BEGIN IMMEDIATE")
         second.execute("BEGIN")
+        register_attestation_seal_guard(first)
+        register_run_origin_guard(first)
         row = first.execute("SELECT * FROM attestations WHERE json_extract("
                             "attestation_json, '$.action')='send'").fetchone()
         with pytest.raises(RuntimeError, match="injected"), _pre_v10_attestation_reader(first):
@@ -512,3 +512,202 @@ def test_failed_real_migration_cannot_leave_sql_compatibility_on_its_connection(
     finally:
         connection.close()
     assert logical_facts(database, include_witness=True) == before
+
+
+@pytest.mark.parametrize("damage", ("creator-manifest", "parent-world-seal", "manifest-seal"))
+def test_off_actor_inbox_proves_creator_manifest_and_positive_world_facts(tmp_path, damage):
+    from constructicon.core.channel import ChannelRevision
+    from constructicon.substrate.journal._sqlite_attestations import attestation_fact_hash
+    from constructicon.substrate.journal._sqlite_channels import channel_message_fact_hash
+    from constructicon.substrate.journal._sqlite_fact_seals import store_durable_fact_seal
+    from tests.durable_seals import reseal_primary_fact
+
+    database = tmp_path / "inbox-creator-world.db"
+    historical_database(database)
+    journal = SqliteJournal(database)
+    original = next(p for p in historical_proofs(database) if p.action == "send")
+    other = create_test_run(journal, RunId("different-world"), inputs={"different": True})
+
+    def inbox(actor):
+        return journal.channel_inbox(
+            channel_id="channel/legacy", actor_id=actor,
+            revision=ChannelRevision(message_seq=1, ack_seq=0), after=None, limit=1,
+        )
+
+    assert inbox("static:other") == ()
+    assert len(inbox("static:legacy-advisor")) == 1
+    identity = original.attestation_id
+    with sqlite3.connect(database) as connection:
+        connection.row_factory = sqlite3.Row
+        if damage == "manifest-seal":
+            connection.execute("DELETE FROM durable_fact_seals WHERE family='manifest'"
+                               " AND fact_key=?", (str(original.manifest_hash),))
+        else:
+            draft = draft_of(original).model_copy(update={"manifest_hash": other.manifest_hash})
+            identity = attestation_id_for_run(draft, original.created_by_run)
+            proof = original.model_copy(update={"attestation_id": identity,
+                                                "manifest_hash": other.manifest_hash})
+            connection.execute("INSERT INTO attestations VALUES (?, ?)",
+                               (identity, proof.model_dump_json()))
+            row = connection.execute("SELECT * FROM attestations WHERE attestation_id=?",
+                                     (identity,)).fetchone()
+            store_durable_fact_seal(connection, family="attestation", fact_key=identity,
+                                    selector=identity,
+                                    fact_hash=attestation_fact_hash(row, family="attestation"))
+            connection.execute("UPDATE channel_messages SET attestation_id=?", (identity,))
+            message = connection.execute("SELECT * FROM channel_messages").fetchone()
+            reseal_primary_fact(connection, family="channel_message",
+                                fact_key=message["message_id"],
+                                fact=channel_message_fact_hash(message))
+            if damage == "parent-world-seal":
+                # Make raw equality agree too: the retained run-world seal
+                # must independently refute this unsealed parent-column swap.
+                connection.execute("UPDATE runs SET manifest_hash=? WHERE run_id=?",
+                                   (str(other.manifest_hash), str(original.created_by_run)))
+    with pytest.raises(JournalDamaged):
+        inbox("static:other")
+    with pytest.raises(JournalDamaged):
+        journal.load_attestation(identity)
+    with pytest.raises(JournalDamaged):
+        journal.run_records(limit=1)
+
+
+def _command_backed_request(journal, *, clone=False):
+    from constructicon.core.channel import request_message_id
+    from constructicon.core.control import (
+        OPERATE_SCOPE,
+        AuthenticatedActor,
+        RunCreationPlan,
+        RunOrigin,
+        SourceRunLock,
+        StoredRunCreationPlan,
+        command_request_hash,
+        run_id_for_command,
+    )
+    from constructicon.core.identity import digest
+    from tests.channel_requests import mint_send_attestation
+    from tests.run_worlds import sealed_test_manifest
+    from tests.substrate.channels.test_channel_contract import _intent
+    from tests.substrate.journal.test_run_projection import _create_command_backed_run
+
+    run, command = _create_command_backed_run(journal, idempotency_key="proof-creator")
+    if clone:
+        source = run
+        manifest = sealed_test_manifest()
+        actor = AuthenticatedActor(actor_id="static:run-creator", auth_method="static",
+                                   scopes=frozenset({OPERATE_SCOPE}))
+        request = {"source_run_id": str(source), "overrides": {}}
+        claimed = journal.claim_command(
+            actor=actor, operation="runs_reproduce", idempotency_key="proof-clone",
+            request_hash=command_request_hash(request), request=request,
+            owner_id="test:clone", ttl_s=30,
+        )
+        assert claimed.claim is not None
+        command = claimed.claim.command_id
+        run = run_id_for_command(command)
+        origin = RunOrigin(kind="reproduce", actor_id=actor.actor_id, command_id=command,
+                           source_run_id=source)
+        plan = RunCreationPlan(
+            run_id=run, manifest=manifest, inputs={}, origin=origin,
+            source_lock=SourceRunLock(
+                run_id=source, manifest_hash=manifest.manifest_hash, input_hash=manifest.input_hash,
+                source_graph_hash=digest("graph-proposal", 1,
+                                         manifest.source_graph.model_dump(mode="json")),
+            ),
+        )
+        journal.store_command_plan(claimed.claim, StoredRunCreationPlan(plan=plan).model_dump(
+            mode="json",
+        ))
+        journal.create_run(run, manifest_json=manifest.model_dump_json(),
+                           manifest_hash=manifest.manifest_hash, input_hash=manifest.input_hash,
+                           inputs={}, origin=origin)
+        journal.complete_command(claimed.claim, {"status": "submitted"})
+    intent = _intent()
+    intent = intent.model_copy(update={
+        "run_id": run,
+        "message_id": request_message_id(
+            run_id=run, path=intent.path, channel_id=intent.channel_id,
+            channel_revision=intent.channel_revision, lane=intent.lane,
+            interaction=intent.interaction, port=intent.port,
+        ),
+    })
+    proof = mint_send_attestation(journal, intent)
+    journal.channel_append_request(channel_id=intent.channel_id, intent=intent,
+                                   attestation_id=proof.attestation_id)
+    return run, command, intent, proof
+
+
+@pytest.mark.parametrize("damage", ("command-plan-seal", "clone-lock"))
+def test_creator_command_and_clone_authority_cannot_hide_behind_filters(tmp_path, damage):
+    from constructicon.core.channel import ChannelRevision
+    from constructicon.core.identity import canonical_json, digest, json_value
+    from constructicon.substrate.journal._sqlite_commands import command_plan_fact_hash
+    from tests.durable_seals import reseal_primary_fact
+
+    database = tmp_path / "creator-command.db"
+    journal = SqliteJournal(database)
+    run, command, intent, proof = _command_backed_request(journal, clone=damage == "clone-lock")
+    with sqlite3.connect(database) as connection:
+        connection.row_factory = sqlite3.Row
+        if damage == "command-plan-seal":
+            connection.execute("DELETE FROM durable_fact_seals WHERE family='command_plan'"
+                               " AND fact_key=?", (command,))
+        else:
+            import json
+
+            raw = connection.execute("SELECT plan_json FROM commands WHERE command_id=?",
+                                     (command,)).fetchone()[0]
+            payload = json.loads(raw)
+            payload["plan"]["source_lock"]["manifest_hash"] = str(digest("wrong-lock", 1, {}))
+            connection.execute("UPDATE commands SET plan_json=? WHERE command_id=?",
+                               (canonical_json(json_value(payload)), command))
+            row = connection.execute("SELECT * FROM commands WHERE command_id=?",
+                                     (command,)).fetchone()
+            reseal_primary_fact(connection, family="command_plan", fact_key=command,
+                                fact=command_plan_fact_hash(row))
+    with pytest.raises(JournalDamaged):
+        journal.load_attestation(proof.attestation_id)
+    with pytest.raises(JournalDamaged):
+        journal.run_records(after=("9999", "past-end"), limit=1)
+    with pytest.raises(JournalDamaged):
+        journal.latest_run_key()
+    with pytest.raises(JournalDamaged):
+        journal.channel_inbox(channel_id=intent.channel_id, actor_id="static:other",
+                              revision=ChannelRevision(message_seq=1, ack_seq=0),
+                              after=None, limit=1)
+    assert str(run)
+
+
+def test_creator_prefilter_and_inbox_projection_share_one_owned_snapshot(tmp_path, monkeypatch):
+    from constructicon.core.channel import ChannelRevision
+    from constructicon.substrate.journal import _sqlite_attestations
+
+    database = tmp_path / "creator-snapshot.db"
+    journal = SqliteJournal(database)
+    _run, command, intent, _proof = _command_backed_request(journal)
+    validate = _sqlite_attestations._validate_attestation_creator_worlds
+    observed = []
+
+    def scheduled(connection):
+        assert connection.in_transaction
+        validate(connection)
+        if not observed:
+            with sqlite3.connect(database) as writer:
+                writer.execute("DELETE FROM durable_fact_seals WHERE family='command_plan'"
+                               " AND fact_key=?", (command,))
+            observed.append(True)
+
+    monkeypatch.setattr(_sqlite_attestations, "_validate_attestation_creator_worlds", scheduled)
+    deliveries = journal.channel_inbox(
+        channel_id=intent.channel_id, actor_id=intent.recipient_actor_id,
+        revision=ChannelRevision(message_seq=1, ack_seq=0), after=None, limit=1,
+    )
+    assert len(deliveries) == 1 and observed == [True]
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM durable_fact_seals"
+                                  " WHERE family='command_plan' AND fact_key=?",
+                                  (command,)).fetchone() == (0,)
+    with pytest.raises(JournalDamaged):
+        journal.channel_inbox(channel_id=intent.channel_id, actor_id="static:other",
+                              revision=ChannelRevision(message_seq=1, ack_seq=0),
+                              after=None, limit=1)

@@ -31,6 +31,8 @@ from constructicon.substrate.journal._sqlite_attestations import (
     ATTESTATION_FACT_FAMILY,
     LEGACY_ATTESTATION_FACT_FAMILY,
     RUN_V1_ATTESTATION_WITNESS_FAMILY,
+    attestation_creator_anomaly,
+    attestation_creator_joins,
     attestation_from_json,
     attestation_seal_anomaly,
     attestation_seal_joins,
@@ -568,7 +570,9 @@ RUN_CHILD_ORPHAN_ANOMALY = (
     " AND current_attestation.fact_key = child.attestation_id"
     " AND current_attestation.selector = child.attestation_id"
     + attestation_seal_joins("child", "run_attestation")
+    + attestation_creator_joins("child", "run_attestation_creator")
     + " WHERE " + attestation_seal_anomaly("child", "run_attestation")
+    + " OR " + attestation_creator_anomaly("child", "run_attestation_creator")
     + " OR constructicon_attestation_is_valid(child.attestation_json) != 1"
     " OR (constructicon_attestation_created_by_run(child.attestation_json)"
     " IS NOT NULL AND parent.run_id IS NULL"

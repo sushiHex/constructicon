@@ -67,6 +67,22 @@ MUTANTS = (
         "test_inbox_sql_cannot_hide_unproven_history_behind_another_actor[dual-family-selector]",
     ),
     (
+        "SQL relation binds proof manifest to its canonical creator world",
+        "constructicon.substrate.journal._sqlite_attestations:_attestation_creator_matches",
+        "str(proof.created_by_run) == run_id and str(proof.manifest_hash) == manifest_hash",
+        "str(proof.created_by_run) == run_id",
+        "tests/substrate/journal/test_run_attestation_identity.py::"
+        "test_exact_v2_id_and_primary_seal_cannot_replace_creator_world_validation",
+    ),
+    (
+        "canonical creator command authority precedes actor and cursor filters",
+        "constructicon.substrate.journal._sqlite_attestations:_validate_attestation_creator_worlds",
+        "for row in rows:",
+        "for row in ():",
+        "tests/migrations/test_sqlite_v9_to_v10.py::"
+        "test_creator_command_and_clone_authority_cannot_hide_behind_filters[command-plan-seal]",
+    ),
+    (
         "fresh rollback cannot reuse a consumed policy proof",
         "constructicon.runtime.registry:ComponentRegistry.plan_rollback",
         "if prior is not None:",

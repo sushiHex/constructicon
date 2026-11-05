@@ -70,6 +70,8 @@ from constructicon.core.identity import (
 )
 from constructicon.substrate.journal._sqlite_approvals import stored_approval_fact_from_row
 from constructicon.substrate.journal._sqlite_attestations import (
+    attestation_creator_anomaly,
+    attestation_creator_joins,
     attestation_from_json,
     attestation_seal_anomaly,
     attestation_seal_joins,
@@ -135,6 +137,7 @@ _INVALID_INBOX_ROUTING = (
 _INBOX_REQUEST_PROOF_MISMATCH = (
     "m.attestation_id IS NOT NULL AND ("
     + attestation_seal_anomaly("a", "inbox_attestation")
+    + " OR " + attestation_creator_anomaly("a", "inbox_attestation_creator")
     + " OR"
     " constructicon_channel_request_routing_matches("
     "m.attestation_id, a.attestation_json, m.message_id, m.channel_id,"
@@ -895,6 +898,7 @@ class _SqliteChannelsMixin:
                 "SELECT m.* FROM channel_messages AS m"
                 " LEFT JOIN attestations AS a ON a.attestation_id = m.attestation_id"
                 + attestation_seal_joins("a", "inbox_attestation")
+                + attestation_creator_joins("a", "inbox_attestation_creator")
                 + " WHERE m.message_seq <= ? AND (("
                 + " AND ".join(visible)
                 + f") OR ({_INVALID_INBOX_ROUTING})"

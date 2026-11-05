@@ -155,6 +155,14 @@ def test_exact_v2_id_and_primary_seal_cannot_replace_creator_world_validation(tm
                                 fact_hash=attestation_fact_hash(row, family="attestation"))
     with pytest.raises(JournalDamaged, match="creator run world"):
         journal.load_attestation(identity)
+    for read in (
+        lambda: journal.run_records(),
+        lambda: journal.run_records(limit=1, after=("9999-01-01T00:00:00+00:00", "past-end")),
+        lambda: journal.latest_run_key(),
+        lambda: journal.recoverable_runs(limit=1),
+    ):
+        with pytest.raises(JournalDamaged):
+            read()
 
 
 @pytest.mark.parametrize("seam", ("before_commit", "after_commit"))

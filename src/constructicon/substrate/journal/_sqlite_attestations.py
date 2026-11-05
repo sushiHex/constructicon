@@ -283,10 +283,98 @@ def attestation_seal_anomaly(alias: str, prefix: str) -> str:
     )
 
 
+def _attestation_creator_id(raw: object) -> str | None:
+    try:
+        creator = attestation_from_json(raw).created_by_run
+        return str(creator) if creator is not None else None
+    except JournalDamaged:
+        return None
+
+
+def _attestation_creator_matches(raw: object, run_id: object, manifest_hash: object) -> int:
+    """Pure selector relation; creator worlds are proven before filtering."""
+
+    try:
+        stored = _stored_attestation_from_json(raw)
+        proof = stored.attestation
+        if stored.provenance == "m1-m2" or proof.created_by_run is None:
+            return 1
+        return int(
+            str(proof.created_by_run) == run_id and str(proof.manifest_hash) == manifest_hash
+        )
+    except (JournalDamaged, TypeError, ValueError, ValidationError):
+        return 0
+
+
+def _attestation_current_creator_id(raw: object) -> str | None:
+    try:
+        stored = _stored_attestation_from_json(raw)
+        creator = stored.attestation.created_by_run
+        return str(creator) if stored.provenance != "m1-m2" and creator is not None else None
+    except (JournalDamaged, TypeError, ValueError, ValidationError):
+        return None
+
+
+def _validate_attestation_creator_worlds(connection: sqlite3.Connection) -> None:
+    """Prove distinct ordinary creators canonically before an actor/cursor filter.
+
+    This is not a fact inventory or a recovery scan. The global attestation
+    selector already examines these rows; materializing their distinct creators
+    lets the canonical world projector prove command plans and clone sources
+    once per creator instead of mirroring a partial authority law in SQL. The
+    caller owns the same snapshot through the subsequent bounded selection.
+    """
+
+    from constructicon.substrate.journal._sqlite_runs import validated_run_world
+
+    if not connection.in_transaction:
+        raise JournalDamaged("attestation creator prefilter requires an owned read transaction")
+    rows = connection.execute(
+        "SELECT r.*, o.origin_json, creators.creator_id FROM"
+        " (SELECT DISTINCT constructicon_attestation_current_creator_id(attestation_json)"
+        " AS creator_id FROM attestations) AS creators"
+        " LEFT JOIN runs AS r ON r.run_id = creators.creator_id"
+        " LEFT JOIN run_origins AS o ON o.run_id = r.run_id"
+        " WHERE creators.creator_id IS NOT NULL"
+    ).fetchall()
+    # Nested canonical projectors register SQL functions; no outer cursor may
+    # remain active while they do so. No proof cache outlives this snapshot.
+    for row in rows:
+        world = validated_run_world(connection, row)
+        if str(world.run_id) != row["creator_id"]:
+            raise JournalDamaged("attestation creator prefilter contradicts its retained run")
+
+
+def attestation_creator_joins(alias: str, prefix: str) -> str:
+    return (
+        f" LEFT JOIN runs AS {prefix}_run ON {prefix}_run.run_id ="
+        f" constructicon_attestation_creator_id({alias}.attestation_json)"
+    )
+
+
+def attestation_creator_anomaly(alias: str, prefix: str) -> str:
+    return (
+        f"constructicon_attestation_creator_matches({alias}.attestation_json,"
+        f" {prefix}_run.run_id, {prefix}_run.manifest_hash) != 1"
+    )
+
+
 def register_attestation_seal_guard(connection: sqlite3.Connection) -> None:
+    connection.create_function(
+        "constructicon_attestation_creator_id", 1, _attestation_creator_id, deterministic=True,
+    )
+    connection.create_function(
+        "constructicon_attestation_creator_matches", 3, _attestation_creator_matches,
+        deterministic=True,
+    )
     connection.create_function(
         "constructicon_attestation_seals_match", 6, _attestation_seals_match, deterministic=True,
     )
+    connection.create_function(
+        "constructicon_attestation_current_creator_id", 1, _attestation_current_creator_id,
+        deterministic=True,
+    )
+    _validate_attestation_creator_worlds(connection)
     # This function observes a live, exact-connection migration context. It is
     # deliberately NOT deterministic; unlike JSON selectors it depends on the
     # transaction and loses compatibility authority immediately on context exit.
