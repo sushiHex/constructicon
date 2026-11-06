@@ -657,7 +657,7 @@ input hash and resolved version restores; the first miss resumes live.
 Reproduce starts a new run under a past run's exact manifest and inputs.
 
 One public `SqliteJournal` implements the separate L0 `Journal`,
-`RegistryStore`, and `ControlPlaneStore` contracts over one schema-10 WAL
+`RegistryStore`, and `ControlPlaneStore` contracts over one schema-11 WAL
 database. `ControlPlaneStore` extends the standalone `ControlStore` ledger with
 the transaction that must also own channel facts. New ordinary attestations
 bind their fenced minting run in the v2 identity; policy IDs remain v1.
@@ -687,10 +687,19 @@ _sqlite_control          command transactions and approval application
 _sqlite_channels         messages, acknowledgements, provenance, bounded reads
 _sqlite_queries          bounded run/event projections
 _sqlite_accounting       coherent run/status and historical capability accounting
+_sqlite_metering         fenced native dispatch facts and bounded usage projections
 _sqlite_capability_disposal  administrative receipt relationship and inventory
 ```
 
 This is implementation decomposition, not multiple stores.
+
+[ADR 0024](adr/0024-retain-native-executor-metering.md) adds a single native
+executor metering event family in schema 11. Actual Codex and Claude task
+writes require fenced intent after byte validation; outcomes record bounded
+facts that passed the adapter's correlation and custody checks. The run
+result's third version reports source-scoped known subtotals and evidence
+at its accounting event cut. Historical runs remain positively unmeasured,
+and both monetary amounts remain unknown.
 
 Every durable JSON boundary rejects duplicate keys, non-finite numbers, and
 non-scalar Unicode before typing. Except for an explicitly named,

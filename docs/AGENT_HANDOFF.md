@@ -3594,3 +3594,27 @@ The manual local READ test reports bounded protocol progress and a fixed
 decoder reason on failure. Run 41706702254 established clean exit and EOF
 without settlement, but did not record which protocol predicate stopped it.
 This correction establishes source compatibility for the user message only.
+
+## Native executor metering observations — #376
+
+[ADR 0024](adr/0024-retain-native-executor-metering.md) adopts the independently
+reviewed metering proposal. Schema 11 positively marks prior RunIds
+unmeasured, including on resume. The existing journal co-commits intent
+and outcome relationships for exact Codex and Claude native acquisitions;
+result version 3 returns source-scoped known subtotals and cut-pinned
+attempt detail. The selector, qualification attempt files and executor
+outcome format keep their existing roles. Money remains unknown.
+
+Credential-free scripted adapter runs prove the Codex latest cumulative
+11/3 counters and reroute target, Claude 17/23 main-loop counters, and
+unavailable Claude observations lost after the result reached the decoder.
+A native Codex dispatch in a counterfactual run contributes only to that
+run; fake execution contributes no actual meter. Journal tests also
+exercise framing and cumulative input bounds before intent, refusal of a
+failed intent, uncertain native transport, post-commit expiry, stale
+ownership, repeated outcomes, acquired epochs and loop frames, old cuts,
+and removed or relocated evidence. Child processes exit on both sides of
+the metering and migration commits; reopening projects only the
+co-committed facts. These are scripted and local SQLite proofs. No live
+adapter behavior, pricing or charge, all-request coverage, or historical
+usage reconstruction is established.

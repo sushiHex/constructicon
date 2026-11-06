@@ -491,3 +491,43 @@ async def test_the_read_node_reports_only_an_accepted_text_answer(outcome, answe
     else:
         report = await qualification.qualification_read_node(ctx, {})
         assert report == {"report": {"answer_bytes": answered}}
+
+
+async def test_scripted_codex_metering_reaches_versioned_result(
+    tmp_path, portable_binding, substituted_guard, clock,
+):
+    from constructicon.api.control import ControlPlane
+    from constructicon.api.system import Constructicon
+    from constructicon.core.control import READ_SCOPE, AuthenticatedActor, RunResultPreviewV3
+    from tests.substrate.test_codex_protocol import completed, rerouted, usage_update
+
+    reader, granted = read_stage(tmp_path, portable_binding)
+    reader.launcher = bare_launcher(clean_native(records=[
+        usage_update(input_tokens=5, output_tokens=1),
+        usage_update(input_tokens=11, output_tokens=3),
+        rerouted("gpt-6-rerouted"), completed(answer="done"),
+    ]))
+    assert await qualify(provider=reader, grants=GRANTS, timeout_s=30, now_fn=clock.now) \
+        is RunStatus.SUCCEEDED
+    journal = SqliteJournal(granted.journal, now_fn=clock.now)
+    control = ControlPlane(system=Constructicon(journal=journal), store=journal)
+    actor = AuthenticatedActor(actor_id="static:meter", auth_method="static",
+                               scopes=frozenset({READ_SCOPE}))
+    result = control.runs_result(actor, granted.run_id)
+    assert isinstance(result, RunResultPreviewV3), result
+    assert result.metering.coverage == "supported_observations"
+    assert result.metering.attempt_count == 1
+    (group,) = result.metering.groups
+    assert group.source == "codex_fresh_thread_total_v1"
+    assert (group.intent_only, group.unavailable, group.partial, group.observed) == (0, 0, 0, 1)
+    assert (group.known_input_tokens, group.known_output_tokens) == (11, 3)
+    chunk = control.details_read(actor, result.metering.detail, max_bytes=64_000)
+    assert chunk.next_cursor is None
+    (attempt,) = json.loads(chunk.text)["attempts"]
+    assert attempt["intent"]["source"] == group.source
+    assert attempt["intent"]["requested_model"] == GRANTS.model_selection.model
+    assert attempt["outcome"]["served_model"] == "gpt-6-rerouted"
+    assert (attempt["outcome"]["input_tokens"], attempt["outcome"]["output_tokens"]) == (11, 3)
+    assert attempt["intent_evidence"]["event_seq"] < attempt["outcome_evidence"]["event_seq"]
+    assert attempt["estimate"] is attempt["confirmed_charge"] is None
+    assert control.runs_result(actor, granted.run_id) == result

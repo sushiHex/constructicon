@@ -47,7 +47,7 @@ from constructicon.core.control import (
     PromotionCommandResult,
     RegistrationCommandResult,
     RunPage,
-    RunResultPreviewV2,
+    RunResultPreviewV3,
     RunSubmission,
     RunSummary,
     VersionPage,
@@ -368,7 +368,7 @@ class ControlPlane:
         self,
         actor: AuthenticatedActor,
         run_id: RunId,
-    ) -> RunResultPreviewV2 | ControlRejected:
+    ) -> RunResultPreviewV3 | ControlRejected:
         return self._queries.runs_result(actor, run_id)
 
     def commands_status(

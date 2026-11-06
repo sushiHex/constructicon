@@ -36,6 +36,7 @@ from constructicon.runtime.registry import ComponentRegistry
 DEFAULT_DETAIL_BYTES = 16_000
 MIN_DETAIL_BYTES = 4
 MAX_DETAIL_BYTES = 64_000
+METERING_PAGE_SIZE = 100
 IMMUTABLE_RESULT_STATUSES = frozenset(TERMINAL_EVENT_STATUSES.values())
 
 
@@ -59,6 +60,11 @@ class DetailAddress:
     @staticmethod
     def accounting(run_id: RunId, through_event_seq: int) -> str:
         return f"constructicon://runs/{quote(str(run_id), safe='')}/accounting/{through_event_seq}"
+
+    @staticmethod
+    def metering(run_id: RunId, through_event_seq: int, after_intent_seq: int = 0) -> str:
+        return (f"constructicon://runs/{quote(str(run_id), safe='')}/metering/"
+                f"{through_event_seq}/{after_intent_seq}")
 
     @staticmethod
     def command(command_id: str) -> str:
@@ -461,6 +467,44 @@ class DetailResolver:
                 if receipt is None or receipt.run_id != run_id or receipt.audit_event_seq != seq:
                     raise JournalDamaged("disposal reference differs from its canonical receipt")
                 return receipt.model_dump(mode="json")
+            if family == "runs" and len(parts) == 4 and parts[1] == "metering":
+                cut, after = int(parts[2]), int(parts[3])
+                if (cut < 0 or after < 0 or after > cut
+                        or str(cut) != parts[2] or str(after) != parts[3]):
+                    return self._not_found(
+                        uri, "metering cut and cursor must be canonical sequences",
+                    )
+                run_id = RunId(parts[0])
+                metering_snapshot = self._store.executor_metering_snapshot(
+                    run_id, through_event_seq=cut, after_intent_seq=after,
+                    limit=METERING_PAGE_SIZE + 1,
+                )
+                if metering_snapshot is None:
+                    return self._not_found(uri, "metering run does not exist")
+                if metering_snapshot.run_id != run_id or metering_snapshot.event_seq != cut:
+                    raise JournalDamaged("metering snapshot contradicts detail run or cut")
+                attempts = metering_snapshot.attempts[:METERING_PAGE_SIZE]
+                next_uri = None
+                if len(metering_snapshot.attempts) > METERING_PAGE_SIZE:
+                    next_uri = DetailAddress.metering(
+                        run_id, cut, attempts[-1].intent_evidence.event_seq,
+                    )
+                return json_value({
+                    "run_id": str(run_id), "through_event_seq": cut,
+                    "after_intent_seq": after,
+                    "attempts": [
+                        {**attempt.model_dump(mode="json"),
+                         "coverage": (attempt.outcome.coverage
+                                      if attempt.outcome is not None else "intent_only"),
+                         "dispatch": (attempt.outcome.dispatch
+                                      if attempt.outcome is not None else "possibly_dispatched"),
+                         "estimate": None, "estimate_coverage": "unknown",
+                         "confirmed_charge": None, "confirmed_charge_coverage": "unknown"}
+                        for attempt in attempts
+                    ],
+                    "next_uri": next_uri,
+                })
+
             if family == "runs" and len(parts) == 3 and parts[1] == "accounting":
                 cut = int(parts[2])
                 if cut < 0 or str(cut) != parts[2]:

@@ -16,7 +16,7 @@ from constructicon.core.control import (
     ControlCode,
     ControlRejected,
     RunResultPreview,
-    RunResultPreviewV2,
+    RunResultPreviewV3,
     parse_run_result_preview,
 )
 from constructicon.core.manifest import CapabilityLease
@@ -50,7 +50,7 @@ def test_running_result_returns_versioned_accounting_and_chunked_detail(world, j
     result = control.runs_result(READER, RUN)
     assert not isinstance(result, ControlRejected)
     assert hasattr(result, "result_schema_version")
-    assert result.result_schema_version == 2
+    assert result.result_schema_version == 3
     accounting = result.capability_accounting
     assert accounting.active_count == 1
     assert accounting.disposed_count == accounting.opaque_lost_count == accounting.lost_count == 0
@@ -64,7 +64,7 @@ def test_running_result_returns_versioned_accounting_and_chunked_detail(world, j
     payload = json.loads(chunk.text)
     assert payload["through_event_seq"] == 2
     assert payload["items"][0]["lease_id"] == lease.lease_id
-    assert isinstance(parse_run_result_preview(result.model_dump_json()), RunResultPreviewV2)
+    assert isinstance(parse_run_result_preview(result.model_dump_json()), RunResultPreviewV3)
 
 
 @pytest.mark.parametrize("count,partial", ((20, False), (21, True)))
@@ -75,7 +75,7 @@ def test_result_failure_item_partiality_binds_at_twenty(world, journal, count, p
         path = ExecutionPath(scope=ScopePath(segments=(f"failure-{index:02}",)))
         journal.append_event(worker, "NodeFailed", path=path, payload={"error": f"error-{index}"})
     result = ControlPlane(system=world, store=journal).runs_result(READER, RUN)
-    assert isinstance(result, RunResultPreviewV2)
+    assert isinstance(result, RunResultPreviewV3)
     assert len(result.failures) == 20
     assert result.failures_partial is partial
     assert list(result.failures) == sorted(result.failures)
@@ -90,7 +90,7 @@ def test_result_failure_scan_partiality_has_affirmative_extra_event(world, journ
     path = ExecutionPath(scope=ScopePath(segments=("last-failure",)))
     journal.append_event(worker, "NodeFailed", path=path, payload={"error": "bound-binds"})
     result = ControlPlane(system=world, store=journal).runs_result(READER, RUN)
-    assert isinstance(result, RunResultPreviewV2)
+    assert isinstance(result, RunResultPreviewV3)
     assert result.failures_partial is partial
     assert result.failures == ({} if partial else {path.render(): "bound-binds"})
 
@@ -101,7 +101,7 @@ def test_accounting_chunks_keep_old_cut_after_close_resume_and_reopen(world, jou
     lease = acquire(journal, worker, "unicode-é界")
     control = ControlPlane(system=world, store=journal)
     result = control.runs_result(READER, RUN)
-    assert isinstance(result, RunResultPreviewV2)
+    assert isinstance(result, RunResultPreviewV3)
     reference = result.capability_accounting.detail
     first = control.details_read(READER, reference, max_bytes=7)
     assert not isinstance(first, ControlRejected) and first.next_cursor is not None
@@ -132,7 +132,7 @@ def test_accounting_chunks_keep_old_cut_after_close_resume_and_reopen(world, jou
     reopened = SqliteJournal(journal._db_path)
     control = ControlPlane(system=Constructicon(journal=reopened), store=reopened)
     current = control.runs_result(READER, RUN)
-    assert isinstance(current, RunResultPreviewV2)
+    assert isinstance(current, RunResultPreviewV3)
     assert current.capability_accounting.detail != reference
     text = first.text
     cursor = first.next_cursor
@@ -185,7 +185,7 @@ def test_result_summary_and_detail_are_complete_beyond_a_hundred(world, journal)
         acquire(journal, worker, index)
     control = ControlPlane(system=world, store=journal)
     result = control.runs_result(READER, RUN)
-    assert isinstance(result, RunResultPreviewV2)
+    assert isinstance(result, RunResultPreviewV3)
     assert result.capability_accounting.active_count == 101
     assert result.capability_accounting.lost_count == 0
     chunk = control.details_read(READER, result.capability_accounting.detail, max_bytes=64_000)
@@ -200,7 +200,12 @@ def test_result_reports_opaque_historical_loss_without_inventing_disposal(tmp_pa
     control = ControlPlane(system=Constructicon(journal=journal), store=journal)
     run = RunId("run-historical-capabilities")
     result = control.runs_result(READER, run)
-    assert isinstance(result, RunResultPreviewV2)
+    assert isinstance(result, RunResultPreviewV3)
+    assert result.metering.coverage == "legacy_unmeasured"
+    assert result.metering.groups == () and result.metering.attempt_count == 0
+    metering_detail = control.details_read(READER, result.metering.detail, max_bytes=64_000)
+    assert not isinstance(metering_detail, ControlRejected)
+    assert json.loads(metering_detail.text)["attempts"] == []
     summary = result.capability_accounting
     assert summary.active_count == 1
     assert summary.opaque_lost_count == summary.lost_count == 1
@@ -210,3 +215,86 @@ def test_result_reports_opaque_historical_loss_without_inventing_disposal(tmp_pa
     lost = next(item for item in json.loads(chunk.text)["items"] if item["state"] == "lost")
     assert lost["loss"] == "opaque_lost" and lost["physical_cleanup"] == "unknown"
     assert lost["disposal_receipt"] is None and lost["acquisition_event_seq"] is None
+
+
+def test_metering_detail_is_bounded_and_pinned_to_result_cut(world, journal, monkeypatch):
+    """Page continuation and old detail remain stable after the run advances."""
+    from types import SimpleNamespace
+
+    from pydantic import BaseModel
+
+    class Attempt(BaseModel):
+        intent_evidence: dict[str, int]
+        outcome: str | None
+
+    create_test_run(journal, RUN)
+    worker = start_test_run(journal, RUN, owner_id="metering-page-worker")
+    for _ in range(110):
+        journal.append_event(worker, "FixtureProgress")
+    original_cut = journal.capability_accounting_snapshot(RUN).detail.through_event_seq
+    calls = []
+
+    def snapshot(run_id, *, through_event_seq, after_intent_seq=0, limit=0):
+        calls.append((through_event_seq, after_intent_seq, limit))
+        rows = [Attempt(intent_evidence={"event_seq": i},
+                        outcome="observed" if through_event_seq > original_cut else None)
+                for i in range(1, 103) if i > after_intent_seq]
+        attempts = tuple(rows[:limit]) if limit else ()
+        # The API consumes the evidence's attribute, as the real model provides.
+        attempts = tuple(SimpleNamespace(
+            intent_evidence=SimpleNamespace(event_seq=a.intent_evidence["event_seq"]),
+            outcome=(SimpleNamespace(coverage="observed", dispatch="dispatched")
+                     if a.outcome else None),
+            model_dump=a.model_dump,
+        ) for a in attempts)
+        return SimpleNamespace(run_id=run_id, event_seq=through_event_seq,
+                               coverage="supported_observations", groups=(),
+                               attempt_count=102, attempts=attempts)
+
+    monkeypatch.setattr(journal, "executor_metering_snapshot", snapshot, raising=False)
+    control = ControlPlane(system=world, store=journal)
+    result = control.runs_result(READER, RUN)
+    assert isinstance(result, RunResultPreviewV3)
+    assert isinstance(parse_run_result_preview(result.model_dump_json()), RunResultPreviewV3)
+    for invalid in (True, 3.0, "3"):
+        payload = result.model_dump(mode="json")
+        payload["result_schema_version"] = invalid
+        with pytest.raises(ValueError):
+            parse_run_result_preview(json.dumps(payload))
+    assert result.metering.through_event_seq == original_cut
+    assert result.metering.attempt_count == 102
+    assert result.metering.estimate is result.metering.confirmed_charge is None
+    assert result.metering.estimate_coverage == "unknown"
+    assert result.metering.confirmed_charge_coverage == "unknown"
+    first = control.details_read(READER, result.metering.detail, max_bytes=64_000)
+    assert not isinstance(first, ControlRejected)
+    page = json.loads(first.text)
+    assert len(page["attempts"]) == 100
+    assert page["attempts"][0]["coverage"] == "intent_only"
+    assert page["attempts"][0]["dispatch"] == "possibly_dispatched"
+    assert page["attempts"][0]["estimate"] is None
+    assert page["attempts"][0]["confirmed_charge"] is None
+    assert page["next_uri"].endswith(f"/metering/{original_cut}/100")
+    second = control.resource_read(READER, page["next_uri"], max_bytes=64_000)
+    assert not isinstance(second, ControlRejected)
+    last_page = json.loads(second.text)
+    assert len(last_page["attempts"]) == 2 and last_page["next_uri"] is None
+    journal.append_event(worker, "FixtureProgress")
+    replay = control.details_read(READER, result.metering.detail, max_bytes=64_000)
+    assert not isinstance(replay, ControlRejected)
+    assert replay.text == first.text
+    newer = control.runs_result(READER, RUN)
+    assert isinstance(newer, RunResultPreviewV3)
+    assert newer.metering.through_event_seq > original_cut
+    fresh = control.details_read(READER, newer.metering.detail, max_bytes=64_000)
+    assert not isinstance(fresh, ControlRejected)
+    assert json.loads(fresh.text)["attempts"][0]["outcome"] == "observed"
+    assert (original_cut, 0, 101) in calls and (original_cut, 100, 101) in calls
+
+    no_read = AuthenticatedActor(
+        actor_id="static:no-read", auth_method="static", scopes=frozenset(),
+    )
+    before_denied = len(calls)
+    assert isinstance(control.details_read(no_read, result.metering.detail), ControlRejected)
+    assert isinstance(control.resource_read(no_read, page["next_uri"]), ControlRejected)
+    assert len(calls) == before_denied

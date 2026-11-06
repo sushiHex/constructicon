@@ -87,8 +87,10 @@ def _downgrade_effect_table_to_v6(database: Path) -> None:
 
     with sqlite3.connect(database) as connection:
         connection.execute("DROP TABLE capability_accounting_eras")
+        # The synthetic schema-6 fixture cannot carry later run-creation seals.
         connection.execute(
-            "DELETE FROM durable_fact_seals WHERE family = 'capability_accounting_era'"
+            "DELETE FROM durable_fact_seals"
+            " WHERE family IN ('capability_accounting_era', 'executor_metering_era')"
         )
         connection.execute("ALTER TABLE effects RENAME TO effects_v7")
         connection.execute(

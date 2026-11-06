@@ -50,7 +50,7 @@ def test_actual_schema7_writer_lost_transitions_receive_exact_migration_witnesse
     historical_database(database, "schema7-lost-transitions.sql")
     before = retained_bytes(database)
     journal = SqliteJournal(database)
-    assert SCHEMA_VERSION == 10
+    assert SCHEMA_VERSION == 11
     assert retained_bytes(database) == before
     assert journal.capability_leases(RUN)[0].state == "lost"
     with sqlite3.connect(database) as connection:
@@ -74,7 +74,7 @@ def test_actual_schema6_writer_initial_lifecycle_receives_only_initial_lost_witn
     historical_database(database, "schema6-initial-lifecycle.sql")
     before = retained_bytes(database)
     journal = SqliteJournal(database)
-    assert SCHEMA_VERSION == 10
+    assert SCHEMA_VERSION == 11
     assert retained_bytes(database) == before
     assert {row.state for row in journal.capability_leases(RUN)} == {"active", "closed", "lost"}
     with sqlite3.connect(database) as connection:

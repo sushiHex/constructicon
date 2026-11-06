@@ -36,16 +36,18 @@ from constructicon.core.control import (
     DetailRef,
     EventPage,
     EventSummary,
+    MeteringSummary,
     NamePage,
     PageInfo,
     RunPage,
-    RunResultPreviewV2,
+    RunResultPreviewV3,
     RunSummary,
     VersionPage,
     VersionSummary,
     channel_reach,
     scope_refusal,
 )
+from constructicon.core.errors import JournalDamaged
 from constructicon.core.graph import Graph
 from constructicon.core.identity import Digest, JsonValue, canonical_json, digest, json_value
 from constructicon.core.introspection import SystemDescription
@@ -294,7 +296,7 @@ class _ControlQueries:
         self,
         actor: AuthenticatedActor,
         run_id: RunId,
-    ) -> RunResultPreviewV2 | ControlRejected:
+    ) -> RunResultPreviewV3 | ControlRejected:
         denied = self._authorize(actor)
         if denied:
             return denied
@@ -319,16 +321,29 @@ class _ControlQueries:
         reference = self._details.accounting_reference(actor, accounting)
         if isinstance(reference, ControlRejected):
             return reference
+        metering = self._store.executor_metering_snapshot(
+            run_id, through_event_seq=accounting.through_event_seq,
+        )
+        if (metering is None or metering.run_id != run_id
+                or metering.event_seq != accounting.through_event_seq):
+            raise JournalDamaged("metering snapshot contradicts accounting run or cut")
+        metering_ref = self._details.required_reference(
+            actor, DetailAddress.metering(run_id, accounting.through_event_seq),
+        )
         disposed = sum(item.loss == "disposed" for item in accounting.items)
         opaque = sum(item.loss == "opaque_lost" for item in accounting.items)
-        return RunResultPreviewV2(
-            result_schema_version=2,
+        return RunResultPreviewV3(
+            result_schema_version=3,
             run_id=run_id,
             status=snapshot.run.status,
             outputs=outputs,
             failures=dict(list(sorted(failures.items()))[:20]),
             detail=self._details.optional_reference(actor, DetailAddress.result(run_id)),
             failures_partial=len(failure_events) > 1_000 or len(failures) > 20,
+            metering=MeteringSummary(
+                coverage=metering.coverage, through_event_seq=accounting.through_event_seq,
+                groups=metering.groups, attempt_count=metering.attempt_count, detail=metering_ref,
+            ),
             capability_accounting=CapabilityAccountingSummary(
                 active_count=sum(item.state == "active" for item in accounting.items),
                 disposed_count=disposed, opaque_lost_count=opaque, lost_count=disposed + opaque,

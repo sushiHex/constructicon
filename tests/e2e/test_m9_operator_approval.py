@@ -22,7 +22,7 @@ from constructicon.core.control import (
     AuthenticatedActor,
     ChannelMessagePage,
     ControlRejected,
-    RunResultPreviewV2,
+    RunResultPreviewV3,
     RunSubmission,
     RunSummary,
 )
@@ -186,7 +186,7 @@ async def _worker(
         )
         assert (replayed.approval_id, replayed.reply) == (result.approval_id, result.reply)
         output = control.runs_result(_RUNNER, run_id)
-        assert isinstance(output, RunResultPreviewV2), output
+        assert isinstance(output, RunResultPreviewV3), output
         gate = journal.checkpoint(run_id, _GATE_PATH)
         assert gate is not None
         decision = gate.outputs["decision"].payload

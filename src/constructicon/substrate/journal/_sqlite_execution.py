@@ -193,6 +193,10 @@ class _SqliteExecutionMixin:
         *,
         created_at: datetime | None = None,
     ) -> JournalEvent:
+        from constructicon.substrate.journal._sqlite_metering import METERING_EVENT
+
+        if kind == METERING_EVENT:
+            raise ContractViolation("executor metering requires its fenced writer")
         self._insert_event_fact(conn, run_id, seq, kind, path, payload, created_at=created_at)
         row = conn.execute(
             "SELECT * FROM events WHERE run_id = ? AND seq = ?", (run_id, seq),

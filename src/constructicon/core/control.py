@@ -39,6 +39,7 @@ from constructicon.core.identity import (
     parse_json_value,
 )
 from constructicon.core.manifest import ExecutionManifest, validated_manifest_identity
+from constructicon.core.metering import MeteringGroup, MeteringSnapshot
 from constructicon.core.run import TERMINAL_EVENT_STATUSES, Liveness, RunStatus
 
 if TYPE_CHECKING:
@@ -1217,7 +1218,48 @@ class RunResultPreviewV2(BaseModel):
         return value
 
 
-def parse_run_result_preview(raw: str | JsonValue) -> RunResultPreview | RunResultPreviewV2:
+class MeteringSummary(BaseModel):
+    """Source-scoped known subtotals, never a claim of complete run usage."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    coverage: Literal["legacy_unmeasured", "unmeasured", "supported_observations"]
+    through_event_seq: int = Field(ge=0)
+    groups: tuple[MeteringGroup, ...] = Field(max_length=2)
+    attempt_count: int = Field(ge=0)
+    detail: DetailRef
+    estimate: None = None
+    estimate_coverage: Literal["unknown"] = "unknown"
+    confirmed_charge: None = None
+    confirmed_charge_coverage: Literal["unknown"] = "unknown"
+
+
+class RunResultPreviewV3(BaseModel):
+    """Live result with source-scoped metering at the accounting cut."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    result_schema_version: Literal[3]
+    run_id: RunId
+    status: RunStatus
+    outputs: dict[str, JsonValue] = Field(default_factory=dict)
+    failures: dict[str, str] = Field(default_factory=dict, max_length=20)
+    detail: DetailRef | None = None
+    capability_accounting: CapabilityAccountingSummary
+    failures_partial: bool
+    metering: MeteringSummary
+
+    @field_validator("result_schema_version", mode="before")
+    @classmethod
+    def _exact_result_version(cls, value: object) -> object:
+        if type(value) is not int or value != 3:
+            raise ValueError("result_schema_version must be exact integer 3")
+        return value
+
+
+def parse_run_result_preview(
+    raw: str | JsonValue,
+) -> RunResultPreview | RunResultPreviewV2 | RunResultPreviewV3:
     """Missing version names the old shape; it never fabricates zero accounting."""
 
     value = parse_json_value(raw) if isinstance(raw, str) else raw
@@ -1225,9 +1267,12 @@ def parse_run_result_preview(raw: str | JsonValue) -> RunResultPreview | RunResu
         raise ValueError("run result preview must be an object")
     if "result_schema_version" not in value:
         return RunResultPreview.model_validate_json(canonical_json(value))
-    if type(value["result_schema_version"]) is not int or value["result_schema_version"] != 2:
+    version = value["result_schema_version"]
+    if type(version) is not int or version not in (2, 3):
         raise ValueError("unknown or inexact run result preview version")
-    return RunResultPreviewV2.model_validate_json(canonical_json(value))
+    if version == 2:
+        return RunResultPreviewV2.model_validate_json(canonical_json(value))
+    return RunResultPreviewV3.model_validate_json(canonical_json(value))
 
 
 class VersionSummary(BaseModel):
@@ -1749,6 +1794,13 @@ class ControlPlaneStore(ControlStore, Protocol):
         through_event_seq: int | None = None,
     ) -> CapabilityAccountingSnapshot | None:
         """One coherent run/status/accounting read, with an optional supported cut."""
+        ...
+
+    def executor_metering_snapshot(
+        self, run_id: RunId, *, through_event_seq: int,
+        after_intent_seq: int = 0, limit: int = 0,
+    ) -> MeteringSnapshot | None:
+        """Verify metering at an immutable event cut, with bounded attempt rows."""
         ...
 
     def store_approval_exchange(
