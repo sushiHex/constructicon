@@ -2589,7 +2589,8 @@ async def test_terminal_usage_and_measured_elapsed_survive_later_refusal(monkeyp
     if failure == "process":
         launcher.result = replace(launcher.result, payload_returncode=1)
     original_exchange = launcher.exchange
-    started_time = asyncio.get_running_loop().time()
+    # Use an exactly representable interval on the same clock as asyncio.timeout_at.
+    started_time = 256.0
     observed_time = started_time
 
     async def exchange(command, **arguments):
@@ -2603,9 +2604,9 @@ async def test_terminal_usage_and_measured_elapsed_survive_later_refusal(monkeyp
             observed_time = started_time + 3.25
 
     launcher.exchange = exchange
-    monkeypatch.setattr(claude_read.asyncio, "get_running_loop",
-                        lambda: SimpleNamespace(time=lambda: observed_time))
-    outcome, _ = await run(launcher)
+    with monkeypatch.context() as clock:
+        clock.setattr(asyncio.get_running_loop(), "time", lambda: observed_time)
+        outcome, _ = await run(launcher)
     assert isinstance(outcome, ExecutorSuccess if failure is None else ExecutorFailure)
     assert launcher.joined
     # Native terminal usage is main-loop per-turn evidence, not modelUsage totals.
