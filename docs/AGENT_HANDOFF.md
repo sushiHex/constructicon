@@ -3620,6 +3620,14 @@ adapter behavior, pricing or charge, all-request coverage, or historical
 usage reconstruction is established.
 
 
+## Deterministic Claude READ timing fixture — #299
+
+The scripted READ telemetry test now gives the adapter and its timeout the same
+fixed loop clock. A start of `255.99999999999997` reproduced the CI assertion
+failure (`3.2500000000000284` versus `3.25`); the fixture uses a fixed starting
+point and a 3.25-second interval, and keeps the exact elapsed and token
+assertions across success and later refusal. Production telemetry is unchanged.
+
 ## M9 READ window coordination
 
 The operator supervisor keeps qualification, independently authenticated
