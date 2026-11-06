@@ -114,7 +114,11 @@ class StagedRead:
             raise ValueError("M9_READ_ALREADY_ISSUED_OR_FENCED")
         self._issued = True
         # Even zero here is only a response. The independent proof is mandatory.
-        self._action("dispatch", captures, cutoff, run)
+        status, _, err = self._action("dispatch", captures, cutoff, run)
+        if status["timed_out"]:
+            raise TimeoutError("M9_READ_DISPATCH_RESPONSE_LOST")
+        if status != {"completed": True, "returncode": 0, "timed_out": False} or err:
+            raise ValueError("M9_READ_DISPATCH_RESPONSE_UNPROVED")
 
     def prove(self, captures: Path, cutoff: float, *, run=None) -> TerminalProof | None:
         if self._observed:

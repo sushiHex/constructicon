@@ -302,7 +302,7 @@ def test_unproved_remote_attempt_retains_custody_and_blocks_restart(tmp_path, fa
     ("fault", "tail"),
     [
         ("close unproved", ["close"]),
-        ("withdraw lost", ["withdraw", "park", "check-park"]),
+        ("withdraw lost", ["withdraw"]),
         ("park unproved", ["park", "check-park"]),
     ],
 )

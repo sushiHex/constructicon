@@ -362,19 +362,25 @@ def run_window(
             boundary.close,
             qualified,
         )
-        if closed:
-            withdrawn = cleanup_receipt(
-                "withdraw",
-                min(monotonic() + limits.withdraw, cutoff - limits.park),
-                boundary.withdraw,
-                qualified,
-            )
+        if not closed:
+            reason = "close-unproved"
+        elif not cleanup_receipt(
+            "withdraw",
+            min(monotonic() + limits.withdraw, cutoff - limits.park),
+            boundary.withdraw,
+            qualified,
+        ):
+            # A lost withdrawal response can leave that remote write in flight.
+            # Do not race it by parking the guest from this window.
+            reason = "withdraw-unproved"
+        else:
             park_cutoff = min(monotonic() + limits.park, cutoff)
             # Even a lost park response may be proved by the independent observation.
             with suppress(Exception):
                 call(park_cutoff, boundary.park)
-            parked = cleanup_receipt("park", park_cutoff, boundary.check_park)
-            cleaned = withdrawn and parked
+            cleaned = cleanup_receipt("park", park_cutoff, boundary.check_park)
+            if not cleaned:
+                reason = "park-unproved"
     custody_retained = not cleaned or marker_uncertain
     result = WindowResult(
         record,

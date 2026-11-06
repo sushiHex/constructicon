@@ -140,7 +140,8 @@ def staged(tmp_path, *, admit_until=ADMISSION, **guest_options):
 
 def test_lost_ssh_response_can_read_original_terminal_receipt(tmp_path):
     read, guest, captures, cutoff = staged(tmp_path, lose_reply=True)
-    read.dispatch(captures, cutoff, run=guest)
+    with pytest.raises(TimeoutError):
+        read.dispatch(captures, cutoff, run=guest)
     assert json.loads((captures / "read-dispatch.status.json").read_bytes())["timed_out"] is True
     proof = read.prove(captures, cutoff, run=guest)
     assert proof is not None and proof.disposition == "terminal" and proof.challenge_sha256 == CLAIM
@@ -169,7 +170,8 @@ def test_fence_on_guest_refuses_late_dispatch(tmp_path):
 
 def test_nonzero_child_is_not_remote_completion_proof(tmp_path):
     read, guest, captures, cutoff = staged(tmp_path, child_status=1)
-    read.dispatch(captures, cutoff, run=guest)
+    with pytest.raises(ValueError):
+        read.dispatch(captures, cutoff, run=guest)
     assert read.prove(captures, cutoff, run=guest) is None
     assert (guest.root / "fake-call").is_file()
     assert not (guest.root / "native-terminal").exists()
@@ -177,7 +179,8 @@ def test_nonzero_child_is_not_remote_completion_proof(tmp_path):
 
 def test_guest_admission_expiry_is_checked_before_claim(tmp_path):
     read, guest, captures, cutoff = staged(tmp_path, admit_until=1)
-    read.dispatch(captures, cutoff, run=guest)
+    with pytest.raises(ValueError):
+        read.dispatch(captures, cutoff, run=guest)
     assert not (guest.root / "native-decision").exists()
     assert not (guest.root / "fake-call").exists()
     proof = read.prove(captures, cutoff, run=guest)
