@@ -3618,3 +3618,22 @@ the metering and migration commits; reopening projects only the
 co-committed facts. These are scripted and local SQLite proofs. No live
 adapter behavior, pricing or charge, all-request coverage, or historical
 usage reconstruction is established.
+
+
+## M9 READ window coordination
+
+The operator supervisor keeps qualification, independently authenticated
+selection, one dispatch and cleanup under one owner. Its guest phase uses one
+exclusive decision to fence an unstarted invocation or retain dispatch intent.
+Only a protected receipt written after the fixed guest child returns supports
+remote completion; loss of SSH, an empty lock, and a nonzero child result do
+not. A successful CLI return may be a journal replay, so this receipt is not
+model dispatch or result evidence.
+
+The credential-free suite executes the emitted guest shell and a fresh
+verifier process. It covers a lost dispatch response with a recoverable guest
+receipt, delayed dispatch after fencing or admission expiry, and unresolved
+execution that retains custody. The shorter owner deadline gates admission;
+the existing controller still enforces its own native candidate expiry.
+There is no default live adapter, host run, or accepted subscription READ in
+this slice.
