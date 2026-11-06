@@ -135,21 +135,35 @@ def main():
         )
         raw = read(p.retirement, os.getuid())
         require(hashlib.sha256(raw).hexdigest() == p.retirement_sha, "retirement record hash")
-        retired = successful(raw, "judge-retire", p.controller_commit, "ready", p.witness)
+        # scripts/ci/m8_host_artifacts.py at 490562a: verify_launch passes its
+        # launch revision to retirement(), independently of verify-controller.
+        retired = successful(raw, "judge-retire", p.launch_commit, "ready", p.witness)
         kept = obj(retired, "retained")
         require(
             set(kept) == {"dev", "ino", "gid", "qualification"}
             and all(type(kept[k]) is int and kept[k] >= 0 for k in ("dev", "ino", "gid")),
             "retained roots recorded",
         )
+        prior = kept["qualification"]
+        require(
+            prior is None
+            or (
+                type(prior) is dict
+                and set(prior) == {"dev", "ino"}
+                and all(type(value) is int and value >= 0 for value in prior.values())
+            ),
+            "retained qualification identity recorded",
+        )
         path = Path(p.launch_root) / "qualification"
         try:
             q = path.lstat()
         except FileNotFoundError:
-            require(kept["qualification"] is None, "missing retained qualification directory")
+            require(prior is None, "missing retained qualification directory")
         else:
+            # The same producer calls require_retained_identity(allow_created=True);
+            # retained_qualification still requires valid directory metadata.
             require(
-                kept["qualification"] == {"dev": q.st_dev, "ino": q.st_ino}
+                (prior is None or prior == {"dev": q.st_dev, "ino": q.st_ino})
                 and stat.S_ISDIR(q.st_mode)
                 and q.st_uid == q.st_gid == 0
                 and stat.S_IMODE(q.st_mode) == 0o755,
