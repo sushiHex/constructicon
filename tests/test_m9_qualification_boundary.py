@@ -24,6 +24,13 @@ ALIAS = "fixture"
 AUTH = "/var/lib/constructicon-m8-launch/qualification/fixture.json"
 RUNTIME = "sha256:" + "1" * 64
 QUALIFICATION = "sha256:" + "2" * 64
+D2 = {
+    "revision": "d" * 40,
+    "workspace": "/home/fixture/m8-host",
+    "helper_sha256": "a" * 64,
+    "drift_sha256": "b" * 64,
+    "drift_hex": b"fixture drift observation\n".hex(),
+}
 SELECTOR = json_value(
     {
         "source": proposer.SOURCE,
@@ -41,6 +48,17 @@ def selected(root):
             f'test "$M9_BOOT" = {BOOT} || exit 3\n'
             "printf 'fixture exact phase output\\n'\n"
         ).encode()
+        if phase in ("d2-preserve", "d2-verify"):
+            raw = boundary._d2_script(
+                {
+                    "EXPECTED_BOOT": BOOT,
+                    "__d2_commit": D2["revision"],
+                    "__d2_workspace": D2["workspace"],
+                    "__drift_sha256": D2["drift_sha256"],
+                    "__drift_hex": D2["drift_hex"],
+                },
+                phase,
+            ).replace(BOOT.encode(), b"UNREVIEWED")
         (root / (phase + ".sh")).write_bytes(raw)
         phases[phase] = {"script": sha(raw)}
         if phase not in {*boundary.TRIAL_PHASES, boundary.CLEANUP}:
@@ -56,6 +74,7 @@ def selected(root):
             "alias": ALIAS,
             "previous_boot": PRIOR,
             "controller": "0" * 40,
+            "d2": D2,
             "runtime": RUNTIME,
             "previous_generation": 11,
             "authorization": AUTH,
@@ -105,6 +124,7 @@ class NativeTwin:
             }
         )
         self.candidate = json_bytes(candidate.model_dump(mode="json"))
+        self.d2_boot = BOOT
 
     def __call__(self, argv, **kwargs):
         assert kwargs["stdin"] == subprocess.DEVNULL and kwargs["shell"] is False
@@ -121,6 +141,12 @@ class NativeTwin:
             remote = command.split('cd "$HOME/', 1)[1].split('"', 1)[0]
             phase = self.staged[remote]
             assert BOOT in command
+            if phase in ("d2-preserve", "d2-verify"):
+                helper = D2["workspace"] + "/m8_host_artifacts.py"
+                assert "/usr/bin/sudo -n true < /dev/null" in command
+                assert f"test ! -L {helper}" in command
+                assert f"/usr/bin/sha256sum -- {helper}" in command
+                assert D2["helper_sha256"] in command
             self.events.append(phase)
             if phase == self.lose:
                 raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
@@ -154,6 +180,30 @@ class NativeTwin:
                 self.shell_executed = True
             else:
                 raw = b"fixture exact phase output\n"
+        elif "/d2-records/lr2.out" in command:
+            remote = next(name for name, phase in self.staged.items() if phase == "d2-verify")
+            assert f"/home/fixture/{remote}/d2-records/lr2.out operator 65536" in command
+            raw = (
+                (self.d2_boot + "\nverify exit 0\n").encode()
+                + json_bytes(
+                    {
+                        "command": "verify",
+                        "commit": D2["revision"],
+                        "first_parent": True,
+                        "script_matches_commit": True,
+                        "installed": True,
+                    }
+                )
+                + b"probe exit 0\n"
+                + json_bytes(
+                    {
+                        "qualified": True,
+                        "commit": D2["revision"],
+                        "scope": "runner_prerequisites_only",
+                        "production_available": False,
+                    }
+                )
+            )
         elif "ACTIVE_BINDING_OR_ATTEMPT_DRIFT" in command:
             raw = json_bytes(self.live)
         elif "WITHDRAWAL_LOCK_UNAVAILABLE" in command:
@@ -219,6 +269,33 @@ def test_lost_mutation_response_retains_custody(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="PARK_UNSAFE"):
         host.park(cutoff)
     assert twin.events[-1] == "h5-lock"
+
+
+def test_d2_marker_does_not_substitute_for_current_boot_record(tmp_path, monkeypatch):
+    twin = NativeTwin(monkeypatch, tmp_path)
+    twin.d2_boot = PRIOR
+    host = make(tmp_path, twin)
+    with pytest.raises(ValueError):
+        host.qualify(time.monotonic() + 10)
+    assert twin.events == ["d2-preserve", "d2-verify"]
+
+
+def test_selected_d2_script_must_match_the_reviewed_compiler(tmp_path, monkeypatch):
+    twin = NativeTwin(monkeypatch, tmp_path)
+    path, _ = selected(tmp_path)
+    record = json.loads(path.read_bytes())
+    template = path.with_name("d2-preserve.sh")
+    raw = template.read_bytes() + b"# different selected script\n"
+    template.write_bytes(raw)
+    record["phases"]["d2-preserve"]["script"] = sha(raw)
+    raw_selection = json_bytes(record)
+    path.write_bytes(raw_selection)
+    host = boundary.QualificationBoundary(
+        path, sha(raw_selection), tmp_path / "work", target=TARGET, alias=ALIAS, run=twin
+    )
+    with pytest.raises(ValueError, match="D2_SCRIPT_SELECTION"):
+        host.qualify(time.monotonic() + 10)
+    assert twin.events == []
 
 
 def test_wrong_target_refuses_before_process(tmp_path, monkeypatch):

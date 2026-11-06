@@ -17,7 +17,14 @@ from pathlib import Path
 
 from scripts import m8_vm_usage
 from scripts.ops import claude_read_session as transport
-from scripts.ops.claude_read_commands import bounded, parsed, sha
+from scripts.ops.claude_read_commands import (
+    _d2_script,
+    bounded,
+    d2_record,
+    parsed,
+    protected_read_command,
+    sha,
+)
 from scripts.ops.m9_read_closure import ClosurePins
 from scripts.ops.m9_read_command import (
     BOOT,
@@ -247,6 +254,7 @@ class QualificationBoundary:
                 "alias",
                 "previous_boot",
                 "controller",
+                "d2",
                 "runtime",
                 "previous_generation",
                 "authorization",
@@ -261,6 +269,7 @@ class QualificationBoundary:
         generation = selected["previous_generation"]
         auth = selected["authorization"]
         selector = selected["selector"]
+        d2 = selected["d2"]
         _require(
             type(selected["schema_version"]) is int
             and selected["schema_version"] == 1
@@ -285,6 +294,21 @@ class QualificationBoundary:
             and selector.keys() == {"source", "source_graph", "component"}
             and all(_digest(value) for value in selector.values()),
             "SELECTOR_SELECTION",
+        )
+        self._remote_home = "/home/" + target.split("@", 1)[0]
+        _require(
+            type(d2) is dict
+            and d2.keys() == {"revision", "workspace", "helper_sha256", "drift_sha256", "drift_hex"}
+            and type(d2["revision"]) is str
+            and re.fullmatch(r"[0-9a-f]{40}", d2["revision"]) is not None
+            and type(d2["workspace"]) is str
+            and re.fullmatch(re.escape(self._remote_home) + r"/[A-Za-z0-9_-]+", d2["workspace"])
+            is not None
+            and _hex(d2["helper_sha256"])
+            and _hex(d2["drift_sha256"])
+            and type(d2["drift_hex"]) is str
+            and re.fullmatch(r"(?:[0-9a-f]{2}){1,1024}", d2["drift_hex"]) is not None,
+            "D2_SELECTION",
         )
         read_argv("0" * 64, auth, 1)
         phases = selected["phases"]
@@ -328,6 +352,7 @@ class QualificationBoundary:
         self._qualification = None
         self._live = None
         self._serial = 0
+        self._d2_readback = None
         self._started = self._mutated = self._uncertain = self._withdrawn = self._park = False
 
     @property
@@ -364,9 +389,26 @@ class QualificationBoundary:
     def _stage(self, phase, cutoff):
         guard = self._guard() + " && "
         binding = {"boot": self._boot, "controller": self._selected["controller"], "phase": phase}
+        script = self._templates[phase].replace(_BOOT_SLOT, self._boot.encode("ascii"))
+        if phase in ("d2-preserve", "d2-verify"):
+            d2 = self._selected["d2"]
+            _require(
+                script
+                == _d2_script(
+                    {
+                        "EXPECTED_BOOT": self._boot,
+                        "__d2_commit": d2["revision"],
+                        "__d2_workspace": d2["workspace"],
+                        "__drift_sha256": d2["drift_sha256"],
+                        "__drift_hex": d2["drift_hex"],
+                    },
+                    phase,
+                ),
+                "D2_SCRIPT_SELECTION",
+            )
         files = {
             "bindings.json": transport.json_bytes(binding),
-            "phase.sh": self._templates[phase].replace(_BOOT_SLOT, self._boot.encode("ascii")),
+            "phase.sh": script,
             "SOURCE-PINS.json": transport.json_bytes({"selection_sha256": self._selection_sha}),
         }
         manifest = "".join(f"{sha(files[name])}  {name}\n" for name in sorted(files)).encode(
@@ -377,14 +419,23 @@ class QualificationBoundary:
         for name, raw in {**files, "MANIFEST.sha256": manifest}.items():
             transport.retain(package / name, raw)
         manifest_sha = sha(manifest)
-        ops = transport.staging_commands(
-            package, manifest_sha, "m9-qual-" + manifest_sha[:24], self._target, self._alias
-        )
+        remote = "m9-qual-" + manifest_sha[:24]
+        ops = transport.staging_commands(package, manifest_sha, remote, self._target, self._alias)
         for index, argv in enumerate(ops[:3]):
             if index != 2:  # SCP transfers inert bytes; both SSH commands check boot.
                 argv = [*argv[:-1], guard + argv[-1]]
             _require(self._call(f"{phase}-stage-{index}", argv, cutoff) == b"", "STAGE_OUTPUT")
         _require(ops[3][-1].endswith(_EXEC), "STAGE_SHAPE")
+        if phase in ("d2-preserve", "d2-verify"):
+            d2 = self._selected["d2"]
+            helper = shlex.quote(d2["workspace"] + "/m8_host_artifacts.py")
+            guard += (
+                f"/usr/bin/sudo -n true < /dev/null && test -f {helper} && test ! -L {helper} && "
+                f'test "$(/usr/bin/sha256sum -- {helper} | /usr/bin/cut -d " " -f 1)"'
+                f" = {d2['helper_sha256']} && "
+            )
+            if phase == "d2-verify":
+                self._d2_readback = self._remote_home + "/" + remote + "/d2-records/lr2.out"
         return [*ops[3][:-1], guard + ops[3][-1]]
 
     def _observe_live(self, name, cutoff):
@@ -438,6 +489,13 @@ class QualificationBoundary:
                 captured[phase] = out
             else:
                 _require(sha(out) in self._receipts[phase], "PHASE_RECEIPT")
+            if phase == "d2-verify":
+                _require(self._d2_readback is not None, "D2_READBACK")
+                readback = protected_read_command(self._d2_readback, 65536, False)
+                record = self._call(
+                    "d2-readback", [*self._ssh, self._guard() + " && " + readback], cutoff, 65536
+                )
+                d2_record(record, self._boot, self._selected["d2"]["revision"])
         live = self._observe_live("live-before-selection", cutoff)
         pins = _trial_pins(captured["trial-pins"], self._selected["selector"])
         _require(pins == live["pins"], "LIVE_DRIFT")

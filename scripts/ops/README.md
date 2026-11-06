@@ -14,7 +14,9 @@ Before selecting a live window, review and rehearse the **exact** private
 qualification bundle, including the preflight and cleanup phases. The
 `QualificationBoundary` contract names the fixed phase set, content and receipt
 digests, previous boot, expected runtime, generation, destination, and owner
-key. The runner accepts an independently reviewed selection digest. Old
+key. It recompiles the selected D2 phases, checks the installed D2 helper before
+each phase, and validates the protected LR2 readback on the measured boot before
+later qualification can proceed. The runner accepts an independently reviewed selection digest. Old
 captures, old grants, and a prior boot's approvals are not inputs. Keep the
 scope short enough for the earliest qualification deadline and reserve time for
 withdrawal and park. The CLI caps the window at 75 minutes once it starts.

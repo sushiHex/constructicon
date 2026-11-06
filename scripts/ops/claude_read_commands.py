@@ -954,6 +954,11 @@ def d2_gate(evidence, values):
     d2_receipt_gate(evidence, values, "d2-preserve")
     d2_receipt_gate(evidence, values, "d2-verify")
     raw = bounded(evidence / "d2-lr2.out", 65536)
+    d2_record(raw, values["EXPECTED_BOOT"], values["__d2_commit"])
+
+
+def d2_record(raw, boot, revision):
+    """Check the protected LR2 readback against the measured boot and selected D2 revision."""
     require(b"\r" not in raw)
     text, at = (raw.decode("utf-8"), 0)
 
@@ -970,12 +975,12 @@ def d2_gate(evidence, values):
         at = end + 1
         return value
 
-    line(values["EXPECTED_BOOT"])
+    line(boot)
     line("verify exit 0")
     verify = record()
     require(
         verify.get("command") == "verify"
-        and verify.get("commit") == values["__d2_commit"]
+        and verify.get("commit") == revision
         and (verify.get("first_parent") is True)
         and (verify.get("script_matches_commit") is True)
         and (verify.get("installed") is True)
@@ -984,7 +989,7 @@ def d2_gate(evidence, values):
     probe = record()
     require(
         probe.get("qualified") is True
-        and probe.get("commit") == values["__d2_commit"]
+        and probe.get("commit") == revision
         and (probe.get("scope") == "runner_prerequisites_only")
         and (probe.get("production_available") is False)
         and (at == len(text))
