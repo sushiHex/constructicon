@@ -89,31 +89,38 @@ def test_fresh_process_receipts(tmp_path, replacement):
         args["retirement-sha"] = hashlib.sha256(Path(args["retirement"]).read_bytes()).hexdigest()
         args["old-digest"] = "sha256:" + "d" * 64
         args["selection"] = "replaced"
-    # Only platform-bound file flags and ownership are substituted on Windows.
+    # Model root ownership only for the synthetic manifest's exact inode.
+    # Windows also needs its unavailable POSIX flags and mode bits substituted.
     bootstrap = """
 import os, runpy, sys
-if os.name == "nt":
-    old_fstat = os.fstat
-    class Stat:
-        def __init__(self, original): self.original = original
-        def __getattr__(self, name):
-            value = getattr(self.original, name)
-            return value & ~0o022 if name == "st_mode" else value
-    os.fstat = lambda fd: Stat(old_fstat(fd))
+manifest_path, owner = sys.argv[1:3]
+manifest = os.stat(manifest_path)
+identity = (manifest.st_dev, manifest.st_ino)
+old_fstat = os.fstat
+class Stat:
+    def __init__(self, original): self.original = original
+    def __getattr__(self, name):
+        value = getattr(self.original, name)
+        if name == "st_uid" and (self.original.st_dev, self.original.st_ino) == identity:
+            return int(owner)
+        return value & ~0o022 if os.name == "nt" and name == "st_mode" else value
+os.fstat = lambda fd: Stat(old_fstat(fd))
 os.O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 os.O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
 os.getuid = getattr(os, "getuid", lambda: 0)
-sys.argv = sys.argv[1:]
+sys.argv = sys.argv[3:]
 runpy.run_path(sys.argv[0], run_name="__main__")
 """
 
-    def run():
+    def run(owner=0):
         return subprocess.run(
             [
                 sys.executable,
                 "-I",
                 "-c",
                 bootstrap,
+                paths["manifest"],
+                str(owner),
                 str(SCRIPT),
                 *[part for item in args.items() for part in ("--" + item[0], item[1])],
             ],
@@ -124,6 +131,8 @@ runpy.run_path(sys.argv[0], run_name="__main__")
     result = run()
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "m9-selected-launch-and-controller-checked"
+    result = run(owner=1)
+    assert result.returncode != 0 and "unsafe file" in result.stderr
     write("manifest", b"{}")
     result = run()
     assert result.returncode != 0 and "manifest bytes" in result.stderr

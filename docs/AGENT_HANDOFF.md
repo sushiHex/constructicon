@@ -3630,10 +3630,17 @@ remote completion; loss of SSH, an empty lock, and a nonzero child result do
 not. A successful CLI return may be a journal replay, so this receipt is not
 model dispatch or result evidence.
 
+The checked guest phase now places only fresh authorization bytes, reads them
+back before dispatch, and removes the leaf only when this window proved it
+placed it and no invocation can still start or be running. The result checker
+compares the protected original output with the retained attempt, journal
+checkpoint, and exactly one closed, released lease. A process join and an
+accepted READ are separate facts.
+
 The credential-free suite executes the emitted guest shell and a fresh
 verifier process. It covers a lost dispatch response with a recoverable guest
 receipt, delayed dispatch after fencing or admission expiry, and unresolved
 execution that retains custody. The shorter owner deadline gates admission;
 the existing controller still enforces its own native candidate expiry.
-There is no default live adapter, host run, or accepted subscription READ in
-this slice.
+The live qualification and owner decision are not wired into this supervisor.
+There was no host run or accepted subscription READ in this slice.
