@@ -34,7 +34,7 @@ def wire(value):
 
 @pytest.fixture(params=["baseline", "cite-evidence\n"])
 async def retained(tmp_path, request, portable_binding, substituted_guard):
-    trial = TrialIdentity("read-closure")
+    trial = TrialIdentity("m9-live-1")
     store = tmp_path / "trial"
     await m9_trial.seed(store, trial)
     native = clean_native(records=[completed(answer=request.param)])

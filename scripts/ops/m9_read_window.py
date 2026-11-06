@@ -98,12 +98,19 @@ class TerminalProof:
 
 
 @dataclass(frozen=True)
+class CloseProof:
+    cleanup_sha256: str
+    accepted_read_sha256: str | None = None
+
+
+@dataclass(frozen=True)
 class WindowResult:
     record: Path
     reason: str
     dispatch: Literal["not-issued", "unknown", "terminal", "fenced"]
     cleanup: Literal["clean", "unknown"]
     custody_retained: bool
+    accepted_read_sha256: str | None
 
 
 class ReadBoundary(Protocol):
@@ -128,7 +135,7 @@ class ReadBoundary(Protocol):
     def prove_remote(
         self, qualification: Qualification, challenge_sha256: str, cutoff: float
     ) -> TerminalProof | None: ...
-    def close(self, qualification: Qualification, cutoff: float) -> str: ...
+    def close(self, qualification: Qualification, cutoff: float) -> CloseProof: ...
     def withdraw(self, qualification: Qualification | None, cutoff: float) -> str: ...
     def park(self, cutoff: float) -> None: ...
     def check_park(self, cutoff: float) -> str: ...
@@ -228,6 +235,10 @@ def run_window(
                 "pins_sha256": _sha(qualified.pins),
                 "candidate_sha256": _sha(qualified.candidate),
                 "candidate_expires_at": qualified.candidate_expires_at.isoformat(),
+                "approval_not_after": min(
+                    qualified.candidate_expires_at,
+                    now + timedelta(seconds=pin_cutoff - monotonic()),
+                ).isoformat(),
                 "procedure": "m9-codex-read",
                 "model": "gpt-6.1-sol",
                 "effort": "low",
@@ -355,13 +366,28 @@ def run_window(
         return True
 
     cleaned = False
+    accepted_read = None
     if dispatched != "unknown":
-        closed = not placed or cleanup_receipt(
-            "close",
-            min(monotonic() + limits.close, cutoff - limits.withdraw - limits.park),
-            boundary.close,
-            qualified,
-        )
+        closed = not placed
+        if placed:
+            try:
+                close = call(
+                    min(monotonic() + limits.close, cutoff - limits.withdraw - limits.park),
+                    boundary.close,
+                    qualified,
+                )
+                _require(type(close) is CloseProof and _digest(close.cleanup_sha256), "close")
+                accepted_read = close.accepted_read_sha256
+                _require(
+                    accepted_read is None or (dispatched == "terminal" and _digest(accepted_read)),
+                    "close",
+                )
+                save(
+                    "close", {"sha256": close.cleanup_sha256, "accepted_read_sha256": accepted_read}
+                )
+                closed = True
+            except Exception:
+                accepted_read = None
         if not closed:
             reason = "close-unproved"
         elif not cleanup_receipt(
@@ -388,6 +414,7 @@ def run_window(
         dispatched,
         "clean" if cleaned else "unknown",
         custody_retained,
+        accepted_read,
     )
     save(
         "result",
@@ -397,6 +424,7 @@ def run_window(
             "dispatch": result.dispatch,
             "dispatch_transport": dispatch_transport,
             "cleanup": result.cleanup,
+            "accepted_read_sha256": result.accepted_read_sha256,
             "custody_release_eligible": not custody_retained,
             "marker_uncertain": marker_uncertain,
         },

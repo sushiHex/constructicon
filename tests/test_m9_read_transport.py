@@ -10,11 +10,14 @@ import time
 from pathlib import Path
 
 import pytest
-from scripts.ops import m9_read_transport
+from scripts.ops import m9_read_closure, m9_read_transport
 from scripts.ops.m9_read_closure import ClosurePins
 from scripts.ops.m9_read_transport import StagedRead
 
-from tests.test_m9_read_window import Fake
+from tests.substrate.test_codex_adapter import portable_binding as portable_binding
+from tests.substrate.test_codex_adapter import substituted_guard as substituted_guard
+from tests.test_m9_read_closure import retained as retained
+from tests.test_m9_read_closure import wire
 
 BOOT = "01234567-89ab-cdef-0123-456789abcdef"
 CLAIM = "1" * 64
@@ -45,6 +48,9 @@ class Guest:
         candidate=CANDIDATE,
         install_status=0,
         closure_argv=None,
+        original=b'{"replayed":false}\n',
+        projection=b'{"projection":true}\n',
+        admit_until=ADMISSION,
     ):
         self.root = root
         self.root.mkdir()
@@ -55,6 +61,9 @@ class Guest:
         self.candidate = candidate
         self.install_status = install_status
         self.closure_argv = closure_argv
+        self.original = original
+        self.projection = projection
+        self.admit_until = admit_until
 
     def __call__(self, argv, **kwargs):
         argv = list(argv)
@@ -102,7 +111,7 @@ def fake_native(argv, **kw):
             raise ValueError("fixture native stdin mismatch")
         with Path("fake-call").open("xb") as f:
             f.write(b"invoked")
-        kw["stdout"].write(b'{"replayed":false}\\n')
+        kw["stdout"].write(${self.original!r})
         return subprocess.CompletedProcess(argv, ${self.child_status!r})
     if argv[:-3] == [*SERVICE, _AUTH_CODE] and argv[-2:] == [auth, expected_sha]:
         action = argv[-3]
@@ -127,7 +136,7 @@ def fake_native(argv, **kw):
     if ${self.closure_argv!r} is not None and argv == [*SERVICE[:-1], "-", *${self.closure_argv!r}]:
         if b"def accept_result(" not in kw["input"]:
             raise ValueError("fixture wrong closure source")
-        return subprocess.CompletedProcess(argv, 0, b'{"projection":true}\\n', b"")
+        return subprocess.CompletedProcess(argv, 0, ${self.projection!r}, b"")
     raise ValueError("fixture native argv mismatch")
 
 subprocess.run = fake_native
@@ -137,10 +146,12 @@ subprocess.run = fake_native
             "CLAIM": self.claim,
             "CANDIDATE": self.candidate,
             "AUTH": AUTH,
-            "ADMISSION": ADMISSION,
+            "ADMISSION": self.admit_until,
             "self.child_status": self.child_status,
             "self.install_status": self.install_status,
             "self.closure_argv": self.closure_argv,
+            "self.original": self.original,
+            "self.projection": self.projection,
         }
         for key, value in values.items():
             injection = injection.replace("${" + key + "!r}", repr(value))
@@ -287,61 +298,109 @@ def test_guest_admission_expiry_is_checked_before_claim(tmp_path):
     assert proof is not None and proof.disposition == "fenced"
 
 
-def test_supervisor_closes_window_with_real_generated_transport_after_lost_response(tmp_path):
-    class Composed(Fake):
-        def place(self, qualification, cutoff):
-            super().place(qualification, cutoff)
-            candidate = qualification.candidate
-            self.guest = Guest(
-                tmp_path / "guest", lose_reply=True, claim=self.challenge_sha, candidate=candidate
-            )
-            self.captures = tmp_path / "captures"
-            self.captures.mkdir()
-            package = tmp_path / "package"
-            self.read = StagedRead(
-                package,
-                "operator@192.0.2.1",
-                "constructicon-test",
-                BOOT,
-                self.challenge_sha,
-                candidate,
-                AUTH,
-                ADMISSION,
-            )
-            self.guest.prepare((package / "phase.sh").read_bytes())
-            self.transport_cutoff = time.monotonic() + 120
-            self.read.stage(self.captures, self.transport_cutoff, run=self.guest)
-            self.read.place(self.captures, self.transport_cutoff, run=self.guest)
-
-        def readback(self, qualification, cutoff):
-            super().readback(qualification, cutoff)
-            return self.read.readback(self.captures, self.transport_cutoff, run=self.guest)
-
-        def close(self, qualification, cutoff):
-            super().close(qualification, cutoff)
-            return self.read.discard(self.captures, self.transport_cutoff, run=self.guest)
-
-        def dispatch(self, qualification, cutoff):
-            super().dispatch(qualification, cutoff)
-            self.read.dispatch(self.captures, self.transport_cutoff, run=self.guest)
-
-        def prove_remote(self, qualification, challenge_sha256, cutoff):
-            self.event("prove-remote", cutoff)
-            return self.read.prove(self.captures, self.transport_cutoff, run=self.guest)
-
-    fake = Composed(tmp_path)
-    result = fake.run()
-    assert (
-        result.dispatch == "terminal" and result.cleanup == "clean" and not result.custody_retained
+def test_supervisor_closes_window_with_real_generated_transport_after_lost_response(
+    tmp_path, retained,
+):
+    pins, _, attempt, journal, original = retained
+    replayed = original["status"] == "baseline-no-promotion"
+    original_wire = wire({**original, "replayed": replayed})
+    projection = wire(
+        m9_read_closure.project(pins, journal, attempt.read_bytes(), next_present=False)
     )
-    assert fake.native_calls == 1 and fake.guest.events == [
-        "place",
-        "readback",
-        "dispatch",
-        "prove",
-        "discard",
-    ]
-    assert fake.names[-5:] == ["prove-remote", "close", "withdraw", "park", "check-park"]
+    root = "/home/m8-service/m9-s1"
+    attempt_path = root + "/fresh-attempt.json"
+    candidate_bytes = json.dumps(
+        {"authorization_id": pins.authorization_id, "attempt_record": attempt_path}
+    ).encode()
+    closure_argv = [root + "/trial", attempt_path, *vars(pins).values()]
+
+    from datetime import UTC, datetime, timedelta
+    from hashlib import sha256
+    from types import SimpleNamespace
+
+    from scripts.ops.m9_native_read import run_native_read
+    from scripts.ops.m9_read_window import OwnerDecision, Qualification, WindowLimits
+
+    events = []
+    now = datetime.now(UTC)
+    qualification = Qualification(
+        "a" * 64, b"checked-packet", candidate_bytes,
+        now + timedelta(minutes=10), time.monotonic() + 600,
+    )
+    bound = SimpleNamespace(
+        qualification=qualification, target="operator@192.0.2.1", alias="constructicon-test",
+        boot=BOOT, authorization=AUTH, closure=pins,
+    )
+
+    class Host:
+        def qualify(self, cutoff):
+            return bound
+
+        def check_live(self, qualified, cutoff):
+            assert qualified is bound
+            return True
+
+        def withdraw(self, qualified, cutoff):
+            assert qualified is bound
+            events.append("withdraw")
+            return "c" * 64
+
+        def park(self, cutoff):
+            events.append("park")
+
+        def check_park(self, cutoff):
+            events.append("check-park")
+            return "c" * 64
+
+    class Owner:
+        def await_signature(self, challenge, packet, cutoff):
+            assert packet == qualification.pins
+            self.challenge = challenge
+            return b"signed fixture"
+
+        def verify(self, challenge, signature, cutoff):
+            assert challenge == self.challenge and signature == b"signed fixture"
+            selected = datetime.now(UTC)
+            return OwnerDecision(sha256(challenge).hexdigest(), "b" * 64, selected,
+                                 selected + timedelta(minutes=5))
+
+    guest = None
+
+    def fake_host(argv, **kwargs):
+        nonlocal guest
+        if "phase.sh" not in argv[-1] or "/bin/bash" not in argv[-1]:
+            return subprocess.CompletedProcess(argv, 0)
+        if guest is None:
+            package = next(tmp_path.glob("native-*/package"))
+            binding = json.loads((package / "bindings.json").read_bytes())
+            guest = Guest(
+                tmp_path / "guest", lose_reply=True, claim=binding["claim"],
+                candidate=candidate_bytes, closure_argv=closure_argv,
+                original=original_wire, projection=projection,
+                admit_until=binding["admit_until"],
+            )
+            guest.prepare((package / "phase.sh").read_bytes())
+        return guest(argv, **kwargs)
+
+    limits = WindowLimits(window=300, qualify=10, placement=60, dispatch=30, proof=30,
+                          close=60, withdraw=10, park=10)
+    result = run_native_read(tmp_path, Host(), Owner(), limits, run=fake_host)
+    assert (result.reason, result.dispatch, result.cleanup, result.custody_retained) == (
+        "read-settled", "terminal", "clean", False,
+    )
+    if replayed:
+        assert result.accepted_read_sha256 is None
+    else:
+        assert result.accepted_read_sha256 == m9_read_closure.accept_result(
+            pins, projection, original_wire, b"", 0
+        )
+    assert guest is not None
+    assert guest.events == ["place", "readback", "dispatch", "prove", "original",
+                            "projection", "discard"]
+    assert (guest.root / "fake-call").read_bytes() == b"invoked"
+    assert events == ["withdraw", "park", "check-park"]
+    recorded = json.loads((result.record / "result.json").read_bytes())
+    assert recorded["dispatch_transport"] == "raised"
 
 
 def test_unproved_placement_blocks_discard_and_dispatch(tmp_path):

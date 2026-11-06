@@ -8,6 +8,7 @@ from hashlib import sha256
 import pytest
 from scripts.ops import m9_read_window
 from scripts.ops.m9_read_window import (
+    CloseProof,
     OwnerDecision,
     Qualification,
     TerminalProof,
@@ -138,7 +139,7 @@ class Fake:
 
     def close(self, qualification, cutoff):
         self.event("close", cutoff)
-        return "" if self.fault == "close unproved" else RECEIPT
+        return CloseProof("" if self.fault == "close unproved" else RECEIPT)
 
     def withdraw(self, qualification, cutoff):
         self.event("withdraw", cutoff)

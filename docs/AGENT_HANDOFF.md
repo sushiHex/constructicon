@@ -3642,5 +3642,9 @@ verifier process. It covers a lost dispatch response with a recoverable guest
 receipt, delayed dispatch after fencing or admission expiry, and unresolved
 execution that retains custody. The shorter owner deadline gates admission;
 the existing controller still enforces its own native candidate expiry.
-The live qualification and owner decision are not wired into this supervisor.
-There was no host run or accepted subscription READ in this slice.
+The operator entry connects the fresh qualification adapter to the same
+supervisor. An actual-pin challenge needs an Ed25519 signature from the
+independently pinned owner key; the operator account needs only the public key.
+The fake-host rehearsal uses the emitted guest phase and real journal closure,
+including a lost dispatch reply. It proves the wiring, not qualification of a
+specific private bundle or a live subscription READ.
