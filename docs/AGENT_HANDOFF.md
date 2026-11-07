@@ -29,6 +29,13 @@ report says so; legacy selections have explicitly unverified helper coverage.
 The private stopped/corrected packages remain frozen. No host/vendor action or
 broader OBSERVE/recovery preparation acceptance follows from these fixtures.
 
+A follow-up source core inventories closed service history behind an explicit
+canonical owner-only root while preserving ordinary Git/trial descendant modes.
+Sidecar facts use the same root-bound check. Emission includes only reviewed
+stdlib functions and a positively checked current-namespace mount snapshot.
+Windows source checks do not establish physical Linux acceptance; the record
+names the required native producer/refusal cases and custody/alias limits.
+
 ## Shared deadline and early inventory prerequisite
 
 The [delivery record](plans/handoffs/delivery-friction-deadline-and-inventory-record.md)

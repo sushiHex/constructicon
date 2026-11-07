@@ -186,6 +186,17 @@ MUTANTS += (
 
 CONTRACT_TESTS = "tests/test_m8_helper_contracts.py::"
 MUTANTS += (
+    ("closed history retains a private top-level traversal boundary",
+     MODULE + "private_tree_facts", "stat.S_IMODE(boundary.st_mode) == 0o700", "True",
+     "tests/test_m8_private_tree_inventory.py::test_native_custody_refusals[root-mode]"),
+    ("closed history refuses aliased ancestor traversal", MODULE + "private_tree_facts",
+     "path.resolve(strict=True) == path and ", "",
+     "tests/test_m8_private_tree_inventory.py::"
+     "test_facts_refuse_a_symlink_ancestor_even_when_leaf_is_regular"),
+    ("private closed history refuses mounted descendants", MODULE + "private_tree_inventory",
+     'require(not mounts_beneath(root, listing=listing), "mount at or beneath root")', "pass",
+     "tests/test_m8_private_tree_inventory.py::"
+     "test_emitted_inventory_refuses_unproved_or_nested_mount_snapshot[nested-mount]"),
     ("selected helper static runtime/evidence arguments stay exact", MODULE + "helper_contract",
      'for role in ("helper", "caller"):', 'for role in ("caller",):',
      CONTRACT_TESTS + "test_each_input_binding_refuses_even_when_new_script_digest_is_selected"

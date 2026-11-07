@@ -76,3 +76,67 @@ behavior, physical Linux isolation or host qualification. No VM operation,
 credential, vendor binary, paid call, frozen-plan edit or stopped-window resume
 was performed. Broader OBSERVE/recovery/preparation consumers remain #308's
 scope, not completion claims of this slice.
+
+## Closed history with ordinary producer modes
+
+A later private stop measured service-owned `0700` source roots, with ordinary
+Git/trial descendants at `0775`/`0664`. The private archive's flat rejection of
+group-write bits refused these before its first mutation. The selected private
+archive and captures remain frozen; the correction is a shared source core for
+a future independently reviewed package, not a modification or replay of them.
+
+`private_tree_facts(path, root)` requires an explicit canonical, same-owner,
+unprivileged `0700` directory root and a canonical contained descendant on the
+same filesystem. Every node must be same-owner directory/regular file; regular
+files must have one hard link. Symlinks (including ancestors), special nodes
+and Windows reparse points refuse. All descendant modes are observed and
+retained, not normalized: a `0777`/`0666` descendant is accepted behind the same
+private boundary, while a `0777` root refuses. Sidecar readers must use this
+same root-bound facts function;
+replacing only inventory would leave the old flat guard on DB/WAL/SHM reads.
+Trusted common-parent/archive guards remain separate and strict.
+
+The inference supporting this policy is limited: Linux pathname resolution
+requires search permission through the private root
+([path_resolution(7)](https://man7.org/linux/man-pages/man7/path_resolution.7.html)).
+For Linux POSIX ACLs the group bits reflect the access mask, which also bounds
+named-user/group grants, so root mode `0700` does not leave those grants effective
+([acl(5)](https://www.man7.org/linux/man-pages/man5/acl.5.html)). This assumes trusted
+administrators and owner, trusted ancestry, existing exclusive/quiescent custody,
+and no hostile retained handles or exported aliases outside that boundary. It
+does not prove arbitrary filesystem ACL semantics, inspect ACL/xattr bytes, or
+discover aliases exported in another namespace. Same-owner/hardlink checks alone
+would not establish those assumptions.
+
+The inventory reads a bounded nonempty `/proc/self/mountinfo` snapshot, validates
+its rows and affirmative root mount, and passes that exact snapshot to the
+existing `m8_host_artifacts.mounts_beneath` matcher. Its added optional `listing`
+keyword leaves existing default callers unchanged. Query failures, malformed or
+empty results, and mounts at/below the source refuse. Mount checks run before
+and after inventory; no absence is inferred from an unexecuted query. Exported
+bind aliases elsewhere remain an explicit limit, not a claim this query proves.
+
+`private_tree_inventory_source()` emits the exact shared facts/inventory and
+pure mount-matcher function sources with fixed stdlib globals. The guest never
+imports or executes a CI module/entry. A future private compiler embeds and
+pins these bytes in its existing package; it must bind every sidecar call to
+the correct root. This changes no native account-store/credential policy.
+
+Linux tests run actual bare Git creation under umask `0002`, assert native
+`0775`/`0664` descendants behind `0700`, compare imported/emitted inventory,
+and verify exact inode/device/owner/group/mode/bytes across rename. The complete
+fake archive checks both source roots and every synthetic `0664` DB/WAL/SHM
+sidecar through the emitted core before any mutation. Root, owner, symlink,
+hardlink, FIFO, out-of-root and kernel-query refusals are covered. Only the
+foreign-descendant ownership case substitutes unavailable cross-user chown;
+mount-failure cases substitute kernel-query bytes, not permission observations.
+
+Local Windows results: 17 focused cases passed, 20 physical Linux cases skipped.
+The emitted source ran in isolated stdlib Python and truthfully refused physical
+inventory on Windows. Broader packager/host/mutation-inventory regressions passed
+177 cases with 19 skips before the final isolated-entry test was added. Three
+additional physical mutants are wired into the existing inventory but have not
+been measured locally. Native Linux CI must execute the permitting/refusing
+cases and mutants before this correction can support a new package. No host
+chmod, normalization, frozen-private-byte change, vendor binary or VM operation
+occurred. A further host start still requires a fresh owner go-ahead.

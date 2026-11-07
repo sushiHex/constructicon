@@ -385,13 +385,15 @@ def loaded_among(listing: str, names: tuple[str, ...]) -> list[str]:
     return [line for line in ours(listing) if line.rsplit(" (", 1)[0] in names]
 
 
-def mounts_beneath(path: Path) -> list[str]:
+def mounts_beneath(path: Path, *, listing: str | None = None) -> list[str]:
     """Mount points at or beneath ``path`` in this mount namespace, unescaped."""
 
     prefix = path.as_posix()
+    if listing is None:
+        listing = MOUNTINFO.read_text(encoding="utf-8")
     points = (
         re.sub(r"\\([0-7]{3})", lambda octal: chr(int(octal[1], 8)), line.split(" ")[4])
-        for line in MOUNTINFO.read_text(encoding="utf-8").splitlines()
+        for line in listing.splitlines()
     )
     return [point for point in points if point == prefix or point.startswith(prefix + "/")]
 

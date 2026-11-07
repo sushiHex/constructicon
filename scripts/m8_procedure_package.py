@@ -358,6 +358,138 @@ def contract_file(path: Path) -> object:
         raise Refused("invalid helper contract JSON") from exc
 
 
+def private_tree_facts(path, root):
+    """One same-owner ordinary node behind an explicit private traversal root.
+
+    The caller separately owns ancestor custody, quiescence and mount exclusion.
+    Use the root explicitly for sidecars too; this is not an arbitrary-path
+    permission exemption. Nothing is chmodded or repaired.
+    """
+    import os
+    import stat
+    import sys
+
+    def require(ok, message):
+        if not ok:
+            raise ValueError("private tree: " + message)
+
+    require(sys.platform == "linux", "Linux physical observations required")
+    owner = os.geteuid()
+    require(owner > 0 and owner == os.getuid(), "unprivileged owner")
+    require(root.is_absolute() and root.resolve(strict=True) == root, "noncanonical root")
+    boundary = root.lstat()
+    require(boundary.st_uid == owner, "ownership")
+    require(stat.S_ISDIR(boundary.st_mode) and stat.S_IMODE(boundary.st_mode) == 0o700,
+            "root mode")
+    require(path == root or root in path.parents, "outside root")
+    info = path.lstat()
+    require(not getattr(info, "st_file_attributes", 0) & 0x400, "reparse point")
+    require(info.st_uid == owner, "ownership")
+    require(stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode), "special or symlink")
+    require(path.resolve(strict=True) == path and info.st_dev == boundary.st_dev,
+            "noncanonical node or different filesystem")
+    require(not stat.S_ISREG(info.st_mode) or info.st_nlink == 1, "hard link")
+    return info
+
+
+def private_tree_inventory(root, mounts_beneath):
+    """Inventory quiescent operator state behind its private Linux root.
+
+    Caller owns trusted ancestry, exclusive quiescence and absence of exported
+    mount aliases/hostile retained handles. This checks the current namespace,
+    not other namespaces, arbitrary filesystem ACL semantics or xattrs. Owner
+    and admins are trusted; no node is normalized or repaired. Descendant group
+    writes are permitted only behind the checked 0700 traversal boundary.
+    """
+    import hashlib
+    import os
+    import re
+    import stat
+
+    def require(ok, message):
+        if not ok:
+            raise ValueError("private tree: " + message)
+
+    def facts(path):
+        return private_tree_facts(path, root)
+
+    def check_mounts():
+        # Read once, validate positively, then reuse the existing path matcher
+        # on that exact snapshot. A missing/empty/damaged query cannot mean clear.
+        with Path("/proc/self/mountinfo").open("rb") as stream:
+            raw = stream.read(8 * 1024 * 1024 + 1)
+        require(0 < len(raw) <= 8 * 1024 * 1024 and raw.endswith(b"\n"), "mount query")
+        listing = raw.decode("utf-8")
+        points = []
+        for line in listing.splitlines():
+            fields = line.split(" ")
+            require(len(fields) >= 10 and fields[0].isdigit() and fields[1].isdigit()
+                    and re.fullmatch(r"[0-9]+:[0-9]+", fields[2])
+                    and fields[3].startswith("/") and fields[4].startswith("/")
+                    and "-" in fields[6:], "mount row")
+            separator = fields.index("-", 6)
+            require(len(fields) == separator + 4 and all(fields), "mount row")
+            points.append(fields[4])
+        require("/" in points, "root mount missing")
+        require(not mounts_beneath(root, listing=listing), "mount at or beneath root")
+
+    first = facts(root)
+    check_mounts()
+    fields = ("st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_gid",
+              "st_size", "st_mtime_ns", "st_ctime_ns")
+    result, pending, total = {}, [root], 0
+    while pending:
+        path = pending.pop()
+        require(len(result) < 10000, "inventory bound")
+        info = facts(path)
+        require(info.st_dev == first.st_dev, "different filesystem")
+        entry = {"dev": info.st_dev, "ino": info.st_ino, "uid": info.st_uid,
+                 "gid": info.st_gid, "mode": stat.S_IMODE(info.st_mode)}
+        if stat.S_ISDIR(info.st_mode):
+            entry["kind"] = "directory"
+            pending.extend(sorted(path.iterdir(), reverse=True))
+        else:
+            require(0 <= info.st_size <= 128 * 1024 * 1024, "file bound")
+            total += info.st_size
+            require(total <= 512 * 1024 * 1024, "tree bound")
+            flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+            with os.fdopen(os.open(path, flags), "rb") as stream:
+                opened = os.fstat(stream.fileno())
+                require(opened == info, "file replaced before read")
+                raw = stream.read(info.st_size + 1)
+                after = os.fstat(stream.fileno())
+            # atime may change on read; all mutation-relevant stat fields must not.
+            require(len(raw) == info.st_size and all(
+                getattr(current, key) == getattr(info, key)
+                for current in (after, path.lstat()) for key in fields), "file changed during read")
+            entry.update(kind="file", size=info.st_size, sha256=hashlib.sha256(raw).hexdigest())
+        result[path.relative_to(root).as_posix()] = entry
+    last = facts(root)
+    require(all(getattr(last, key) == getattr(first, key) for key in fields),
+            "root changed during inventory")
+    check_mounts()
+    return result
+
+
+def private_tree_inventory_source():
+    """Exact shared code for the existing private package compiler to embed.
+
+    Only stdlib code is emitted. The existing host mount inventory is reused,
+    not reimplemented. A package pins these emitted bytes in its normal manifest.
+    """
+    import inspect
+
+    from scripts.ci.m8_host_artifacts import mounts_beneath
+
+    return (
+        "from pathlib import Path\nimport re\nMOUNTINFO = Path('/proc/self/mountinfo')\n\n"
+        + inspect.getsource(mounts_beneath) + "\n"
+        + inspect.getsource(private_tree_facts) + "\n"
+        + inspect.getsource(private_tree_inventory) + "\n"
+        + "def inventory(root):\n    return private_tree_inventory(root, mounts_beneath)\n"
+    ).encode("utf-8")
+
+
 @dataclass(frozen=True)
 class Fence:
     lang: str
