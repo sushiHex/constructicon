@@ -96,7 +96,10 @@ def test_each_input_binding_refuses_even_when_new_script_digest_is_selected(tmp_
         body = body.replace(b'check_evidence "$W_PRIOR/s4', b'check_evidence "$W/s4')
     else:
         body += ('W_PRIOR=' + PRIOR + '\n').encode()
-    with pytest.raises(package.Refused):
+    reason = {"parent": "binding W_PRIOR declaration", "runtime": "helper block",
+              "raw-sha": "helper block", "caller": "caller block",
+              "duplicate": "binding W_PRIOR declaration"}[change]
+    with pytest.raises(package.Refused, match=reason):
         package.helper_contract(body, contract)
 
 
@@ -112,10 +115,25 @@ def test_contract_cli_emits_repeatable_source_only_proof_and_refuses(tmp_path):
     assert all(result.returncode == 0 and not result.stderr for result in results)
     assert results[0].stdout == results[1].stdout
     assert json.loads(results[0].stdout)["execution"] == "not-executed"
-    script.write_bytes(body.replace(PRIOR.encode(), CURRENT.encode()))
+    script.write_bytes(body.replace(('W_PRIOR=' + PRIOR).encode(),
+                                    ('W_PRIOR=' + CURRENT).encode()))
     refused = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True,
                              check=False, timeout=5)
     assert refused.returncode == 1 and not refused.stdout
+    assert b"binding W_PRIOR declaration" in refused.stderr
+    assert CURRENT.encode() not in refused.stderr and PRIOR.encode() not in refused.stderr
+
+
+def test_contract_diagnostics_distinguish_shape_and_binding_without_echoing_values(tmp_path):
+    body, contract = fixture_contract(tmp_path)
+    with pytest.raises(package.Refused, match="contract keys"):
+        package.helper_contract(body, {})
+    with pytest.raises(package.Refused, match="script must"):
+        package.helper_contract(b"", contract)
+    contract["bindings"] = {"PRIVATE_PIN": "sensitive-fixture-value"}
+    with pytest.raises(package.Refused, match="binding PRIVATE_PIN declaration") as refused:
+        package.helper_contract(body, contract)
+    assert "sensitive-fixture-value" not in str(refused.value)
 
 
 def v2_selection(root):
@@ -220,7 +238,9 @@ def test_v2_composition_refuses_before_work_or_external_call(tmp_path, failure):
     def no_native(*args, **kwargs):
         pytest.fail("contract refusal must precede every external call")
 
-    with pytest.raises((ValueError, package.Refused)):
+    reason = ("phase preflight-custody-floor:.*binding W_PRIOR declaration"
+              if failure == "transplant" else "HELPER_CONTRACT_INVENTORY")
+    with pytest.raises((ValueError, package.Refused), match=reason):
         boundary.QualificationBoundary(path, boundary.sha(raw), tmp_path / "work", target=TARGET,
                                        alias=ALIAS, run=no_native)
     assert not (tmp_path / "work").exists()

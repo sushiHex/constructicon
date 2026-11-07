@@ -369,9 +369,12 @@ class QualificationBoundary:
             )
             self._templates[name] = body
             if version == 2:
-                self._contract_proofs[name] = [
-                    packager.helper_contract(body, contract) for contract in contracts[name]
-                ]
+                try:
+                    self._contract_proofs[name] = [
+                        packager.helper_contract(body, contract) for contract in contracts[name]
+                    ]
+                except packager.Refused as exc:
+                    raise packager.Refused(f"phase {name}: {exc}") from exc
         self._work, self._captures, self._run = work, work / "captures", run
         self._selected, self._selection_sha = selected, selection_sha256
         self._target, self._alias = target, alias

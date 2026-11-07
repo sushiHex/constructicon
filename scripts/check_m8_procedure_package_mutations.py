@@ -207,7 +207,7 @@ MUTANTS += (
      CONTRACT_TESTS + "test_each_input_binding_refuses_even_when_new_script_digest_is_selected"
      "[runtime]"),
     ("selected caller declarations cannot transplant historical evidence", MODULE + "helper_contract",
-     'require(declarations == [value.encode("utf-8")])', 'require(bool(declarations))',
+     'require(declarations == [value.encode("utf-8")],', 'require(bool(declarations),',
      CONTRACT_TESTS + "test_each_input_binding_refuses_even_when_new_script_digest_is_selected"
      "[parent]"),
     ("composition checks helper contracts before any external operation",

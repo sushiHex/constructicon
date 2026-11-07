@@ -177,3 +177,13 @@ malformed nsfs mount points, a non-path root on the relevant device, and a wrong
 device nsfs containing mount. Focused Windows results: 17 passed, 33 physical
 Linux skips. No broad suite was repeated for this correction; native results
 remain the final-head CI's responsibility.
+
+PR #383's connector review identified an introduced diagnostics defect: every
+literal-contract guard returned the same refusal. The guards now name script
+shape, contract shape, helper/caller block, or the validated binding identifier;
+M9 composition adds its bounded phase name. Expected/actual pin values and
+private paths are not echoed. This changes diagnostics only, not admission.
+Existing refusal cases now assert the relevant reason, with CLI and constructor
+coverage plus a value-nondisclosure assertion. The helper and refusal-name checks
+passed 17 cases locally. The declaration mutant's exact source target was updated
+for the added reason argument; it still removes the same admission requirement.

@@ -305,27 +305,34 @@ def helper_contract(script: bytes, contract: object) -> dict:
     still need review and an accepting/refusing execution fixture. In particular,
     this function never executes a helper or claims host absence/custody.
     """
-    def require(ok):
+    def require(ok, reason):
         if not ok:
-            raise Refused("helper/caller source contract refused")
+            raise Refused("helper/caller source contract: " + reason)
 
-    require(type(script) is bytes and 0 < len(script) <= 131072 and b"\r" not in script)
-    require(type(contract) is dict and set(contract) == {"helper", "caller", "bindings"})
+    require(type(script) is bytes and 0 < len(script) <= 131072 and b"\r" not in script,
+            "script must be nonempty bounded LF bytes")
+    require(type(contract) is dict and set(contract) == {"helper", "caller", "bindings"},
+            "contract keys must be helper, caller and bindings")
     for role in ("helper", "caller"):
         text = contract[role]
         require(type(text) is str and 0 < len(text.encode("utf-8")) <= 131072
-                and text.endswith("\n") and "\r" not in text)
+                and text.endswith("\n") and "\r" not in text, role + " must be bounded LF text")
         # Whole lines, exactly once; a substring of another declaration is not a match.
-        require((b"\n" + script).count(b"\n" + text.encode("utf-8")) == 1)
+        require((b"\n" + script).count(b"\n" + text.encode("utf-8")) == 1,
+                role + " block must occur exactly once")
     bindings = contract["bindings"]
-    require(type(bindings) is dict and 0 < len(bindings) <= 32)
+    require(type(bindings) is dict and 0 < len(bindings) <= 32,
+            "bindings must contain 1 to 32 declarations")
     for name, value in bindings.items():
-        require(type(name) is str and re.fullmatch(r"[A-Z_][A-Z0-9_]{0,63}", name))
+        require(type(name) is str and re.fullmatch(r"[A-Z_][A-Z0-9_]{0,63}", name),
+                "binding name must be a bounded uppercase identifier")
         require(type(value) is str and 0 < len(value) <= 1024
-                and "\n" not in value and "\r" not in value)
+                and "\n" not in value and "\r" not in value,
+                "binding " + name + " value must be bounded single-line text")
         declarations = re.findall(
             rb"^(?:readonly )?" + name.encode("ascii") + rb"=([^\n]*)$", script, re.MULTILINE)
-        require(declarations == [value.encode("utf-8")])
+        require(declarations == [value.encode("utf-8")],
+                "binding " + name + " declaration must match exactly once")
     encoded = json.dumps(contract, sort_keys=True, ensure_ascii=True).encode("utf-8")
     return {
         "coverage": "selected-literal-source-only",
