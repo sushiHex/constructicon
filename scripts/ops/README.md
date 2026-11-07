@@ -1,4 +1,57 @@
-# Claude READ operator tooling
+# READ operator tooling
+
+## M9 Codex READ
+
+`m9_native_read.py` composes one selected qualification with an independently
+signed approval, one possible native READ, evidence acceptance, withdrawal and
+verified park. The current qualification boundary starts with an already
+started guest under separately held, reviewed VM custody. Follow the
+[VM custody procedure](../../docs/plans/handoffs/M8-vm-custody.md) for the start
+and address observation. The retained local `active` marker is not a substitute
+for cooperative custody.
+
+Before selecting a live window, review and rehearse the **exact** private
+qualification bundle, including the preflight and cleanup phases. The
+`QualificationBoundary` contract names the fixed phase set, content and receipt
+digests, previous boot, expected runtime, generation, destination, and owner
+key. It recompiles the selected D2 phases, checks the installed D2 helper before
+each phase, and validates the protected LR2 readback on the measured boot before
+later qualification can proceed. The runner accepts an independently reviewed selection digest. Old
+captures, old grants, and a prior boot's approvals are not inputs. Keep the
+scope short enough for the earliest qualification deadline and reserve time for
+withdrawal and park. The CLI caps the window at 75 minutes once it starts.
+
+The owner holds the Ed25519 signing key separately from the operator. Pin the
+SHA-256 of the normalized `ssh-ed25519 BASE64` public key (without comment or
+newline) in the reviewed selection. Once the supervisor publishes `pins.json`
+and `challenge.json`, compare the pins digest with the challenge and review the
+exact pins, expiry, and cost exposure. If approved, sign the unchanged challenge:
+
+```bash
+ssh-keygen -Y sign -f OWNER_KEY -n constructicon-m9-read challenge.json
+```
+
+Return only the signature and atomically place it at `approval.sig` beside the
+challenge. The owner private key stays off the operator host. An unsigned
+file, another key or namespace, and a signature on different challenge bytes
+cannot approve dispatch. `PARK-NOW` in the custody directory requests a stop.
+
+The operator entry, after separate scope selection and the fresh start, is:
+
+```bash
+python -I -B scripts/ops/m9_native_read.py \
+  --selection PRIVATE_SELECTION_JSON --selection-sha256 REVIEWED_SELECTION_DIGEST \
+  --owner-public-key NORMALIZED_PUBLIC_KEY_FILE --work STABLE_PRIVATE_CUSTODY_DIR \
+  --target CHECKED_OPERATOR_AT_ADDRESS --alias CHECKED_HOST_KEY_ALIAS < /dev/null
+```
+
+Use the same checked private custody directory for every window on the target.
+Only an accepted READ digest and verified cleanup yield exit zero. An unresolved
+dispatch or withdrawal retains custody; do not park or retry by inference.
+The fake-host tests demonstrate the operator wiring. They do not qualify a
+private deployment bundle or authorize access to the VM.
+
+## Claude READ
 
 `claude_read_session.py` is the versioned entry point for the existing bounded
 Claude READ procedure. It compiles, transports, reads back, or checks **one

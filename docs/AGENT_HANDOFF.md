@@ -3619,6 +3619,7 @@ co-committed facts. These are scripted and local SQLite proofs. No live
 adapter behavior, pricing or charge, all-request coverage, or historical
 usage reconstruction is established.
 
+
 ## Deterministic Claude READ timing fixture — #299
 
 The scripted READ telemetry test now gives the adapter and its timeout the same
@@ -3626,3 +3627,32 @@ fixed loop clock. A start of `255.99999999999997` reproduced the CI assertion
 failure (`3.2500000000000284` versus `3.25`); the fixture uses a fixed starting
 point and a 3.25-second interval, and keeps the exact elapsed and token
 assertions across success and later refusal. Production telemetry is unchanged.
+
+## M9 READ window coordination
+
+The operator supervisor keeps qualification, independently authenticated
+selection, one dispatch and cleanup under one owner. Its guest phase uses one
+exclusive decision to fence an unstarted invocation or retain dispatch intent.
+Only a protected receipt written after the fixed guest child returns supports
+remote completion; loss of SSH, an empty lock, and a nonzero child result do
+not. A successful CLI return may be a journal replay, so this receipt is not
+model dispatch or result evidence.
+
+The checked guest phase now places only fresh authorization bytes, reads them
+back before dispatch, and removes the leaf only when this window proved it
+placed it and no invocation can still start or be running. The result checker
+compares the protected original output with the retained attempt, journal
+checkpoint, and exactly one closed, released lease. A process join and an
+accepted READ are separate facts.
+
+The credential-free suite executes the emitted guest shell and a fresh
+verifier process. It covers a lost dispatch response with a recoverable guest
+receipt, delayed dispatch after fencing or admission expiry, and unresolved
+execution that retains custody. The shorter owner deadline gates admission;
+the existing controller still enforces its own native candidate expiry.
+The operator entry connects the fresh qualification adapter to the same
+supervisor. An actual-pin challenge needs an Ed25519 signature from the
+independently pinned owner key; the operator account needs only the public key.
+The fake-host rehearsal uses the emitted guest phase and real journal closure,
+including a lost dispatch reply. It proves the wiring, not qualification of a
+specific private bundle or a live subscription READ.
