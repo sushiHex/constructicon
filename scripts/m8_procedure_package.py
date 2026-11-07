@@ -395,8 +395,9 @@ def private_tree_facts(path, root):
 def private_tree_inventory(root, mounts_beneath):
     """Inventory quiescent operator state behind its private Linux root.
 
-    Caller owns trusted ancestry, exclusive quiescence and absence of exported
-    aliases in other namespaces or hostile retained handles. This checks the current namespace,
+    Caller owns trusted ancestry, exclusive quiescence and absence of exports
+    in other namespaces or via non-bind overlay/FUSE/NFS mechanisms, plus hostile
+    retained handles. This checks the current namespace's same-device mount roots,
     not other namespaces, arbitrary filesystem ACL semantics or xattrs. Owner
     and admins are trusted; no node is normalized or repaired. Descendant group
     writes are permitted only behind the checked 0700 traversal boundary.
@@ -421,12 +422,13 @@ def private_tree_inventory(root, mounts_beneath):
             raw = stream.read(8 * 1024 * 1024 + 1)
         require(0 < len(raw) <= 8 * 1024 * 1024 and raw.endswith(b"\n"), "mount query")
         listing = raw.decode("utf-8")
+        device = (os.major(first.st_dev), os.minor(first.st_dev))
         points, rows = [], []
         for line in listing.splitlines():
             fields = line.split(" ")
             require(len(fields) >= 10 and fields[0].isdigit() and fields[1].isdigit()
                     and re.fullmatch(r"[0-9]+:[0-9]+", fields[2])
-                    and fields[3].startswith("/") and fields[4].startswith("/")
+                    and fields[4].startswith("/")
                     and "-" in fields[6:], "mount row")
             separator = fields.index("-", 6)
             require(len(fields) == separator + 4 and all(fields), "mount row")
@@ -434,9 +436,13 @@ def private_tree_inventory(root, mounts_beneath):
             # Same octal unescaping as the shared mount-point matcher.
             decoded = [re.sub(r"\\([0-7]{3})", lambda octal: chr(int(octal[1], 8)), value)
                        for value in fields[3:5]]
+            mount_device = tuple(map(int, fields[2].split(":")))
+            # fs/nsfs.c:nsfs_show_path (Linux v6.8:235) emits net:[inode],
+            # not an absolute filesystem path. Interpret roots only for our device.
+            paths = decoded if mount_device == device else decoded[1:]
             require(all(PurePosixPath(value).is_absolute() and str(PurePosixPath(value)) == value
-                        and ".." not in PurePosixPath(value).parts for value in decoded), "mount path")
-            rows.append((tuple(map(int, fields[2].split(":"))), *map(PurePosixPath, decoded)))
+                        and ".." not in PurePosixPath(value).parts for value in paths), "mount path")
+            rows.append((mount_device, *map(PurePosixPath, decoded)))
         require("/" in points, "root mount missing")
         require(not mounts_beneath(root, listing=listing), "mount at or beneath root")
         # An exported descendant can bypass 0700 without any mount POINT
@@ -445,8 +451,8 @@ def private_tree_inventory(root, mounts_beneath):
         require(bool(containing), "containing mount unavailable")
         depth = max(len(row[2].parts) for row in containing)
         selected = [row for row in containing if len(row[2].parts) == depth]
-        device = (os.major(first.st_dev), os.minor(first.st_dev))
-        require(len(selected) == 1 and selected[0][0] == device, "containing mount ambiguous")
+        require(len(selected) == 1, "containing mount ambiguous")
+        require(selected[0][0] == device, "containing mount device mismatch")
         _, mounted_root, mounted_point = selected[0]
         private = mounted_root / root.relative_to(mounted_point)
         require(not any(source == private or private in source.parents

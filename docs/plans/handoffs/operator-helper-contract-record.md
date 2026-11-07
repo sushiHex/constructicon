@@ -107,6 +107,9 @@ and no hostile retained handles or exports outside the checked namespace. It
 does not prove arbitrary filesystem ACL semantics, inspect ACL/xattr bytes, or
 discover aliases exported in another namespace. Same-owner/hardlink checks alone
 would not establish those assumptions.
+Non-bind exposures through overlay lower/upper directories, FUSE daemon data
+sources or NFS exports are also caller-custody assumptions. This check neither
+parses those mechanisms nor proves they are absent.
 
 The inventory reads a bounded nonempty `/proc/self/mountinfo` snapshot, validates
 its rows and affirmative root mount, and passes that exact snapshot to the
@@ -160,3 +163,17 @@ The source-alias follow-up keeps 17 portable passes and adds eight Linux cases
 export acceptance, octal-escaped paths, device mismatch and ambiguous mapping,
 each through imported and emitted source. One additional mutation removes this
 source-alias guard. Those native cases and its kill remain unmeasured until CI.
+
+A further review reproduced an introduced source-format assumption: Linux v6.8
+[`fs/nsfs.c:nsfs_show_path`](https://github.com/torvalds/linux/blob/v6.8/fs/nsfs.c#L235-L247)
+emits roots such as `net:[inode]`, which are not absolute paths. The prior
+whole-snapshot root-path guard rejected these even on unrelated devices.
+Only roots on the private tree's `st_dev` now need canonical absolute filesystem
+paths. Every device's mount point remains validated and participates in choosing
+the containing mount; a more specific wrong-device mapping explicitly reports
+`containing mount device mismatch` rather than falling back to a shorter one.
+Imported/emitted regressions accept an unrelated nsfs root and refuse nested or
+malformed nsfs mount points, a non-path root on the relevant device, and a wrong-
+device nsfs containing mount. Focused Windows results: 17 passed, 33 physical
+Linux skips. No broad suite was repeated for this correction; native results
+remain the final-head CI's responsibility.

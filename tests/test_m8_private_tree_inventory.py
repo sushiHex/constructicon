@@ -232,7 +232,8 @@ def test_emitted_inventory_refuses_unproved_or_nested_mount_snapshot(tmp_path, m
 @LINUX
 @pytest.mark.parametrize("case", ["inside", "root-export", "parent", "whole-filesystem",
                                   "escaped-inside", "escaped-parent", "unmapped-device",
-                                  "ambiguous"])
+                                  "ambiguous", "unrelated-nsfs", "nested-nsfs",
+                                  "relevant-nonpath", "containing-nsfs", "nsfs-bad-point"])
 def test_current_namespace_mount_source_aliases_share_imported_and_emitted_policy(
     tmp_path, monkeypatch, case,
 ):
@@ -254,10 +255,12 @@ def test_current_namespace_mount_source_aliases_share_imported_and_emitted_polic
     # These are kernel-snapshot bytes only; no mount syscall is performed.
     filesystem_root = Path("/filesystem sub-root")
     private = filesystem_root / root.name
-    mapping_device = wrong_device if case == "unmapped-device" else device
+    mapping_device = wrong_device if case in {"unmapped-device", "containing-nsfs"} else device
+    mapping_root = "net:[4026531992]" if case == "containing-nsfs" else escape(filesystem_root)
+    mapping_type = "nsfs nsfs" if case == "containing-nsfs" else "ext4 /dev/fixture"
     listing = f"22 1 {device} / / rw - ext4 /dev/fixture rw\n"
-    listing += (f"23 22 {mapping_device} {escape(filesystem_root)} {escape(mount_point)} "
-                "rw - ext4 /dev/fixture rw\n")
+    listing += (f"23 22 {mapping_device} {mapping_root} {escape(mount_point)} "
+                f"rw - {mapping_type} rw\n")
     if case == "ambiguous":
         listing += (f"24 22 {device} /other {escape(mount_point)} "
                     "rw - ext4 /dev/fixture rw\n")
@@ -271,6 +274,13 @@ def test_current_namespace_mount_source_aliases_share_imported_and_emitted_polic
         else:
             source = filesystem_root
         listing += f"25 22 {device} {escape(source)} /outside-alias rw - ext4 /dev/fixture rw\n"
+    if case in {"unrelated-nsfs", "nested-nsfs", "relevant-nonpath", "nsfs-bad-point"}:
+        # Linux v6.8 fs/nsfs.c:nsfs_show_path emits this non-path root.
+        nsfs_device = device if case == "relevant-nonpath" else wrong_device
+        nsfs_point = escape(root / "netns") if case == "nested-nsfs" else "/run/netns/fixture"
+        if case == "nsfs-bad-point":
+            nsfs_point = "relative/netns"
+        listing += f"26 22 {nsfs_device} net:[4026531992] {nsfs_point} rw - nsfs nsfs rw\n"
 
     def mount_source(path, *args, **kwargs):
         if path == Path("/proc/self/mountinfo"):
@@ -278,7 +288,14 @@ def test_current_namespace_mount_source_aliases_share_imported_and_emitted_polic
         return original(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "open", mount_source)
-    refused = case in {"inside", "root-export", "escaped-inside", "unmapped-device", "ambiguous"}
+    reasons = {
+        "nested-nsfs": "mount at or beneath root",
+        "relevant-nonpath": "mount path",
+        "containing-nsfs": "containing mount device mismatch",
+        "nsfs-bad-point": "mount row",
+    }
+    refused = case in {"inside", "root-export", "escaped-inside", "unmapped-device", "ambiguous",
+                       *reasons}
     functions = [lambda path: package.private_tree_inventory(path, host.mounts_beneath)]
     # Run imported policy first so a removed guard is an assertion failure,
     # before inspect.getsource() is involved in an isolated mutation child.
@@ -286,7 +303,9 @@ def test_current_namespace_mount_source_aliases_share_imported_and_emitted_polic
     for index in range(2):
         function = functions[0] if index == 0 else emitted()[1]
         if refused:
-            with pytest.raises(ValueError, match=r"exported descendant|containing mount"):
+            with pytest.raises(ValueError, match=reasons.get(
+                case, r"exported descendant|containing mount",
+            )):
                 function(root)
         else:
             results.append(function(root))
