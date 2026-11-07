@@ -15,6 +15,7 @@ from scripts.ci import m8_ci_scope as scope
 from tests.test_m8_ci_scope import _commit, _run_git, _write_manifest
 from tests.test_m8_ci_scope import git_repository as git_repository
 from tests.test_m8_operator_commands import _bash
+from tests.test_mutation_inventories import executed
 
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github/workflows/verify.yml"
@@ -80,7 +81,10 @@ def test_scope_conditions_select_docs_or_all_existing_code_jobs() -> None:
         assert "    needs: classify\n" in _job(job)
         assert "    if: needs.classify.outputs.scope == 'full'\n" in _job(job)
     assert "      - run: uv run verify\n" in _job("verify")
-    assert _job("mutations").count("          - check_") == 17
+    # The canonical census owns completeness/exact-once execution. Every
+    # inventory in this workflow must belong to the full-scope matrix.
+    matrix = re.findall(r"^          - (check_\w+_mutations\.py)$", _job("mutations"), re.M)
+    assert matrix and sorted(matrix) == sorted(executed(WORKFLOW))
     assert "      fail-fast: false\n" in _job("mutations")
 
 
