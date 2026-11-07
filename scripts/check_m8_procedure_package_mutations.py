@@ -184,5 +184,22 @@ MUTANTS += (
 )
 
 
+CONTRACT_TESTS = "tests/test_m8_helper_contracts.py::"
+MUTANTS += (
+    ("selected helper static runtime/evidence arguments stay exact", MODULE + "helper_contract",
+     'for role in ("helper", "caller"):', 'for role in ("caller",):',
+     CONTRACT_TESTS + "test_each_input_binding_refuses_even_when_new_script_digest_is_selected"
+     "[runtime]"),
+    ("selected caller declarations cannot transplant historical evidence", MODULE + "helper_contract",
+     'require(declarations == [value.encode("utf-8")])', 'require(bool(declarations))',
+     CONTRACT_TESTS + "test_each_input_binding_refuses_even_when_new_script_digest_is_selected"
+     "[parent]"),
+    ("composition checks helper contracts before any external operation",
+     "scripts.ops.m9_qualification_boundary:QualificationBoundary.__init__",
+     "packager.helper_contract(body, contract)", "{}",
+     CONTRACT_TESTS + "test_v2_composition_refuses_before_work_or_external_call[transplant]"),
+)
+
+
 if __name__ == "__main__":
     raise SystemExit(run(MUTANTS))

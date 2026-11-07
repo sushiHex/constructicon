@@ -16,6 +16,19 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Selected operator helper/caller source contracts
+
+The [delivery record](plans/handoffs/operator-helper-contract-record.md) covers
+the bounded #308 check beside the existing packager and M9 selection. Reviewed
+literal helper/static-argument, caller and declaration bindings refuse a
+historical-parent transplant before external calls. Complete fake M9 composition
+executes the fixture pair and explicitly classifies every external operation.
+
+Source equality is source evidence, not semantic shell execution proof. The
+report says so; legacy selections have explicitly unverified helper coverage.
+The private stopped/corrected packages remain frozen. No host/vendor action or
+broader OBSERVE/recovery preparation acceptance follows from these fixtures.
+
 ## Shared deadline and early inventory prerequisite
 
 The [delivery record](plans/handoffs/delivery-friction-deadline-and-inventory-record.md)

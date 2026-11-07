@@ -26,6 +26,14 @@ Usage, with isolated Python from the repository root::
 
     python -I -S -B scripts/m8_procedure_package.py check DOC [--template]
     python -I -S -B scripts/m8_procedure_package.py build DOC OUT [--values FILE] [--template]
+    python -I -S -B scripts/m8_procedure_package.py check-contract SCRIPT CONTRACT.json
+
+``check-contract`` compares independently reviewed literal ``helper`` and
+``caller`` blocks plus exact ``bindings`` declaration values. Select these
+from the helper's accepted input contract, not from the candidate being checked.
+The helper block includes static runtime/evidence arguments. Its repeatable JSON
+proof explicitly covers selected source only; it does not execute shell, prove
+all helper calls were inventoried, or replace accepting/refusing fixtures.
 
 ``--values`` fills values measured mid-session (``PREVIEW_SHA256``, ``RUN_ID``,
 ``EXPECTED_BOOT``, ``DRIFT_STDOUT_HEX``, ``DRIFT_TOOL_SHA256``) into exact
@@ -285,6 +293,69 @@ RECORD_KEY = re.compile(r"[a-z_][a-z0-9_]{0,63}")
 
 class Refused(ValueError):
     """The composition is not exactly reviewable; nothing is written."""
+
+
+def helper_contract(script: bytes, contract: object) -> dict:
+    """Check reviewed literal helper/caller bindings, without interpreting shell.
+
+    The helper includes its static argv (runtime and raw evidence pins); the
+    caller includes its complete input-selection block. Bindings are exact
+    top-level declaration lines, separately reviewed against that helper.
+    This is source evidence only: comments, indirect writes and shell semantics
+    still need review and an accepting/refusing execution fixture. In particular,
+    this function never executes a helper or claims host absence/custody.
+    """
+    def require(ok):
+        if not ok:
+            raise Refused("helper/caller source contract refused")
+
+    require(type(script) is bytes and 0 < len(script) <= 131072 and b"\r" not in script)
+    require(type(contract) is dict and set(contract) == {"helper", "caller", "bindings"})
+    for role in ("helper", "caller"):
+        text = contract[role]
+        require(type(text) is str and 0 < len(text.encode("utf-8")) <= 131072
+                and text.endswith("\n") and "\r" not in text)
+        # Whole lines, exactly once; a substring of another declaration is not a match.
+        require((b"\n" + script).count(b"\n" + text.encode("utf-8")) == 1)
+    bindings = contract["bindings"]
+    require(type(bindings) is dict and 0 < len(bindings) <= 32)
+    for name, value in bindings.items():
+        require(type(name) is str and re.fullmatch(r"[A-Z_][A-Z0-9_]{0,63}", name))
+        require(type(value) is str and 0 < len(value) <= 1024
+                and "\n" not in value and "\r" not in value)
+        declarations = re.findall(
+            rb"^(?:readonly )?" + name.encode("ascii") + rb"=([^\n]*)$", script, re.MULTILINE)
+        require(declarations == [value.encode("utf-8")])
+    encoded = json.dumps(contract, sort_keys=True, ensure_ascii=True).encode("utf-8")
+    return {
+        "coverage": "selected-literal-source-only",
+        "execution": "not-executed",
+        "script_sha256": hashlib.sha256(script).hexdigest(),
+        "contract_sha256": hashlib.sha256(encoded).hexdigest(),
+        "helper_sha256": hashlib.sha256(contract["helper"].encode("utf-8")).hexdigest(),
+        "caller_sha256": hashlib.sha256(contract["caller"].encode("utf-8")).hexdigest(),
+        "binding_names": sorted(bindings),
+    }
+
+
+def contract_file(path: Path) -> object:
+    """Read a bounded, duplicate-refusing source contract for the offline CLI."""
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise Refused("duplicate helper contract key")
+            result[key] = value
+        return result
+
+    with path.open("rb") as stream:
+        raw = stream.read(262145)
+    if not 0 < len(raw) <= 262144:
+        raise Refused("helper contract bound")
+    try:
+        return json.loads(raw, object_pairs_hook=unique)
+    except (ValueError, RecursionError) as exc:
+        raise Refused("invalid helper contract JSON") from exc
 
 
 @dataclass(frozen=True)
@@ -661,7 +732,14 @@ def main(argv: list[str]) -> int:
         if arguments[:1] == ["build"] and len(arguments) == 5 and arguments[3] == "--values":
             values = session_values(Path(arguments[4]))
             arguments = arguments[:3]
-        if arguments[:1] == ["check"] and len(arguments) == 2:
+        if arguments[:1] == ["check-contract"] and len(arguments) == 3:
+            if template:
+                raise Refused("check-contract does not accept --template")
+            with Path(arguments[1]).open("rb") as stream:
+                script = stream.read(131073)
+            proof = helper_contract(script, contract_file(Path(arguments[2])))
+            print(json.dumps(proof, sort_keys=True))
+        elif arguments[:1] == ["check"] and len(arguments) == 2:
             steps = assemble(Path(arguments[1]), template)
             print(f"composition-checked {len(steps)} steps")
         elif arguments[:1] == ["build"] and len(arguments) == 3:
@@ -672,8 +750,9 @@ def main(argv: list[str]) -> int:
                 print("deferred until session values: " + " ".join(waiting))
         else:
             raise Refused("usage: check DOC [--template] | "
-                          "build DOC OUT [--values FILE] [--template]")
-    except (Refused, OSError, UnicodeDecodeError) as error:
+                          "build DOC OUT [--values FILE] [--template] | "
+                          "check-contract SCRIPT CONTRACT.json")
+    except (Refused, OSError, UnicodeError) as error:
         print(f"composition refused: {error}", file=sys.stderr)
         return 1
     return 0
