@@ -1,8 +1,8 @@
 """One supervisor for a same-boot M9 Codex READ. No native fallback or resume.
 
-The adapter owns real authentication and checked remote observations. In
-particular, receiving bytes from the owner transport is not authentication,
-and losing the dispatch response is not evidence that the guest stopped.
+The trusted operator records the owner's decision. The adapter checks its
+scope and expiry, and losing the dispatch response is not evidence that the
+guest stopped.
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ class Qualification:
 
 @dataclass(frozen=True)
 class OwnerDecision:
-    """Produced only by the independent owner authentication callback."""
+    """The recorded manual decision bound to the current challenge."""
 
     challenge_sha256: str
     decision_sha256: str
@@ -125,7 +125,7 @@ class ReadBoundary(Protocol):
     def qualify(self, cutoff: float) -> Qualification: ...
     def park_requested(self, cutoff: float) -> bool: ...
     def await_owner(self, challenge: bytes, cutoff: float) -> bytes | None: ...
-    def authenticate_owner(
+    def check_owner_decision(
         self, challenge: bytes, transport: bytes, cutoff: float
     ) -> OwnerDecision | None: ...
     def check_live(self, qualification: Qualification, cutoff: float) -> bool: ...
@@ -255,7 +255,7 @@ def run_window(
         reason = "owner-selection-unproved"
         transport = call(pin_cutoff, boundary.await_owner, challenge)
         _require(transport is not None, "no-selection")
-        decision = call(pin_cutoff, boundary.authenticate_owner, challenge, transport)
+        decision = call(pin_cutoff, boundary.check_owner_decision, challenge, transport)
         _require(
             type(decision) is OwnerDecision
             and decision.challenge_sha256 == challenge_sha
@@ -287,8 +287,10 @@ def run_window(
         _require(monotonic() < pin_cutoff, "budget")
         claim = json_bytes(
             {
+                "approval_kind": "manual-operator-recorded",
                 "challenge_sha256": challenge_sha,
                 "decision_sha256": decision.decision_sha256,
+                "checked_at": decision.selected_at.isoformat(),
                 "expires_at": decision.expires_at.isoformat(),
             }
         )
@@ -322,6 +324,7 @@ def run_window(
         marker_uncertain = True
         _retain(work / ("dispatch-" + qualified.window_sha256), claim)
         marker_uncertain = False
+        _require(call(placement_cutoff, boundary.park_requested) is False, "park-requested")
         check_admission()
         _require(monotonic() < placement_cutoff, "budget")
         dispatch_cutoff = min(

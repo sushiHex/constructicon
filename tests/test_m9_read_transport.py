@@ -299,7 +299,7 @@ def test_guest_admission_expiry_is_checked_before_claim(tmp_path):
 
 
 def test_supervisor_closes_window_with_real_generated_transport_after_lost_response(
-    tmp_path, retained,
+    tmp_path, retained, monkeypatch,
 ):
     pins, _, attempt, journal, original = retained
     replayed = original["status"] == "baseline-no-promotion"
@@ -319,7 +319,8 @@ def test_supervisor_closes_window_with_real_generated_transport_after_lost_respo
     from types import SimpleNamespace
 
     from scripts.ops.m9_native_read import run_native_read
-    from scripts.ops.m9_read_window import OwnerDecision, Qualification, WindowLimits
+    from scripts.ops.m9_owner_approval import ManualApproval
+    from scripts.ops.m9_read_window import Qualification, WindowLimits
 
     events = []
     now = datetime.now(UTC)
@@ -352,17 +353,22 @@ def test_supervisor_closes_window_with_real_generated_transport_after_lost_respo
             events.append("check-park")
             return "c" * 64
 
-    class Owner:
-        def await_signature(self, challenge, packet, cutoff):
-            assert packet == qualification.pins
-            self.challenge = challenge
-            return b"signed fixture"
+    exchange = tmp_path / "exchange"
+    exchange.mkdir()
+    approvals = []
 
-        def verify(self, challenge, signature, cutoff):
-            assert challenge == self.challenge and signature == b"signed fixture"
-            selected = datetime.now(UTC)
-            return OwnerDecision(sha256(challenge).hexdigest(), "b" * 64, selected,
-                                 selected + timedelta(minutes=5))
+    def approve_on_poll(_seconds):
+        packets = list(exchange.iterdir())
+        assert len(packets) == 1
+        packet = packets[0]
+        challenge = (packet / "challenge.json").read_bytes()
+        assert packet.name == sha256(challenge).hexdigest()
+        assert (packet / "pins.json").read_bytes() == qualification.pins
+        approval = {"decision": "approve", "challenge_sha256": packet.name}
+        (packet / "approval.json").write_text(json.dumps(approval), encoding="utf-8")
+        approvals.append(approval)
+
+    monkeypatch.setattr(time, "sleep", approve_on_poll)
 
     guest = None
 
@@ -384,7 +390,7 @@ def test_supervisor_closes_window_with_real_generated_transport_after_lost_respo
 
     limits = WindowLimits(window=300, qualify=10, placement=60, dispatch=30, proof=30,
                           close=60, withdraw=10, park=10)
-    result = run_native_read(tmp_path, Host(), Owner(), limits, run=fake_host)
+    result = run_native_read(tmp_path, Host(), ManualApproval(exchange), limits, run=fake_host)
     assert (result.reason, result.dispatch, result.cleanup, result.custody_retained) == (
         "read-settled", "terminal", "clean", False,
     )
@@ -394,6 +400,7 @@ def test_supervisor_closes_window_with_real_generated_transport_after_lost_respo
         assert result.accepted_read_sha256 == m9_read_closure.accept_result(
             pins, projection, original_wire, b"", 0
         )
+    assert len(approvals) == 1
     assert guest is not None
     assert guest.events == ["place", "readback", "dispatch", "prove", "original",
                             "projection", "discard"]

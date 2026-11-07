@@ -2,8 +2,8 @@
 
 ## M9 Codex READ
 
-`m9_native_read.py` composes one selected qualification with an independently
-signed approval, one possible native READ, evidence acceptance, withdrawal and
+`m9_native_read.py` composes one selected qualification with a manual owner
+approval, one possible native READ, evidence acceptance, withdrawal and
 verified park. The current qualification boundary starts with an already
 started guest under separately held, reviewed VM custody. Follow the
 [VM custody procedure](../../docs/plans/handoffs/M8-vm-custody.md) for the start
@@ -13,35 +13,41 @@ for cooperative custody.
 Before selecting a live window, review and rehearse the **exact** private
 qualification bundle, including the preflight and cleanup phases. The
 `QualificationBoundary` contract names the fixed phase set, content and receipt
-digests, previous boot, expected runtime, generation, destination, and owner
-key. It recompiles the selected D2 phases, checks the installed D2 helper before
+digests, previous boot, expected runtime, generation, and destination. It
+recompiles the selected D2 phases, checks the installed D2 helper before
 each phase, and validates the protected LR2 readback on the measured boot before
 later qualification can proceed. The runner accepts an independently reviewed selection digest. Old
 captures, old grants, and a prior boot's approvals are not inputs. Keep the
 scope short enough for the earliest qualification deadline and reserve time for
 withdrawal and park. The CLI caps the window at 75 minutes once it starts.
 
-The owner holds the Ed25519 signing key separately from the operator. Pin the
-SHA-256 of the normalized `ssh-ed25519 BASE64` public key (without comment or
-newline) in the reviewed selection. Once the supervisor publishes `pins.json`
-and `challenge.json`, compare the pins digest with the challenge and review the
-exact pins, expiry, and cost exposure. If approved, sign the unchanged challenge:
+Once the supervisor publishes `pins.json` and `challenge.json`, run
+`sha256sum pins.json challenge.json` in the printed directory. Confirm the pins
+digest matches `pins_sha256` in `challenge.json` and the challenge digest matches
+the directory name. Show the owner those pins, that challenge digest, expiry,
+limits, and cost exposure. Wait
+for the owner's explicit go-ahead for that challenge before recording approval.
+The trusted operator records the decision; the runner verifies its scope and
+expiry without authenticating a separate signer. No key or second device is needed.
+
+From that challenge's directory, the operator can publish the approved record
+atomically. Replace `EXACT_CHALLENGE_SHA256` with the digest the owner approved:
 
 ```bash
-ssh-keygen -Y sign -f OWNER_KEY -n constructicon-m9-read challenge.json
+printf '%s\n' '{"decision":"approve","challenge_sha256":"EXACT_CHALLENGE_SHA256"}' > approval.pending
+mv -n approval.pending approval.json
 ```
 
-Return only the signature and atomically place it at `approval.sig` beside the
-challenge. The owner private key stays off the operator host. An unsigned
-file, another key or namespace, and a signature on different challenge bytes
-cannot approve dispatch. `PARK-NOW` in the custody directory requests a stop.
+The window ends without dispatch on no decision, decline, malformed input,
+expiry, or a mismatched digest. Do not replace the decision or retry that
+window. `PARK-NOW` in the custody directory requests a stop.
 
 The operator entry, after separate scope selection and the fresh start, is:
 
 ```bash
 python -I -B scripts/ops/m9_native_read.py \
   --selection PRIVATE_SELECTION_JSON --selection-sha256 REVIEWED_SELECTION_DIGEST \
-  --owner-public-key NORMALIZED_PUBLIC_KEY_FILE --work STABLE_PRIVATE_CUSTODY_DIR \
+  --work STABLE_PRIVATE_CUSTODY_DIR \
   --target CHECKED_OPERATOR_AT_ADDRESS --alias CHECKED_HOST_KEY_ALIAS < /dev/null
 ```
 

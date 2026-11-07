@@ -79,7 +79,6 @@ def selected(root):
             "previous_generation": 11,
             "authorization": AUTH,
             "authorization_id": "fixture",
-            "owner_key_sha256": "a" * 64,
             "phases": phases,
             "selector": SELECTOR,
         }
@@ -240,7 +239,7 @@ def make(tmp_path, twin, *, target=TARGET):
 def test_fresh_pins_drift_and_checked_park(tmp_path, monkeypatch):
     twin = NativeTwin(monkeypatch, tmp_path, shell=bash())
     host = make(tmp_path, twin)
-    assert not twin.events and host.owner_key_sha256 == "a" * 64
+    assert not twin.events
     assert not (tmp_path / "work").exists()
     cutoff = time.monotonic() + 10
     qualified = host.qualify(cutoff)
@@ -303,3 +302,17 @@ def test_wrong_target_refuses_before_process(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="SELECTION_SHAPE"):
         make(tmp_path, twin, target="fixture@192.168.10.12")
     assert not twin.staged and not (tmp_path / "work").exists()
+
+
+def test_retired_owner_key_selection_refuses_before_process(tmp_path):
+    def unexpected_process(*args, **kwargs):
+        pytest.fail("obsolete selection must not run a subprocess")
+
+    path, _ = selected(tmp_path)
+    raw = json_bytes({**json.loads(path.read_bytes()), "owner_key_sha256": "a" * 64})
+    path.write_bytes(raw)
+    with pytest.raises(ValueError, match="SELECTION_SHAPE"):
+        boundary.QualificationBoundary(
+            path, sha(raw), tmp_path / "work", target=TARGET, alias=ALIAS, run=unexpected_process
+        )
+    assert not (tmp_path / "work").exists()

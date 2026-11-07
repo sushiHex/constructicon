@@ -63,6 +63,8 @@ class Fake:
         self.event("park-requested", cutoff)
         return self.fault == "park before claim" or (
             self.fault == "park after claim" and "readback" in self.names
+        ) or (
+            self.fault == "park during final live check" and self.names.count("check-live") == 3
         )
 
     def await_owner(self, challenge, cutoff):
@@ -75,11 +77,11 @@ class Fake:
             self.tick = cutoff
         return b"opaque owner evidence"
 
-    def authenticate_owner(self, challenge, transport, cutoff):
+    def check_owner_decision(self, challenge, transport, cutoff):
         self.event("authenticate", cutoff)
         assert challenge == self.challenge
         assert transport == b"opaque owner evidence"
-        if self.fault == "unsigned local file":
+        if self.fault == "invalid manual decision":
             return None
         return OwnerDecision(
             "d" * 64 if self.fault == "wrong boot" else self.challenge_sha,
@@ -183,6 +185,7 @@ def test_accepts_exact_candidate_and_closes_one_window(tmp_path):
         "readback",
         "park-requested",
         "check-live",
+        "park-requested",
         "dispatch",
         "prove-remote",
         "close",
@@ -201,7 +204,7 @@ def test_accepts_exact_candidate_and_closes_one_window(tmp_path):
     ("fault", "reason"),
     [
         ("no selection", "no-selection"),
-        ("unsigned local file", "invalid-selection"),
+        ("invalid manual decision", "invalid-selection"),
         ("wrong boot", "invalid-selection"),
         ("stale selection", "invalid-selection"),
         ("preclaim drift", "live-drift"),
@@ -241,6 +244,15 @@ def test_refusal_after_claim_closes_without_dispatch(tmp_path, fault, reason):
     assert fake.native_calls == 0
     assert (tmp_path / ("claim-" + WINDOW)).is_file()
     assert not (tmp_path / ("dispatch-" + WINDOW)).exists()
+
+
+def test_park_requested_during_final_live_check_prevents_dispatch(tmp_path):
+    fake = Fake(tmp_path, "park during final live check")
+    result = fake.run()
+    assert (result.reason, result.dispatch, result.cleanup) == (
+        "park-requested", "not-issued", "clean",
+    )
+    assert fake.native_calls == 0 and (tmp_path / ("dispatch-" + WINDOW)).is_file()
 
 
 def test_wait_reserves_every_stage_and_caps_pin_hold(tmp_path):

@@ -16,9 +16,9 @@ if __name__ == "__main__":
     ROOT = Path(__file__).resolve().parents[2]
     sys.path[:0] = [str(ROOT), str(ROOT / "src")]
 
-from scripts.ops.claude_read_commands import bounded, sha
+from scripts.ops.claude_read_commands import sha
 from scripts.ops.claude_read_session import json_bytes
-from scripts.ops.m9_owner_approval import SignedApproval, private_directory
+from scripts.ops.m9_owner_approval import ManualApproval, private_directory
 from scripts.ops.m9_read_transport import StagedRead
 from scripts.ops.m9_read_window import CloseProof, WindowLimits, run_window
 
@@ -59,9 +59,9 @@ class NativeReadBoundary:
     def await_owner(self, challenge, cutoff):
         if self._qualified is None:
             raise ValueError("M9_READ_QUALIFICATION_MISSING")
-        return self.owner.await_signature(challenge, self._qualified.qualification.pins, cutoff)
+        return self.owner.await_decision(challenge, self._qualified.qualification.pins, cutoff)
 
-    def authenticate_owner(self, challenge, transport, cutoff):
+    def check_owner_decision(self, challenge, transport, cutoff):
         self._decision = self.owner.verify(challenge, transport, cutoff)
         return self._decision
 
@@ -150,7 +150,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--selection", type=Path, required=True)
     parser.add_argument("--selection-sha256", required=True)
-    parser.add_argument("--owner-public-key", type=Path, required=True)
     parser.add_argument("--work", type=Path, required=True)
     parser.add_argument("--target", required=True)
     parser.add_argument("--alias", required=True)
@@ -166,8 +165,7 @@ def main(argv: list[str] | None = None) -> int:
             target=args.target,
             alias=args.alias,
         )
-        key = bounded(args.owner_public_key, 128).removesuffix(b"\n").removesuffix(b"\r")
-        owner = SignedApproval(args.work, key, host.owner_key_sha256)
+        owner = ManualApproval(args.work)
         result = run_native_read(args.work, host, owner, LIMITS)
     except (OSError, ValueError) as exc:
         parser.exit(2, f"M9 window refused: {type(exc).__name__}\n")
