@@ -178,7 +178,9 @@ def test_every_existing_proof_runs_once_in_its_isolated_lane():
         expected.extend(files)
         if "-m pytest" in step:
             assert step.count("--durations=10") == step.count("-m pytest")
-    assert sorted(re.findall(r"(?:tests/[\w/]+|scripts/check_\w+)\.py", text)) == sorted(
+    before, remainder = text.split("\n  inventory:\n", 1)
+    _, after = remainder.split("\n  proofs:\n", 1)
+    assert sorted(re.findall(r"(?:tests/[\w/]+|scripts/check_\w+)\.py", before + after)) == sorted(
         expected,
     )
     assert "lane: [foundation, lifecycle, combined, mediation]" in text
@@ -213,6 +215,42 @@ def test_every_existing_proof_runs_once_in_its_isolated_lane():
     exact_probe = ("tests/substrate/test_claude_native_startup.py::"
                    "test_pinned_credential_free_startup_has_only_a_noauth_observation")
     assert startup.index(controls) < startup.index(exact_probe)
+
+
+@pytest.mark.parametrize("change", ["omitted", "duplicated", "misrouted"])
+def test_inventory_rejects_proof_drift_before_provisioning(tmp_path, monkeypatch, change):
+    text = WORKFLOW.read_text(encoding="utf-8")
+    name = "Prove N3a protected descriptors and native-only store custody"
+    before, step = text.split("      - name: " + name + "\n", 1)
+    step, after = step.split("\n      - ", 1)
+    target = "tests/substrate/test_operator_store_restart.py"
+    assert step.count(target) == 1
+    if change == "omitted":
+        step = step.replace(target, "")
+    elif change == "duplicated":
+        step = step.replace(target, target + " " + target)
+    else:
+        step = step.replace("matrix.lane == 'foundation'", "matrix.lane == 'mediation'")
+    path = tmp_path / "workflow.yml"
+    path.write_text(before + "      - name: " + name + "\n" + step + "\n      - " + after,
+                    encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "WORKFLOW", path)
+    with pytest.raises(AssertionError):
+        test_every_existing_proof_runs_once_in_its_isolated_lane()
+
+
+def test_inventory_success_is_required_before_physical_provisioning():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    inventory = text.split("\n  inventory:\n", 1)[1].split("\n  proofs:\n", 1)[0]
+    proofs = text.split("\n  proofs:\n", 1)[1].split("\n  containment:\n", 1)[0]
+    assert "needs: classify" in inventory
+    assert "if: needs.classify.outputs.scope == 'full'" in inventory
+    assert ("tests/test_m8_containment_workflow.py::"
+            "test_every_existing_proof_runs_once_in_its_isolated_lane") in inventory
+    assert "tests/test_mutation_inventories.py::test_every_mutant_names_live_code" in inventory
+    assert "needs: [classify, inventory]" in proofs
+    assert "if: needs.classify.outputs.scope == 'full'" in proofs
+    assert "Provision the explicitly authorized disposable Linux host" in proofs
 
 
 def test_native_mutants_keep_the_common_runtime_and_unprivileged_context():

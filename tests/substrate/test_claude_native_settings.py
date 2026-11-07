@@ -291,17 +291,26 @@ async def test_cumulative_input_output_record_and_ui_budgets_bind():
                                            "ui": "ui-record"}[case]
 
 
-async def test_shared_absolute_deadline_does_not_restart_after_initialize():
+async def test_shared_absolute_deadline_does_not_restart_after_initialize(monkeypatch):
     channel = Channel()
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    offset = 0.0
+    monkeypatch.setattr(loop, "time", lambda: start + offset)
+    stages = []
 
     async def seam(stage):
+        nonlocal offset
         if stage == "read-1":
-            await asyncio.sleep(.04)
+            offset += .04
+            stages.append(stage)
         if stage == "read-2":
-            await asyncio.sleep(.04)
+            offset += .04
+            stages.append(stage)
 
     channel.seam = seam
     report = await observe(channel, timeout=.06)
+    assert stages == ["read-1", "read-2"]
     assert report["initialize_observed"] and not report["settings_observed"]
     assert report["lifecycle"] == "timeout"
 

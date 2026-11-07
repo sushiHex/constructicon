@@ -55,9 +55,29 @@ jobs:
           persist-credentials: false
       - run: python3 scripts/ci/m8_ci_scope.py docs
 
+  inventory:
+    needs: classify
+    if: needs.classify.outputs.scope == 'full'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          python-version: "3.11"
+      - run: uv sync --dev
+      - name: Check proof routing and mutation targets before provisioning
+        run: >-
+          uv run pytest -q
+          tests/test_m8_containment_workflow.py::test_every_existing_proof_runs_once_in_its_isolated_lane
+          tests/test_mutation_inventories.py::test_every_mutant_names_live_code
+
   proofs:
     name: proof (${{ matrix.lane }})
-    needs: classify
+    needs: [classify, inventory]
     if: needs.classify.outputs.scope == 'full'
     strategy:
       fail-fast: false
