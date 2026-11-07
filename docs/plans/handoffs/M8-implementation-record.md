@@ -11377,3 +11377,20 @@ These proofs complete the bounded N7 acceptance in #42. They establish the
 profile-specific READ, the scripted compatibility matrix, and the contained
 lifecycle without implying general production availability or new vendor
 authority.
+
+
+## Portable CI host-artifact inventory — #307
+
+The existing host-artifact inventory is assigned to the portable Linux
+mutation matrix rather than the serial verify tail. Each matrix member uses a
+separate runner, checkout, Python 3.11 and `uv sync --dev`; mutant activation
+remains subprocess-local and the harness checks source stability. The
+aggregate requires matrix success, and the controller wheel acquisition still
+precedes its isolated import proof. This preserves the existing proof rather
+than reusing a prior result. The PR's required CI is the first execution.
+
+In #382's completed run, the main gate took 32m46s and the following
+inventory took 5m18s. That serial time is an opportunity, not a prediction of
+new elapsed time. Foundation independently took 29m47s of its 30-minute
+budget, with several substantial steps; no optimization of that lane was
+established in this slice.

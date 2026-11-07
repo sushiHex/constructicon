@@ -26,6 +26,14 @@ Usage, with isolated Python from the repository root::
 
     python -I -S -B scripts/m8_procedure_package.py check DOC [--template]
     python -I -S -B scripts/m8_procedure_package.py build DOC OUT [--values FILE] [--template]
+    python -I -S -B scripts/m8_procedure_package.py check-contract SCRIPT CONTRACT.json
+
+``check-contract`` compares independently reviewed literal ``helper`` and
+``caller`` blocks plus exact ``bindings`` declaration values. Select these
+from the helper's accepted input contract, not from the candidate being checked.
+The helper block includes static runtime/evidence arguments. Its repeatable JSON
+proof explicitly covers selected source only; it does not execute shell, prove
+all helper calls were inventoried, or replace accepting/refusing fixtures.
 
 ``--values`` fills values measured mid-session (``PREVIEW_SHA256``, ``RUN_ID``,
 ``EXPECTED_BOOT``, ``DRIFT_STDOUT_HEX``, ``DRIFT_TOOL_SHA256``) into exact
@@ -285,6 +293,233 @@ RECORD_KEY = re.compile(r"[a-z_][a-z0-9_]{0,63}")
 
 class Refused(ValueError):
     """The composition is not exactly reviewable; nothing is written."""
+
+
+def helper_contract(script: bytes, contract: object) -> dict:
+    """Check reviewed literal helper/caller bindings, without interpreting shell.
+
+    The helper includes its static argv (runtime and raw evidence pins); the
+    caller includes its complete input-selection block. Bindings are exact
+    top-level declaration lines, separately reviewed against that helper.
+    This is source evidence only: comments, indirect writes and shell semantics
+    still need review and an accepting/refusing execution fixture. In particular,
+    this function never executes a helper or claims host absence/custody.
+    """
+    def require(ok, reason):
+        if not ok:
+            raise Refused("helper/caller source contract: " + reason)
+
+    require(type(script) is bytes and 0 < len(script) <= 131072 and b"\r" not in script,
+            "script must be nonempty bounded LF bytes")
+    require(type(contract) is dict and set(contract) == {"helper", "caller", "bindings"},
+            "contract keys must be helper, caller and bindings")
+    for role in ("helper", "caller"):
+        text = contract[role]
+        require(type(text) is str and 0 < len(text.encode("utf-8")) <= 131072
+                and text.endswith("\n") and "\r" not in text, role + " must be bounded LF text")
+        # Whole lines, exactly once; a substring of another declaration is not a match.
+        require((b"\n" + script).count(b"\n" + text.encode("utf-8")) == 1,
+                role + " block must occur exactly once")
+    bindings = contract["bindings"]
+    require(type(bindings) is dict and 0 < len(bindings) <= 32,
+            "bindings must contain 1 to 32 declarations")
+    for name, value in bindings.items():
+        require(type(name) is str and re.fullmatch(r"[A-Z_][A-Z0-9_]{0,63}", name),
+                "binding name must be a bounded uppercase identifier")
+        require(type(value) is str and 0 < len(value) <= 1024
+                and "\n" not in value and "\r" not in value,
+                "binding " + name + " value must be bounded single-line text")
+        declarations = re.findall(
+            rb"^(?:readonly )?" + name.encode("ascii") + rb"=([^\n]*)$", script, re.MULTILINE)
+        require(declarations == [value.encode("utf-8")],
+                "binding " + name + " declaration must match exactly once")
+    encoded = json.dumps(contract, sort_keys=True, ensure_ascii=True).encode("utf-8")
+    return {
+        "coverage": "selected-literal-source-only",
+        "execution": "not-executed",
+        "script_sha256": hashlib.sha256(script).hexdigest(),
+        "contract_sha256": hashlib.sha256(encoded).hexdigest(),
+        "helper_sha256": hashlib.sha256(contract["helper"].encode("utf-8")).hexdigest(),
+        "caller_sha256": hashlib.sha256(contract["caller"].encode("utf-8")).hexdigest(),
+        "binding_names": sorted(bindings),
+    }
+
+
+def contract_file(path: Path) -> object:
+    """Read a bounded, duplicate-refusing source contract for the offline CLI."""
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise Refused("duplicate helper contract key")
+            result[key] = value
+        return result
+
+    with path.open("rb") as stream:
+        raw = stream.read(262145)
+    if not 0 < len(raw) <= 262144:
+        raise Refused("helper contract bound")
+    try:
+        return json.loads(raw, object_pairs_hook=unique)
+    except (ValueError, RecursionError) as exc:
+        raise Refused("invalid helper contract JSON") from exc
+
+
+def private_tree_facts(path, root):
+    """One same-owner ordinary node behind an explicit private traversal root.
+
+    The caller separately owns ancestor custody, quiescence and mount exclusion.
+    Use the root explicitly for sidecars too; this is not an arbitrary-path
+    permission exemption. Nothing is chmodded or repaired.
+    """
+    import os
+    import stat
+    import sys
+
+    def require(ok, message):
+        if not ok:
+            raise ValueError("private tree: " + message)
+
+    require(sys.platform == "linux", "Linux physical observations required")
+    owner = os.geteuid()
+    require(owner > 0 and owner == os.getuid(), "unprivileged owner")
+    require(root.is_absolute() and root.resolve(strict=True) == root, "noncanonical root")
+    boundary = root.lstat()
+    require(boundary.st_uid == owner, "ownership")
+    require(stat.S_ISDIR(boundary.st_mode) and stat.S_IMODE(boundary.st_mode) == 0o700,
+            "root mode")
+    require(path == root or root in path.parents, "outside root")
+    info = path.lstat()
+    require(not getattr(info, "st_file_attributes", 0) & 0x400, "reparse point")
+    require(info.st_uid == owner, "ownership")
+    require(stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode), "special or symlink")
+    require(path.resolve(strict=True) == path and info.st_dev == boundary.st_dev,
+            "noncanonical node or different filesystem")
+    require(not stat.S_ISREG(info.st_mode) or info.st_nlink == 1, "hard link")
+    return info
+
+
+def private_tree_inventory(root, mounts_beneath):
+    """Inventory quiescent operator state behind its private Linux root.
+
+    Caller owns trusted ancestry, exclusive quiescence and absence of exports
+    in other namespaces or via non-bind overlay/FUSE/NFS mechanisms, plus hostile
+    retained handles. This checks the current namespace's same-device mount roots,
+    not other namespaces, arbitrary filesystem ACL semantics or xattrs. Owner
+    and admins are trusted; no node is normalized or repaired. Descendant group
+    writes are permitted only behind the checked 0700 traversal boundary.
+    """
+    import hashlib
+    import os
+    import re
+    import stat
+    from pathlib import PurePosixPath
+
+    def require(ok, message):
+        if not ok:
+            raise ValueError("private tree: " + message)
+
+    def facts(path):
+        return private_tree_facts(path, root)
+
+    def check_mounts():
+        # Read once, validate positively, then reuse the existing path matcher
+        # on that exact snapshot. A missing/empty/damaged query cannot mean clear.
+        with Path("/proc/self/mountinfo").open("rb") as stream:
+            raw = stream.read(8 * 1024 * 1024 + 1)
+        require(0 < len(raw) <= 8 * 1024 * 1024 and raw.endswith(b"\n"), "mount query")
+        listing = raw.decode("utf-8")
+        device = (os.major(first.st_dev), os.minor(first.st_dev))
+        points, rows = [], []
+        for line in listing.splitlines():
+            fields = line.split(" ")
+            require(len(fields) >= 10 and fields[0].isdigit() and fields[1].isdigit()
+                    and re.fullmatch(r"[0-9]+:[0-9]+", fields[2])
+                    and fields[4].startswith("/")
+                    and "-" in fields[6:], "mount row")
+            separator = fields.index("-", 6)
+            require(len(fields) == separator + 4 and all(fields), "mount row")
+            points.append(fields[4])
+            # Same octal unescaping as the shared mount-point matcher.
+            decoded = [re.sub(r"\\([0-7]{3})", lambda octal: chr(int(octal[1], 8)), value)
+                       for value in fields[3:5]]
+            mount_device = tuple(map(int, fields[2].split(":")))
+            # fs/nsfs.c:nsfs_show_path (Linux v6.8:235) emits net:[inode],
+            # not an absolute filesystem path. Interpret roots only for our device.
+            paths = decoded if mount_device == device else decoded[1:]
+            require(all(PurePosixPath(value).is_absolute() and str(PurePosixPath(value)) == value
+                        and ".." not in PurePosixPath(value).parts for value in paths), "mount path")
+            rows.append((mount_device, *map(PurePosixPath, decoded)))
+        require("/" in points, "root mount missing")
+        require(not mounts_beneath(root, listing=listing), "mount at or beneath root")
+        # An exported descendant can bypass 0700 without any mount POINT
+        # beneath root. Map root into its filesystem before checking sources.
+        containing = [row for row in rows if row[2] == root or row[2] in root.parents]
+        require(bool(containing), "containing mount unavailable")
+        depth = max(len(row[2].parts) for row in containing)
+        selected = [row for row in containing if len(row[2].parts) == depth]
+        require(len(selected) == 1, "containing mount ambiguous")
+        require(selected[0][0] == device, "containing mount device mismatch")
+        _, mounted_root, mounted_point = selected[0]
+        private = mounted_root / root.relative_to(mounted_point)
+        require(not any(source == private or private in source.parents
+                        for dev, source, _ in rows if dev == device), "exported descendant mount")
+
+    first = facts(root)
+    check_mounts()
+    fields = ("st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_gid",
+              "st_size", "st_mtime_ns", "st_ctime_ns")
+    result, pending, total = {}, [root], 0
+    while pending:
+        path = pending.pop()
+        require(len(result) < 10000, "inventory bound")
+        info = facts(path)
+        require(info.st_dev == first.st_dev, "different filesystem")
+        entry = {"dev": info.st_dev, "ino": info.st_ino, "uid": info.st_uid,
+                 "gid": info.st_gid, "mode": stat.S_IMODE(info.st_mode)}
+        if stat.S_ISDIR(info.st_mode):
+            entry["kind"] = "directory"
+            pending.extend(sorted(path.iterdir(), reverse=True))
+        else:
+            require(0 <= info.st_size <= 128 * 1024 * 1024, "file bound")
+            total += info.st_size
+            require(total <= 512 * 1024 * 1024, "tree bound")
+            flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+            with os.fdopen(os.open(path, flags), "rb") as stream:
+                opened = os.fstat(stream.fileno())
+                require(opened == info, "file replaced before read")
+                raw = stream.read(info.st_size + 1)
+                after = os.fstat(stream.fileno())
+            # atime may change on read; all mutation-relevant stat fields must not.
+            require(len(raw) == info.st_size and all(
+                getattr(current, key) == getattr(info, key)
+                for current in (after, path.lstat()) for key in fields), "file changed during read")
+            entry.update(kind="file", size=info.st_size, sha256=hashlib.sha256(raw).hexdigest())
+        result[path.relative_to(root).as_posix()] = entry
+    last = facts(root)
+    require(all(getattr(last, key) == getattr(first, key) for key in fields),
+            "root changed during inventory")
+    check_mounts()
+    return result
+
+
+def private_tree_inventory_source():
+    """Exact shared code for the existing private package compiler to embed.
+
+    Only stdlib code is emitted. The existing host mount inventory is reused,
+    not reimplemented. A package pins these emitted bytes in its normal manifest.
+    """
+    import inspect
+
+    from scripts.ci.m8_host_artifacts import mounts_beneath
+
+    return (
+        "from pathlib import Path\nimport re\nMOUNTINFO = Path('/proc/self/mountinfo')\n\n"
+        + inspect.getsource(mounts_beneath) + "\n"
+        + inspect.getsource(private_tree_facts) + "\n"
+        + inspect.getsource(private_tree_inventory) + "\n"
+        + "def inventory(root):\n    return private_tree_inventory(root, mounts_beneath)\n"
+    ).encode("utf-8")
 
 
 @dataclass(frozen=True)
@@ -661,7 +896,14 @@ def main(argv: list[str]) -> int:
         if arguments[:1] == ["build"] and len(arguments) == 5 and arguments[3] == "--values":
             values = session_values(Path(arguments[4]))
             arguments = arguments[:3]
-        if arguments[:1] == ["check"] and len(arguments) == 2:
+        if arguments[:1] == ["check-contract"] and len(arguments) == 3:
+            if template:
+                raise Refused("check-contract does not accept --template")
+            with Path(arguments[1]).open("rb") as stream:
+                script = stream.read(131073)
+            proof = helper_contract(script, contract_file(Path(arguments[2])))
+            print(json.dumps(proof, sort_keys=True))
+        elif arguments[:1] == ["check"] and len(arguments) == 2:
             steps = assemble(Path(arguments[1]), template)
             print(f"composition-checked {len(steps)} steps")
         elif arguments[:1] == ["build"] and len(arguments) == 3:
@@ -672,8 +914,9 @@ def main(argv: list[str]) -> int:
                 print("deferred until session values: " + " ".join(waiting))
         else:
             raise Refused("usage: check DOC [--template] | "
-                          "build DOC OUT [--values FILE] [--template]")
-    except (Refused, OSError, UnicodeDecodeError) as error:
+                          "build DOC OUT [--values FILE] [--template] | "
+                          "check-contract SCRIPT CONTRACT.json")
+    except (Refused, OSError, UnicodeError) as error:
         print(f"composition refused: {error}", file=sys.stderr)
         return 1
     return 0

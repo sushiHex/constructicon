@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from scripts import m8_procedure_package as packager
 from scripts import m8_vm_usage
 from scripts.ops import claude_read_session as transport
 from scripts.ops.claude_read_commands import (
@@ -231,6 +232,14 @@ class QualificationBoundary:
     Constructor validation runs no subprocess and spends no local work path.
     A selected script is executable authority, so the caller must independently
     verify the selection digest before using it. Keep inputs and captures private.
+
+    New selections use schema 2 and ``helper_contracts``: an entry for every
+    phase, each containing a list of the packager's reviewed literal contracts.
+    Empty lists explicitly declare no selected helpers. Their source-only
+    coverage and content-bound proofs are retained in each phase's SOURCE-PINS.
+    Inventory completeness and shell semantics remain review/fixture claims.
+    Schema 1 remains readable with explicit ``legacy-unverified`` coverage;
+    it must never be reported as having passed these new checks.
     """
 
     def __init__(
@@ -244,8 +253,16 @@ class QualificationBoundary:
         run=None,
     ) -> None:
         transport._target(target, alias)
-        raw = bounded(selection, 8192)
+        raw = bounded(selection, 2 * 1024 * 1024)
         _require(sha(raw) == selection_sha256, "SELECTION_DIGEST")
+        # v1 selections remain historical inputs with explicitly unverified
+        # helper coverage. New v2 packages inventory every phase (an empty list
+        # explicitly declares no selected helper) and bind source contracts.
+        header = parsed(raw)
+        _require(type(header) is dict, "SELECTION_SHAPE")
+        version = header.get("schema_version")
+        _require(type(version) is int and version in (1, 2), "SELECTION_SHAPE")
+        _require(version == 2 or len(raw) <= 8192, "SELECTION_SHAPE")
         selected = _object(
             raw,
             {
@@ -261,7 +278,7 @@ class QualificationBoundary:
                 "authorization_id",
                 "phases",
                 "selector",
-            },
+            } | ({"helper_contracts"} if version == 2 else set()),
             "SELECTION_SHAPE",
         )
         previous = selected["previous_boot"]
@@ -271,7 +288,7 @@ class QualificationBoundary:
         d2 = selected["d2"]
         _require(
             type(selected["schema_version"]) is int
-            and selected["schema_version"] == 1
+            and selected["schema_version"] == version
             and selected["target"] == target
             and selected["alias"] == alias
             and type(previous) is str
@@ -313,6 +330,16 @@ class QualificationBoundary:
         _require(type(phases) is dict and phases.keys() == {*PHASES, CLEANUP}, "PHASE_SET")
         self._templates = {}
         self._receipts = {}
+        self._contract_proofs = {}
+        contracts = selected.get("helper_contracts")
+        if version == 2:
+            _require(type(contracts) is dict and contracts.keys() == {*PHASES, CLEANUP},
+                     "HELPER_CONTRACT_INVENTORY")
+            _require(all(type(items) is list and len(items) <= 16 for items in contracts.values())
+                     and any(contracts.values()), "HELPER_CONTRACT_INVENTORY")
+        self.contract_coverage = (
+            "selected-literal-source-only" if version == 2 else "legacy-unverified"
+        )
         for name in (*PHASES, CLEANUP):
             entry = phases[name]
             exact = name not in TRIAL_PHASES and name != CLEANUP
@@ -341,6 +368,13 @@ class QualificationBoundary:
                 "PHASE_TEMPLATE",
             )
             self._templates[name] = body
+            if version == 2:
+                try:
+                    self._contract_proofs[name] = [
+                        packager.helper_contract(body, contract) for contract in contracts[name]
+                    ]
+                except packager.Refused as exc:
+                    raise packager.Refused(f"phase {name}: {exc}") from exc
         self._work, self._captures, self._run = work, work / "captures", run
         self._selected, self._selection_sha = selected, selection_sha256
         self._target, self._alias = target, alias
@@ -402,7 +436,11 @@ class QualificationBoundary:
         files = {
             "bindings.json": transport.json_bytes(binding),
             "phase.sh": script,
-            "SOURCE-PINS.json": transport.json_bytes({"selection_sha256": self._selection_sha}),
+            "SOURCE-PINS.json": transport.json_bytes({
+                "selection_sha256": self._selection_sha,
+                "helper_contract_coverage": self.contract_coverage,
+                "helper_contract_proofs": self._contract_proofs.get(phase, []),
+            }),
         }
         manifest = "".join(f"{sha(files[name])}  {name}\n" for name in sorted(files)).encode(
             "ascii"
