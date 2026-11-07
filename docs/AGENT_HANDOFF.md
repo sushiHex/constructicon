@@ -16,6 +16,19 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Shared deadline and early inventory prerequisite
+
+The [delivery record](plans/handoffs/delivery-friction-deadline-and-inventory-record.md)
+covers controlled-time proof of the settings initialization deadline and the
+existing proof-routing and mutation-target checks placed before physical
+provisioning. Windows focused runs passed; a renewed-deadline mutant failed an
+assertion. Omitted, duplicated and misrouted proof entries were refused. The
+reported 7-of-8 Windows failure rate was not independently reproduced.
+
+The delivery PR owns final CI timing and Linux evidence. Local checks did not
+use vendor binaries, credentials, a VM or provider calls and do not establish
+native qualification.
+
 ## Installed M9 fixed model selector
 
 The [guide and evidence](plans/handoffs/M9-model-selector-guide.md) cover the
