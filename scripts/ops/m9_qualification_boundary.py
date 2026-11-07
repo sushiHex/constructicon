@@ -259,7 +259,6 @@ class QualificationBoundary:
                 "previous_generation",
                 "authorization",
                 "authorization_id",
-                "owner_key_sha256",
                 "phases",
                 "selector",
             },
@@ -280,7 +279,6 @@ class QualificationBoundary:
             and type(selected["controller"]) is str
             and re.fullmatch(r"[0-9a-f]{40}", selected["controller"]) is not None
             and _digest(selected["runtime"])
-            and _hex(selected["owner_key_sha256"])
             and type(generation) is int
             and 0 < generation < 2**53 - 1
             and type(auth) is str
@@ -354,11 +352,6 @@ class QualificationBoundary:
         self._serial = 0
         self._d2_readback = None
         self._started = self._mutated = self._uncertain = self._withdrawn = self._park = False
-
-    @property
-    def owner_key_sha256(self) -> str:
-        """Digest of the selected `ssh-ed25519 BASE64` bytes, without a newline."""
-        return self._selected["owner_key_sha256"]
 
     def _call(self, name, argv, cutoff, limit=4096):
         seconds = cutoff - time.monotonic()

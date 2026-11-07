@@ -3656,3 +3656,9 @@ independently pinned owner key; the operator account needs only the public key.
 The fake-host rehearsal uses the emitted guest phase and real journal closure,
 including a lost dispatch reply. It proves the wiring, not qualification of a
 specific private bundle or a live subscription READ.
+
+The owner later chose manual approval for the actual-pin challenge in place
+of a separate signing key. The trusted operator records explicit approval
+of the displayed challenge digest. The supervisor checks the exact digest
+and expiry, rechecks live pins before dispatch, and records the decision as
+manual. The one-dispatch and verified-cleanup requirements are unchanged.

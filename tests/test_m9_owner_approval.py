@@ -1,7 +1,6 @@
-"""Use ephemeral keys with the same verifier as the operator entry."""
+"""Exercise the exact manual decision and custody boundaries."""
 
 import os
-import subprocess
 import tempfile
 import time
 from datetime import UTC, datetime, timedelta
@@ -13,49 +12,46 @@ from scripts.ops.claude_read_commands import sha
 from scripts.ops.claude_read_session import json_bytes
 
 
-def test_owner_signature_cannot_be_replaced_by_a_local_assertion(tmp_path):
-    if not approval.KEYGEN.is_file():
-        pytest.skip("OpenSSH ssh-keygen is not installed")
-
-    def key(name):
-        path = tmp_path / name
-        subprocess.run(
-            [str(approval.KEYGEN), "-q", "-t", "ed25519", "-N", "", "-f", str(path)],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            check=True,
-            timeout=10,
-        )
-        return path, b" ".join(path.with_suffix(".pub").read_bytes().split()[:2])
-
-    def sign(path, namespace, challenge):
-        return subprocess.run(
-            [str(approval.KEYGEN), "-Y", "sign", "-f", str(path), "-n", namespace],
-            input=challenge,
-            capture_output=True,
-            check=True,
-            timeout=10,
-        ).stdout
-
-    private, public = key("owner")
-    other, other_public = key("operator")
-    selected = approval.SignedApproval(tmp_path, public, sha(public))
-    with pytest.raises(ValueError, match="KEY_NOT_PINNED"):
-        approval.SignedApproval(tmp_path, other_public, sha(public))
+def test_manual_decision_approves_only_one_current_challenge(tmp_path):
+    owner = approval.ManualApproval(tmp_path)
     expires = datetime.now(UTC) + timedelta(minutes=2)
     payload = {"approval_not_after": expires.isoformat(), "pins_sha256": sha(b"checked-pins")}
     challenge = json_bytes(payload)
-    signature = sign(private, approval.NAMESPACE, challenge)
+    digest = sha(challenge)
+    approved = json_bytes({"decision": "approve", "challenge_sha256": digest})
     deadline = time.monotonic() + 30
-    accepted = selected.verify(challenge, signature, deadline)
+    accepted = owner.verify(challenge, approved, deadline)
     assert accepted is not None
-    assert accepted.challenge_sha256 == sha(challenge) and accepted.expires_at == expires
-    assert selected.verify(challenge, sign(other, approval.NAMESPACE, challenge), deadline) is None
-    assert selected.verify(challenge, sign(private, "wrong-scope", challenge), deadline) is None
-    assert selected.verify(json_bytes({**payload, "nonce": "changed"}), signature, deadline) is None
-    assert selected.verify(challenge, b'{"owner":"approved"}', deadline) is None
+    assert accepted.challenge_sha256 == digest and accepted.expires_at == expires
+    assert accepted.decision_sha256 == sha(approved)
+    assert owner.verify(challenge, approved, time.monotonic() - 1) is None
+    assert owner.verify(challenge, b'{"owner":"approved"}', deadline) is None
+    declined = json_bytes({"decision": "decline", "challenge_sha256": digest})
+    assert owner.verify(challenge, declined, deadline) is None
+    changed = json_bytes({**payload, "pins_sha256": sha(b"different-pins")})
+    assert owner.verify(changed, approved, deadline) is None
     stale = json_bytes({**payload, "approval_not_after": (expires - timedelta(days=1)).isoformat()})
-    assert selected.verify(stale, sign(private, approval.NAMESPACE, stale), deadline) is None
+    stale_approval = json_bytes({"decision": "approve", "challenge_sha256": sha(stale)})
+    assert owner.verify(stale, stale_approval, deadline) is None
+    with pytest.raises(ValueError, match="PINS_UNPROVED"):
+        owner.await_decision(challenge, b"different-pins", deadline)
+    assert not list(tmp_path.iterdir())
+
+
+def test_changed_displayed_pins_refuse_after_approval_is_published(tmp_path, monkeypatch):
+    pins = b"original"
+    challenge = json_bytes({"pins_sha256": sha(pins)})
+    packet = tmp_path / sha(challenge)
+
+    def publish(_):
+        (packet / "pins.json").write_bytes(b"modified")
+        (packet / "approval.json").write_bytes(json_bytes({
+            "decision": "approve", "challenge_sha256": sha(challenge),
+        }))
+
+    monkeypatch.setattr(approval.time, "sleep", publish)
+    with pytest.raises(ValueError, match="PINS_CHANGED"):
+        approval.ManualApproval(tmp_path).await_decision(challenge, pins, time.monotonic() + 1)
 
 
 def test_verifier_custody_refuses_shared_writes():
