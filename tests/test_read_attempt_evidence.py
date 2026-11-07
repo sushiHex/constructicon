@@ -14,6 +14,8 @@ from pathlib import Path
 import pytest
 from scripts.ops import read_attempt_evidence as reader
 
+from tests.windows_path_fd_stat import install_path_fd_stat_seam
+
 AUTH, RUN = "fixture-authorization", "sha256:" + "1" * 64
 PRIVATE = "PRIVATE-ACCOUNT-MODEL-TEXT"
 
@@ -111,6 +113,13 @@ def files(tmp_path, monkeypatch):
     db.commit()
     db.close()
     (root / "read.sqlite").chmod(0o600)
+    install_path_fd_stat_seam(
+        monkeypatch, reader,
+        [root / name for name in (
+            "read-attempt.json", "read.sqlite", "read.sqlite-wal", "read.sqlite-shm",
+            "write-attempt.json", "write.sqlite", "write.sqlite-wal", "write.sqlite-shm",
+        )],
+    )
     return root
 
 
