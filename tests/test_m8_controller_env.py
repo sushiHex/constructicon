@@ -529,6 +529,7 @@ def test_the_verify_lane_runs_the_controller_import_proof() -> None:
     assert workflow.count(step) == 1
     assert workflow.index("      - run: uv run verify\n") < workflow.index(step)
     assert workflow.count(preparation) == 1
+    assert workflow.index("      - run: uv run verify\n") < workflow.index(preparation)
     assert workflow.index(preparation) < workflow.index(step)
     assert 'M8_CONTROLLER_WHEELS: ${{ runner.temp }}/m8-controller-wheels' in workflow
 

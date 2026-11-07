@@ -286,13 +286,20 @@ def test_production_root_and_destinations_are_fixed() -> None:
 
 
 def test_linux_verify_runs_the_mutation_inventory() -> None:
-    """Most custody, staging and ownership mutants can only be killed on Linux."""
-
+    """The complete inventory runs once in its own non-root Linux matrix job."""
     workflow = (REPOSITORY / ".github/workflows/verify.yml").read_text(encoding="utf-8")
-    assert "runs-on: ubuntu-latest" in workflow
-    step = "      - run: uv run python scripts/check_m8_host_artifact_mutations.py\n"
-    assert workflow.count(step) == 1
-    assert workflow.index("      - run: uv run verify\n") < workflow.index(step)
+    job = workflow.split("\n  mutations:\n", 1)[1].split("\n  verify-complete:\n", 1)[0]
+    entry = "          - check_m8_host_artifact_mutations.py\n"
+    assert workflow.count(entry) == 1
+    assert entry in job
+    assert "    runs-on: ubuntu-latest\n" in job
+    assert '          python-version: "3.11"\n' in job
+    assert "      - run: uv sync --dev\n" in job
+    assert "      - run: uv run python scripts/${{ matrix.inventory }}\n" in job
+    assert "sudo" not in job and "continue-on-error" not in job
+    assert "check_m8_host_artifact_mutations.py" not in workflow.split(
+        "\n  verify:\n", 1
+    )[1].split("\n  mutations:\n", 1)[0]
 
 
 def test_script_bubblewrap_pin_is_the_launcher_pin() -> None:

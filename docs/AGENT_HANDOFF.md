@@ -3675,3 +3675,18 @@ of a separate signing key. The trusted operator records explicit approval
 of the displayed challenge digest. The supervisor checks the exact digest
 and expiry, rechecks live pins before dispatch, and records the decision as
 manual. The one-dispatch and verified-cleanup requirements are unchanged.
+
+## Portable CI host-artifact inventory — #307
+
+The host-artifact mutation inventory runs in the existing Linux mutation matrix,
+with the same Python version and dependency setup. Its isolated job preserves
+all mutants and the aggregate requires matrix success; controller wheel
+acquisition still precedes the isolated import proof in verify. The harness
+activates mutants in child processes and checks source bytes at invocation
+boundaries. CI is the first execution of this workflow arrangement.
+
+The #382 verify job spent 32m46s in the full gate and a further 5m18s in
+the inventory. Removing that serial step is a potential saving, not a measured
+new runtime. Foundation separately took 29m47s against 30 minutes; the N4
+proxy, non-sudo containment and READ rehearsal steps took 5m48s, 3m46s and
+3m24s respectively. No safe change to that lane is established here.

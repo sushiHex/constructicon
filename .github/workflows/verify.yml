@@ -123,7 +123,6 @@ jobs:
           raise SystemExit(pytest.main(["-q", "tests/substrate/journal/test_maintenance_evidence.py", "tests/substrate/journal/test_maintenance_diagnostic.py"]))
           '
       - run: uv run verify
-      - run: uv run python scripts/check_m8_host_artifact_mutations.py
       - name: Acquire and validate exact locked controller wheels
         run: uv run python -m scripts.ci.acquire_m8_controller_wheels "$RUNNER_TEMP/m8-controller-wheels"
       # Revalidate prepared bytes offline, then import the controller under the
@@ -160,6 +159,7 @@ jobs:
           - check_m8_procedure_package_mutations.py
           - check_m8_candidate_transfer_mutations.py
           - check_m8_host_baseline_mutations.py
+          - check_m8_host_artifact_mutations.py
           - check_m8_qualification_mutations.py
           - check_pi_read_mutations.py
           - check_pi_provider_mutations.py
