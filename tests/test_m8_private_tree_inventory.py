@@ -198,18 +198,19 @@ def test_foreign_descendant_and_mounted_tree_refuse(tmp_path, monkeypatch):
 def test_emitted_inventory_refuses_unproved_or_nested_mount_snapshot(tmp_path, monkeypatch, bad):
     root = produce(tmp_path / "state")
     original = Path.open
-    listing = b"22 1 8:1 / / rw - ext4 /dev/fixture rw\n"
+    device = f"{os.major(root.stat().st_dev)}:{os.minor(root.stat().st_dev)}"
+    listing = f"22 1 {device} / / rw - ext4 /dev/fixture rw\n".encode()
     if bad == "empty":
         listing = b""
     elif bad == "malformed":
         listing += b"not a mount row\n"
     elif bad == "missing-root":
-        listing = b"22 1 8:1 / /other rw - ext4 /dev/fixture rw\n"
+        listing = f"22 1 {device} / /other rw - ext4 /dev/fixture rw\n".encode()
     elif bad == "oversize":
         listing = b"x" * (8 * 1024 * 1024 + 1)
     elif bad == "nested-mount":
         point = (root / "closure.git").as_posix().replace(" ", "\\040")
-        listing += f"23 22 8:1 /other {point} rw - ext4 /dev/fixture rw\n".encode()
+        listing += f"23 22 {device} /other {point} rw - ext4 /dev/fixture rw\n".encode()
 
     def mount_source(path, *args, **kwargs):
         if path == Path("/proc/self/mountinfo"):
@@ -226,6 +227,71 @@ def test_emitted_inventory_refuses_unproved_or_nested_mount_snapshot(tmp_path, m
     _, inventory = emitted()
     with pytest.raises((ValueError, OSError)):
         inventory(root)
+
+
+@LINUX
+@pytest.mark.parametrize("case", ["inside", "root-export", "parent", "whole-filesystem",
+                                  "escaped-inside", "escaped-parent", "unmapped-device",
+                                  "ambiguous"])
+def test_current_namespace_mount_source_aliases_share_imported_and_emitted_policy(
+    tmp_path, monkeypatch, case,
+):
+    name = "private space\\name" if case.startswith("escaped-") else "private"
+    mount_point = tmp_path
+    if case.startswith("escaped-"):
+        mount_point = tmp_path / "mount point\\name"
+        mount_point.mkdir(mode=0o700)
+    root = produce(mount_point / name)
+    info = root.stat()
+    device = f"{os.major(info.st_dev)}:{os.minor(info.st_dev)}"
+    wrong_device = f"{os.major(info.st_dev) + 1}:{os.minor(info.st_dev)}"
+    original = Path.open
+
+    def escape(path):
+        return str(path).replace("\\", "\\134").replace(" ", "\\040")
+
+    # The containing mount maps a filesystem sub-root, not its namespace path.
+    # These are kernel-snapshot bytes only; no mount syscall is performed.
+    filesystem_root = Path("/filesystem sub-root")
+    private = filesystem_root / root.name
+    mapping_device = wrong_device if case == "unmapped-device" else device
+    listing = f"22 1 {device} / / rw - ext4 /dev/fixture rw\n"
+    listing += (f"23 22 {mapping_device} {escape(filesystem_root)} {escape(mount_point)} "
+                "rw - ext4 /dev/fixture rw\n")
+    if case == "ambiguous":
+        listing += (f"24 22 {device} /other {escape(mount_point)} "
+                    "rw - ext4 /dev/fixture rw\n")
+    else:
+        if case in ("inside", "escaped-inside"):
+            source = private / "trial"
+        elif case == "root-export":
+            source = private
+        elif case == "whole-filesystem":
+            source = Path("/")
+        else:
+            source = filesystem_root
+        listing += f"25 22 {device} {escape(source)} /outside-alias rw - ext4 /dev/fixture rw\n"
+
+    def mount_source(path, *args, **kwargs):
+        if path == Path("/proc/self/mountinfo"):
+            return io.BytesIO(listing.encode())
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", mount_source)
+    refused = case in {"inside", "root-export", "escaped-inside", "unmapped-device", "ambiguous"}
+    functions = [lambda path: package.private_tree_inventory(path, host.mounts_beneath)]
+    # Run imported policy first so a removed guard is an assertion failure,
+    # before inspect.getsource() is involved in an isolated mutation child.
+    results = []
+    for index in range(2):
+        function = functions[0] if index == 0 else emitted()[1]
+        if refused:
+            with pytest.raises(ValueError, match=r"exported descendant|containing mount"):
+                function(root)
+        else:
+            results.append(function(root))
+    if not refused:
+        assert results[0] == results[1]
 
 
 @LINUX

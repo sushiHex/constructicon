@@ -103,7 +103,7 @@ For Linux POSIX ACLs the group bits reflect the access mask, which also bounds
 named-user/group grants, so root mode `0700` does not leave those grants effective
 ([acl(5)](https://www.man7.org/linux/man-pages/man5/acl.5.html)). This assumes trusted
 administrators and owner, trusted ancestry, existing exclusive/quiescent custody,
-and no hostile retained handles or exported aliases outside that boundary. It
+and no hostile retained handles or exports outside the checked namespace. It
 does not prove arbitrary filesystem ACL semantics, inspect ACL/xattr bytes, or
 discover aliases exported in another namespace. Same-owner/hardlink checks alone
 would not establish those assumptions.
@@ -114,7 +114,21 @@ existing `m8_host_artifacts.mounts_beneath` matcher. Its added optional `listing
 keyword leaves existing default callers unchanged. Query failures, malformed or
 empty results, and mounts at/below the source refuse. Mount checks run before
 and after inventory; no absence is inferred from an unexecuted query. Exported
-bind aliases elsewhere remain an explicit limit, not a claim this query proves.
+aliases in other namespaces remain an explicit limit.
+
+A narrow review follow-up checks mount **sources** in that same validated
+snapshot too. The initial core documented alias absence as an assumption; no
+host alias was observed. This follow-up checks its current-namespace part.
+The unique longest canonical mount-point ancestor must match
+the private root's `st_dev`; an absent, ambiguous or device-inconsistent mapping
+refuses. The containing mount's filesystem root plus the private path relative
+to its mount point gives the private in-filesystem path. Any same-device mount
+source at/below that path refuses, including an alias exported to an unrelated
+namespace pathname. Ancestor/whole-filesystem aliases still traverse the `0700`
+root and are permitted. Filesystem-root strings use lexical `PurePosixPath`,
+never namespace resolution. This uses the kernel's
+[mountinfo field definitions](https://www.kernel.org/doc/html/latest/filesystems/proc.html#proc-pid-mountinfo-information-about-mounts),
+including major/minor as the `st_dev` identity. No mount syscall is introduced.
 
 `private_tree_inventory_source()` emits the exact shared facts/inventory and
 pure mount-matcher function sources with fixed stdlib globals. The guest never
@@ -140,3 +154,9 @@ been measured locally. Native Linux CI must execute the permitting/refusing
 cases and mutants before this correction can support a new package. No host
 chmod, normalization, frozen-private-byte change, vendor binary or VM operation
 occurred. A further host start still requires a fresh owner go-ahead.
+
+The source-alias follow-up keeps 17 portable passes and adds eight Linux cases
+(28 physical skips locally): root/descendant export refusal, parent/whole-FS
+export acceptance, octal-escaped paths, device mismatch and ambiguous mapping,
+each through imported and emitted source. One additional mutation removes this
+source-alias guard. Those native cases and its kill remain unmeasured until CI.

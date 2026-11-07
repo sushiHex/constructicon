@@ -186,6 +186,11 @@ MUTANTS += (
 
 CONTRACT_TESTS = "tests/test_m8_helper_contracts.py::"
 MUTANTS += (
+    ("same-namespace descendant bind sources cannot bypass the private root",
+     MODULE + "private_tree_inventory", "require(not any(source == private",
+     "require(True or not any(source == private",
+     "tests/test_m8_private_tree_inventory.py::"
+     "test_current_namespace_mount_source_aliases_share_imported_and_emitted_policy[inside]"),
     ("closed history retains a private top-level traversal boundary",
      MODULE + "private_tree_facts", "stat.S_IMODE(boundary.st_mode) == 0o700", "True",
      "tests/test_m8_private_tree_inventory.py::test_native_custody_refusals[root-mode]"),

@@ -396,7 +396,7 @@ def private_tree_inventory(root, mounts_beneath):
     """Inventory quiescent operator state behind its private Linux root.
 
     Caller owns trusted ancestry, exclusive quiescence and absence of exported
-    mount aliases/hostile retained handles. This checks the current namespace,
+    aliases in other namespaces or hostile retained handles. This checks the current namespace,
     not other namespaces, arbitrary filesystem ACL semantics or xattrs. Owner
     and admins are trusted; no node is normalized or repaired. Descendant group
     writes are permitted only behind the checked 0700 traversal boundary.
@@ -405,6 +405,7 @@ def private_tree_inventory(root, mounts_beneath):
     import os
     import re
     import stat
+    from pathlib import PurePosixPath
 
     def require(ok, message):
         if not ok:
@@ -420,7 +421,7 @@ def private_tree_inventory(root, mounts_beneath):
             raw = stream.read(8 * 1024 * 1024 + 1)
         require(0 < len(raw) <= 8 * 1024 * 1024 and raw.endswith(b"\n"), "mount query")
         listing = raw.decode("utf-8")
-        points = []
+        points, rows = [], []
         for line in listing.splitlines():
             fields = line.split(" ")
             require(len(fields) >= 10 and fields[0].isdigit() and fields[1].isdigit()
@@ -430,8 +431,26 @@ def private_tree_inventory(root, mounts_beneath):
             separator = fields.index("-", 6)
             require(len(fields) == separator + 4 and all(fields), "mount row")
             points.append(fields[4])
+            # Same octal unescaping as the shared mount-point matcher.
+            decoded = [re.sub(r"\\([0-7]{3})", lambda octal: chr(int(octal[1], 8)), value)
+                       for value in fields[3:5]]
+            require(all(PurePosixPath(value).is_absolute() and str(PurePosixPath(value)) == value
+                        and ".." not in PurePosixPath(value).parts for value in decoded), "mount path")
+            rows.append((tuple(map(int, fields[2].split(":"))), *map(PurePosixPath, decoded)))
         require("/" in points, "root mount missing")
         require(not mounts_beneath(root, listing=listing), "mount at or beneath root")
+        # An exported descendant can bypass 0700 without any mount POINT
+        # beneath root. Map root into its filesystem before checking sources.
+        containing = [row for row in rows if row[2] == root or row[2] in root.parents]
+        require(bool(containing), "containing mount unavailable")
+        depth = max(len(row[2].parts) for row in containing)
+        selected = [row for row in containing if len(row[2].parts) == depth]
+        device = (os.major(first.st_dev), os.minor(first.st_dev))
+        require(len(selected) == 1 and selected[0][0] == device, "containing mount ambiguous")
+        _, mounted_root, mounted_point = selected[0]
+        private = mounted_root / root.relative_to(mounted_point)
+        require(not any(source == private or private in source.parents
+                        for dev, source, _ in rows if dev == device), "exported descendant mount")
 
     first = facts(root)
     check_mounts()
