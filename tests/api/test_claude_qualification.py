@@ -31,6 +31,7 @@ from tests.substrate.test_claude_lane import configuration
 from tests.substrate.test_claude_provider import assembled as assembled
 from tests.substrate.test_claude_provider import provider as provider
 from tests.substrate.test_claude_read import Peer
+from tests.windows_path_fd_stat import install_path_fd_stat_seam
 
 
 class FixedPeer(Peer):
@@ -246,10 +247,18 @@ async def test_closed_refusal_survives_real_graph_journal_and_metadata(
     monkeypatch.setattr(reader, "_permissions", permissions)
     monkeypatch.setattr(reader, "_service_uid", lambda: uid)
     monkeypatch.setattr(reader, "_effective_uid", lambda: uid)
+    stat_seam = install_path_fd_stat_seam(
+        monkeypatch, reader,
+        [tmp_path / name for name in (
+            "read-attempt.json", "read.sqlite", "read.sqlite-wal", "read.sqlite-shm",
+        )],
+    )
     projected = reader.collect(
         tmp_path, authorization.authorization_id, str(authorization.run_id), 1,
     )
     assert projected["attempt"]["state"] == projected["journal"]["state"] == "valid"
+    if os.name == "nt":
+        assert stat_seam.normalized > 0
     assert (projected["attempt"]["callback_started"]
             == projected["attempt"]["callback_completed"] == int(completed))
     failures = [event for event in projected["journal"]["events"] if event["kind"] == "NodeFailed"]
