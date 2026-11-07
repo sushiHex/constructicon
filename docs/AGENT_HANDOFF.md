@@ -3710,3 +3710,22 @@ the inventory. Removing that serial step is a potential saving, not a measured
 new runtime. Foundation separately took 29m47s against 30 minutes; the N4
 proxy, non-sudo containment and READ rehearsal steps took 5m48s, 3m46s and
 3m24s respectively. No safe change to that lane is established here.
+
+## M9 generation 13 qualification; no model dispatch
+
+The owner-authorized window on 2026-11-07 cleared the archive gate on the actual
+host with modes preserved, then passed startup, retained-lock controls,
+publication/activation and all H7 controls, including one measured conditional
+H8 refresh. Installed C490 and the separately pinned local caf0dea operator kept
+their distinct source identities; the helper/runtime bytes match merged 6d22c99.
+
+The actual-pin READ approval expired without a decision. The supervisor recorded
+no dispatch, clean cleanup and release eligibility; withdrawal floor 13 and a
+fresh parked observation were affirmed before custody release. This established
+qualification and resolved the observed archive permission blocker, not a model
+choice, prompt improvement, promotion or monetary charge. A local empty-output
+expectation was wrong: the pinned authorization inspector emits an affirmative
+absence marker. The recorded result was checked against that producer without
+repeating or changing the remote command. The living implementation record and
+[issue verdict](https://github.com/sushiHex/constructicon/issues/45#issuecomment-6712963468)
+retain the scope and limits.

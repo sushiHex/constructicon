@@ -11394,3 +11394,31 @@ inventory took 5m18s. That serial time is an opportunity, not a prediction of
 new elapsed time. Foundation independently took 29m47s of its 30-minute
 budget, with several substantial steps; no optimization of that lane was
 established in this slice.
+
+## M9 selector admission — generation 13 qualification
+
+The [owner-authorized corrected window](https://github.com/sushiHex/constructicon/issues/45#issuecomment-6704656527)
+ran on 2026-11-07 with installed controller `490562a` and the separately pinned
+local operator `caf0dea`. The helper/runtime bytes match merged `6d22c99`.
+The archive gate passed on the actual host, preserving original modes and bytes
+behind its private roots. Startup, retained-lock controls, publication and
+activation, all H7 controls, and one conditional measured H8 refresh completed.
+The [actual-pin READ proposal](https://github.com/sushiHex/constructicon/issues/45#issuecomment-6704806434)
+bound one `gpt-6.1-sol`/low turn and epoch with a 120-second executor limit.
+
+No decision arrived before the challenge expired. The
+[checked closeout](https://github.com/sushiHex/constructicon/issues/45#issuecomment-6712963468)
+records no dispatch or accepted READ, clean cleanup and release eligibility.
+Withdrawal readback affirmed floor 13; a later fresh usage observation affirmed
+the VM parked, and cooperative custody was released. There was no model call,
+promotion, rollback, new login, controller replacement or re-baseline.
+Qualification and account refresh do not establish model-answer quality or a
+monetary charge. Usage and money are not inferred from those operations.
+
+The permission blocker is cleared for this observed window, not every future
+host state. A local post-check incorrectly expected empty output from the
+authorization inspector; the pinned producer's affirmative absence marker was
+verified without repeating or changing the remote command. Equal deterministic
+run IDs across preparations are not evidence of an old attempt: the prior trial
+state was archived before fresh seeding. This evidence does not establish a live
+M9 model choice or deploy the later schema-11 metering implementation on C490.
