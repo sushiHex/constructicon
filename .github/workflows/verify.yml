@@ -89,6 +89,11 @@ jobs:
     needs: classify
     if: needs.classify.outputs.scope == 'full'
     runs-on: ubuntu-latest
+    env:
+      ACTIONLINT_VERSION: "1.7.12"
+      # Update the asset id together with the version and checksum.
+      ACTIONLINT_ASSET_ID: "384924896"
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
     steps:
       - uses: actions/checkout@v4
         with:
@@ -101,42 +106,41 @@ jobs:
       # a jobless run, so lint every workflow before merge (#218). The release
       # checksum is from actionlint_1.7.12_checksums.txt in the v1.7.12 release.
       # The runner's shellcheck lints the run: blocks.
+      - name: Name the pinned actionlint archive
+        run: |
+          printf 'ACTIONLINT_ARCHIVE=actionlint_%s_linux_amd64.tar.gz\n' "$ACTIONLINT_VERSION" >> "$GITHUB_ENV"
       - name: Restore pinned actionlint archive
         id: actionlint-cache
+        continue-on-error: true
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ${{ runner.temp }}/actionlint_1.7.12_linux_amd64.tar.gz
-          key: release-archive-actionlint-1.7.12-Linux-X64-8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          path: ${{ runner.temp }}/${{ env.ACTIONLINT_ARCHIVE }}
+          key: release-archive-actionlint-${{ env.ACTIONLINT_VERSION }}-Linux-X64-${{ env.ACTIONLINT_SHA256 }}
       - name: Acquire pinned actionlint archive
-        env:
-          ACTIONLINT_VERSION: "1.7.12"
-          # Update the asset id together with the version and checksum.
-          ACTIONLINT_ASSET_ID: "384924896"
-          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
         run: |
           set -euo pipefail
-          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-          if [ ! -f "$RUNNER_TEMP/$archive" ]; then
+          if [ ! -f "$RUNNER_TEMP/$ACTIONLINT_ARCHIVE" ]; then
             # At most four attempts total, across two official routes to the same
             # pinned asset. Both routes must pass the checksum gate below.
-            if ! curl -fsSL --retry 1 -o "$RUNNER_TEMP/$archive" \
-              "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/$archive"; then
+            if ! curl -fsSL --retry 1 -o "$RUNNER_TEMP/$ACTIONLINT_ARCHIVE" \
+              "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/$ACTIONLINT_ARCHIVE"; then
               curl -fsSL --retry 1 -H 'Accept: application/octet-stream' \
-                -H 'X-GitHub-Api-Version: 2022-11-28' -o "$RUNNER_TEMP/$archive" \
+                -H 'X-GitHub-Api-Version: 2022-11-28' -o "$RUNNER_TEMP/$ACTIONLINT_ARCHIVE" \
                 "https://api.github.com/repos/rhysd/actionlint/releases/assets/${ACTIONLINT_ASSET_ID}"
             fi
           fi
-          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$RUNNER_TEMP/$archive" | sha256sum --check --strict
+          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$RUNNER_TEMP/$ACTIONLINT_ARCHIVE" | sha256sum --check --strict
       - name: Save pinned actionlint archive
-        if: steps.actionlint-cache.outputs.cache-hit != 'true'
+        if: success() && steps.actionlint-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ${{ runner.temp }}/actionlint_1.7.12_linux_amd64.tar.gz
-          key: release-archive-actionlint-1.7.12-Linux-X64-8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          path: ${{ runner.temp }}/${{ env.ACTIONLINT_ARCHIVE }}
+          key: release-archive-actionlint-${{ env.ACTIONLINT_VERSION }}-Linux-X64-${{ env.ACTIONLINT_SHA256 }}
       - name: Lint workflows with actionlint
         run: |
           set -euo pipefail
-          tar -xzf "$RUNNER_TEMP/actionlint_1.7.12_linux_amd64.tar.gz" -C "$RUNNER_TEMP" actionlint
+          tar -xzf "$RUNNER_TEMP/$ACTIONLINT_ARCHIVE" -C "$RUNNER_TEMP" actionlint
           shellcheck --version
           "$RUNNER_TEMP/actionlint" -color -verbose -shellcheck="$(command -v shellcheck)"
       - name: Check maintenance diagnosis fixtures under UID 0

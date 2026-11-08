@@ -45,25 +45,43 @@ def test_cache_key_and_save_are_bound_to_the_verified_archive(name: str) -> None
     acquisition = step(workflow, acquire_name)
     restore = step(workflow, f"Restore pinned {name} archive")
     save = step(workflow, f"Save pinned {name} archive")
-    digest = re.findall(r"\b[0-9a-f]{64}\b", acquisition)[0]
+    digest = re.findall(r"\b[0-9a-f]{64}\b",
+                        workflow if name == "actionlint" else acquisition)[0]
     key = ("release-archive-codex-${{ env.CODEX_PIN_VERSION }}-Linux-X64-"
            "${{ env.CODEX_PIN_CODEX_SHA256 }}" if name == "codex" else
+           "release-archive-actionlint-${{ env.ACTIONLINT_VERSION }}-Linux-X64-"
+           "${{ env.ACTIONLINT_SHA256 }}" if name == "actionlint" else
            f"release-archive-{name}-{version}-Linux-X64-{digest}")
+    cache_file = "${{ env.ACTIONLINT_ARCHIVE }}" if name == "actionlint" else archive
     for kind, cache_step in (("restore", restore), ("save", save)):
         assert f"uses: actions/cache/{kind}@{ACTION_PIN}" in cache_step
-        assert f"path: ${{{{ runner.temp }}}}/{archive}\n" in cache_step
+        assert f"path: ${{{{ runner.temp }}}}/{cache_file}\n" in cache_step
         assert f"key: {key}\n" in cache_step
         assert "restore-keys" not in cache_step
-        assert "continue-on-error" not in cache_step
+        assert "continue-on-error: true" in cache_step
+    # A cache-service failure is best effort; integrity and use remain strict.
+    assert "continue-on-error" not in acquisition
+    assert "success() && " in save
     assert "always()" not in save and "failure()" not in save
-    assert f"if: steps.{name}-cache.outputs.cache-hit != 'true'" in save or (
-        name == "pi" and "if: matrix.lane == 'lifecycle' && "
+    assert f"if: success() && steps.{name}-cache.outputs.cache-hit != 'true'" in save or (
+        name == "pi" and "if: success() && matrix.lane == 'lifecycle' && "
         "steps.pi-cache.outputs.cache-hit != 'true'" in save
     )
     assert workflow.index(f"Restore pinned {name} archive") < workflow.index(acquire_name)
     assert workflow.index(acquire_name) < workflow.index(f"Save pinned {name} archive")
     assert "sha256sum --check --strict" in acquisition
+    if name == "actionlint":
+        for field in ("VERSION", "SHA256", "ASSET_ID"):
+            assert workflow.count(f"ACTIONLINT_{field}:") == 1
+        naming = shell(workflow, "Name the pinned actionlint archive")
+        assert "ACTIONLINT_ARCHIVE=actionlint_%s_linux_amd64.tar.gz" in naming
+        assert '"$ACTIONLINT_VERSION" >> "$GITHUB_ENV"' in naming
+        assert '"$RUNNER_TEMP/$ACTIONLINT_ARCHIVE"' in acquisition
+        use = shell(workflow, "Lint workflows with actionlint")
+        assert 'tar -xzf "$RUNNER_TEMP/$ACTIONLINT_ARCHIVE"' in use
+        assert "continue-on-error" not in step(workflow, "Lint workflows with actionlint")
     if name == "pi":
+        assert f"/releases/download/v{version}/{archive}" in acquisition
         assert digest == pi_fixture.ARCHIVE_SHA
         assert workflow.index(f"Save pinned {name} archive") < workflow.index(
             "Prove pinned Pi startup and its fixed local peer"
@@ -97,17 +115,28 @@ def test_codex_template_still_captures_the_installed_pin_and_refuses_a_bypass() 
 @pytest.mark.parametrize(("name", "case"), [
     (name, case) for name in ASSETS
     for case in ["hit", "corrupt-hit", "miss", "corrupt-miss", "failed-miss"]
-] + [("actionlint", "fallback-miss")])
+] + [("actionlint", "fallback-miss"), ("actionlint", "bumped-miss")])
 def test_actual_acquisition_shell_checks_hits_and_misses_before_use(
     tmp_path: Path, name: str, case: str,
 ) -> None:
     workflow, acquire_name, archive, _ = ASSETS[name]
+    version = "1.7.13" if case == "bumped-miss" else "1.7.12"
+    if case == "bumped-miss":
+        workflow = workflow.replace('ACTIONLINT_VERSION: "1.7.12"',
+                                    'ACTIONLINT_VERSION: "1.7.13"')
+        archive = f"actionlint_{version}_linux_amd64.tar.gz"
+    if name == "actionlint":
+        matched = re.search(r'ACTIONLINT_VERSION: "([^"]+)"', workflow)
+        assert matched is not None
+        version = matched[1]
     payload = b"harmless pinned archive fixture\n"
     digest = hashlib.sha256(payload).hexdigest()
     body = shell(workflow, acquire_name)
     # Only the pin bytes change. The real shell control flow and checksum tool run.
     body = re.sub(r"\b[0-9a-f]{64}\b", digest, body)
     if name == "actionlint":
+        body = (shell(workflow, "Name the pinned actionlint archive")
+                + 'set -a; . "$GITHUB_ENV"; set +a\n' + body)
         body += shell(workflow, "Lint workflows with actionlint")
     elif name == "pi":
         proof = shell(workflow, "Prove pinned Pi startup and its fixed local peer")
@@ -115,6 +144,8 @@ def test_actual_acquisition_shell_checks_hits_and_misses_before_use(
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     target = runtime / archive
+    if case == "bumped-miss":
+        (runtime / ASSETS["actionlint"][2]).write_bytes(b"unchecked old archive")
     if case.endswith("hit"):
         target.write_bytes(payload if case == "hit" else b"corrupt cached archive")
     source = tmp_path / "payload"
@@ -138,7 +169,7 @@ sudo() {
   case "$1" in tar|env) printf 'use\n' >> "$USED";; esac
 }
 tar() {
-  printf 'use\n' >> "$USED"
+  printf 'use:%s\n' "$*" >> "$USED"
   printf '#!/bin/sh\nexit 0\n' > "$RUNNER_TEMP/actionlint"
   chmod +x "$RUNNER_TEMP/actionlint"
 }
@@ -154,18 +185,23 @@ shellcheck() { return 0; }
              "CALLS": calls.as_posix(), "USED": used.as_posix(),
              "DOWNLOAD_FAIL": ("1" if case == "failed-miss" else
                                "first" if case == "fallback-miss" else "0"),
-             "ACTIONLINT_VERSION": "1.7.12", "ACTIONLINT_SHA256": digest,
+             "GITHUB_ENV": (tmp_path / "github-env").as_posix(),
+             "ACTIONLINT_VERSION": version, "ACTIONLINT_SHA256": digest,
              "ACTIONLINT_ASSET_ID": "fixture"},
     )
-    assert (result.returncode == 0) == (case in {"hit", "miss", "fallback-miss"}), result.stderr
-    assert used.exists() == (case in {"hit", "miss", "fallback-miss"})
+    accepted = case in {"hit", "miss", "fallback-miss", "bumped-miss"}
+    assert (result.returncode == 0) == accepted, result.stderr
+    assert used.exists() == accepted
     downloads = calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
     archive_downloads = [path for path in downloads if path.endswith("/" + archive)]
     assert bool(archive_downloads) == (not case.endswith("hit"))
+    if case == "bumped-miss":
+        assert archive in used.read_text(encoding="utf-8")
+        assert ASSETS["actionlint"][2] not in used.read_text(encoding="utf-8")
     if case == "fallback-miss":
         assert len(archive_downloads) == 2
     if case in {"corrupt-hit", "corrupt-miss"}:
         assert f"{archive}: FAILED" in result.stdout
-    if case in {"hit", "miss", "fallback-miss"}:
+    if case in {"hit", "miss", "fallback-miss", "bumped-miss"}:
         assert f"{archive}: OK" in result.stdout
         assert target.read_bytes() == payload

@@ -29,8 +29,9 @@ def _step(name: str = "Lint workflows with actionlint") -> str:
 
 def test_the_linter_step_is_pinned_and_checked_before_it_runs() -> None:
     step = _step("Acquire pinned actionlint archive")
-    assert re.search(r'^          ACTIONLINT_VERSION: "\d+\.\d+\.\d+"$', step, re.M)
-    assert re.search(r"^          ACTIONLINT_SHA256: [0-9a-f]{64}$", step, re.M)
+    job = _job("verify")
+    assert re.search(r'^      ACTIONLINT_VERSION: "\d+\.\d+\.\d+"$', job, re.M)
+    assert re.search(r"^      ACTIONLINT_SHA256: [0-9a-f]{64}$", job, re.M)
     assert "sha256sum --check --strict" in step
     job = _job("verify")
     check = job.index("sha256sum --check --strict")

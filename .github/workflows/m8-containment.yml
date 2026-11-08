@@ -140,6 +140,7 @@ jobs:
       - name: Restore pinned pi archive
         if: matrix.lane == 'lifecycle'
         id: pi-cache
+        continue-on-error: true
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}/pi-linux-x64.tar.gz
@@ -156,7 +157,8 @@ jobs:
           fi
           printf '%s  %s\n' 24f5be328b66d4da36876296989501974f43ab8434fbb57c35c523a3ea505ded "$RUNNER_TEMP/pi-linux-x64.tar.gz" | sha256sum --check --strict
       - name: Save pinned pi archive
-        if: matrix.lane == 'lifecycle' && steps.pi-cache.outputs.cache-hit != 'true'
+        if: success() && matrix.lane == 'lifecycle' && steps.pi-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}/pi-linux-x64.tar.gz
@@ -514,6 +516,7 @@ jobs:
         run: '"$PWD/.venv/bin/python" scripts/ci/vendor_pin_env.py >> "$GITHUB_ENV"'
       - name: Restore pinned codex archive
         id: codex-cache
+        continue-on-error: true
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}/codex.tar.gz
@@ -535,7 +538,8 @@ jobs:
           printf '%s  %s\n' fd219bd9f061278275f528939f82f54d2eb97df4b25c23b022adbe48813d920b "$RUNNER_TEMP/codex-models.json" | sha256sum --check --strict
           sudo install -m 0444 "$RUNNER_TEMP/codex-models.json" /var/lib/constructicon-m8-launch/codex-models.json
       - name: Save pinned codex archive
-        if: steps.codex-cache.outputs.cache-hit != 'true'
+        if: success() && steps.codex-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}/codex.tar.gz
