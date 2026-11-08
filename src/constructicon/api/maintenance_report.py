@@ -36,11 +36,13 @@ from typing import Any, Never
 from constructicon.api.maintenance_entry import inspect_result
 from constructicon.core.address import ExecutionPath, RunId, ScopePath
 from constructicon.core.gates import MergeEvaluation
-from constructicon.core.maintenance import PlanManifestRequest
+from constructicon.core.maintenance import ChannelReplyRequest, PlanManifestRequest
+from constructicon.core.manifest import parse_manifest_json
 from constructicon.core.run import RunStatus
 from constructicon.substrate.journal._sqlite_schema import SCHEMA_VERSION
 from constructicon.substrate.journal.maintenance_diagnostic import (
-    GRAPH,
+    _CASES,
+    CHANNEL_GRAPH,
     MAX_JSON_BYTES,
     _connection,
     _copy_snapshot,
@@ -53,7 +55,8 @@ from constructicon.substrate.journal.sqlite import SqliteJournal
 MAX_PACKET_BYTES = 8192
 MAX_LEASES = 16
 ERROR = "maintenance report refused or incomplete"
-_DIAGNOSTIC_STAGES = frozenset({"snapshot", "journal", "attempt", "command", "result", "output"})
+_DIAGNOSTIC_STAGES = frozenset({"snapshot", "journal", "attempt", "command", "result", "task",
+                                "output"})
 _NODES = ("writer", "checker")
 _BINDINGS = frozenset({"executor", "workspace", "gate"})
 _RUN = re.compile(r"run-[0-9a-f]{32}")
@@ -106,11 +109,33 @@ def _user_version(path: Path) -> int:
     return int(value)
 
 
-def _result(scratch: Path, present: set[str], run_id: RunId) -> dict[str, object]:
+def _graph(journal: SqliteJournal, run_id: RunId) -> str:
+    """The run's own retained graph names one of the two fixed tasks, or none."""
+    manifest_hash = journal.run_manifest_hash(run_id)
+    _require(manifest_hash is not None)
+    assert manifest_hash is not None
+    raw = journal.load_manifest_json(manifest_hash)
+    _require(raw is not None)
+    assert raw is not None
+    graph = parse_manifest_json(raw).source_graph.name
+    _require(graph in _CASES)
+    return graph
+
+
+def _result(scratch: Path, present: set[str], run_id: RunId, graph: str) -> dict[str, object]:
     if "maintenance-result.json" not in present:
         return {"observation": "missing"}
     facts = inspect_result(scratch / "maintenance-result.json")
     _require(facts["run_id"] == run_id)
+    # The stored result names its task; it must be the journal's own task.
+    channel = facts.get("purpose") == _CASES[CHANNEL_GRAPH][0]
+    _require(channel == (graph == CHANNEL_GRAPH))
+    if channel:
+        return {"observation": "historical-acceptance-observed",
+                "candidate_commit": facts["candidate_commit"],
+                "base_sha256": facts["base_sha256"],
+                "candidate_sha256": facts["candidate_sha256"]}
+    _require("purpose" not in facts)
     return {"observation": "historical-acceptance-observed",
             "candidate_commit": facts["candidate_commit"],
             "input_sha256": facts["input_sha256"], "render_sha256": facts["render_sha256"]}
@@ -143,20 +168,20 @@ def _metering(journal: SqliteJournal, run_id: RunId) -> tuple[dict[str, object],
     })
 
 
-def _node(path: ExecutionPath) -> str:
+def _node(path: ExecutionPath, graph: str) -> str:
     segments = path.scope.segments
-    if len(segments) == 2 and segments[0] == GRAPH and segments[1] in _NODES:
+    if len(segments) == 2 and segments[0] == graph and segments[1] in _NODES:
         return segments[1]
     return "unknown"
 
 
-def _leases(journal: SqliteJournal, run_id: RunId) -> dict[str, object]:
+def _leases(journal: SqliteJournal, run_id: RunId, graph: str) -> dict[str, object]:
     rows = journal.capability_leases(run_id)
     _require(len(rows) <= MAX_LEASES)
     keyed: list[tuple[tuple[str, str, int], dict[str, object]]] = []
     for row in rows:
         _require(type(row.acquisition_epoch) is int and 0 < row.acquisition_epoch < 2**31)
-        node = _node(row.path)
+        node = _node(row.path, graph)
         binding = row.binding_id if row.binding_id in _BINDINGS else "unknown"
         keyed.append(((node, binding, row.acquisition_epoch), {
             "node": node, "binding": binding, "acquisition_epoch": row.acquisition_epoch,
@@ -169,9 +194,9 @@ def _leases(journal: SqliteJournal, run_id: RunId) -> dict[str, object]:
             "summary": summary, "items": items}
 
 
-def _attestation(journal: SqliteJournal, run_id: RunId) -> dict[str, object]:
+def _attestation(journal: SqliteJournal, run_id: RunId, graph: str) -> dict[str, object]:
     checkpoint = journal.checkpoint(run_id, ExecutionPath(scope=ScopePath(
-        segments=(GRAPH, "checker"))))
+        segments=(graph, "checker"))))
     if checkpoint is None:
         return {"observation": "missing"}
     evaluation = MergeEvaluation.model_validate(checkpoint.outputs["evaluation"].payload)
@@ -205,7 +230,7 @@ def _git(repository: Path, *arguments: str) -> subprocess.CompletedProcess[bytes
     )
 
 
-def _target(root: Path, request: PlanManifestRequest) -> dict[str, object]:
+def _target(root: Path, request: PlanManifestRequest | ChannelReplyRequest) -> dict[str, object]:
     report: dict[str, object] = {"meaning": "current-ref-read-not-proof-of-cleanup",
                                  "observation": "unknown"}
     _require(_SHA.fullmatch(request.base_commit))
@@ -326,20 +351,22 @@ def _report(root: Path, out: Path, command_report: Path, run_id: str,
         assert isinstance(facts, dict)
         if facts.get("observation") != "selected-facts-validated":
             raise _Refusal("journal", journal="run-missing")
-        with _stage("result"):
-            result = _result(scratch, present, run)
         with _stage("journal"):
             journal = SqliteJournal(scratch / "maintenance.sqlite")
+            graph = _graph(journal, run)
+            purpose, request_model = _CASES[graph][0], _CASES[graph][1]
             inputs = journal.run_inputs(run)
             _require(isinstance(inputs, dict))
             assert inputs is not None
-            request = PlanManifestRequest.model_validate(inputs["request"])
+            request = request_model.model_validate(inputs["request"])
+        with _stage("result"):
+            result = _result(scratch, present, run, graph)
         with _stage("metering"):
             metering, accounting = _metering(journal, run)
         with _stage("leases"):
-            leases = _leases(journal, run)
+            leases = _leases(journal, run, graph)
         with _stage("attestation"):
-            attestation = _attestation(journal, run)
+            attestation = _attestation(journal, run, graph)
         del journal
     with _stage("target"):
         target = _target(root, request)
@@ -349,7 +376,8 @@ def _report(root: Path, out: Path, command_report: Path, run_id: str,
         packet: dict[str, object] = {
             "schema_version": 1, "complete": True,
             "meaning": "selected-historical-run-facts-from-a-private-copy",
-            "run_id": str(run), "status": status, "outcome": outcome, "refusal": refusal,
+            "run_id": str(run), "purpose": purpose, "status": status, "outcome": outcome,
+            "refusal": refusal,
             "diagnostic": {name: diagnostic[name] for name in (
                 "journal", "attempt", "pending_attempt", "command", "result")},
             "result": result, "metering": metering, "capability_accounting": accounting,

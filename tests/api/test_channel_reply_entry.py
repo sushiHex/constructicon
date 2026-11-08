@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import shutil
 from datetime import timedelta
 from pathlib import Path
 
@@ -37,11 +38,14 @@ from constructicon.substrate.executors.codex_host import WRITE_GRANTS
 from constructicon.substrate.git.process import GitProcess
 from tests.api import test_plan_manifest_application as application_tests
 from tests.api.test_maintenance_entry import change_authorization_law
+from tests.api.test_maintenance_report import layout as layout
 from tests.executorworld import launch_identity
 from tests.substrate.test_channel_reply_oracle import BASE, CANDIDATE
 from tests.substrate.test_codex_adapter import portable_binding as portable_binding
 
 concrete_application = application_tests.concrete_application
+# Captured at import, before any world substitutes its guarded remover.
+_RMTREE = shutil.rmtree
 CHANNEL = pytest.mark.parametrize("concrete_application", ["channel-stored-reply"],
                                   indirect=True)
 # This branch's base (b0d2c0b) application revision: an old pin, never current.
@@ -145,6 +149,95 @@ async def test_hand_written_candidate_is_accepted_published_and_replayed(
     assert observed["meaning"] == "historical-application-acceptance"
     assert observed["purpose"] == "channel-stored-reply"
     assert "repository" not in json.dumps(observed)
+
+
+@CHANNEL
+@pytest.mark.parametrize("candidate", ["accepted", "noop", "extra-edit"])
+async def test_the_shipped_packet_reads_a_real_channel_run_from_a_private_copy(
+    concrete_application, layout, capsys, monkeypatch, candidate,
+):
+    """A real entry run, its durable files laid out as the report reads them."""
+    import sqlite3
+
+    from constructicon.api import maintenance_report
+    from tests.api.test_maintenance_report import assert_closed_refusal, tree
+
+    resources, executor, _system, control, _launch = concrete_application
+    await control.shutdown()
+    if candidate != "accepted":
+        executor.executor.candidate = (BASE if candidate == "noop" else CANDIDATE.replace(
+            b"if max_batch <= 0:", b"if max_batch < 0:"))
+    auth = authorize(resources, executor, CHANNEL_STORED_REPLY)
+    result = await entry.run_maintenance(resources=resources, executor=executor,
+        executor_descriptor=executor.descriptor("executor"), authorization=auth)
+    assert (result is not None) is (candidate == "accepted")
+    root, out = layout
+    root.mkdir(mode=0o700)
+    source = sqlite3.connect(resources.journal._db_path)
+    copy = sqlite3.connect(root / "maintenance.sqlite")
+    try:
+        source.backup(copy)
+    finally:
+        copy.close()
+        source.close()
+    # The L0 writer double keeps no adapter attempt record; the packet says missing.
+    assert not Path(auth.attempt_record).exists()
+    published = Path(auth.journal).parent / "maintenance-result.json"
+    if published.exists():
+        shutil.copyfile(published, root / "maintenance-result.json")
+    (root / "application-run.json").write_text(json.dumps(
+        {"accepted": candidate == "accepted", "run_id": auth.run_id}), encoding="utf-8")
+    before = tree(root)
+    # The world's guarded remover accepts only its own root; the report's own
+    # scratch and this layout are elsewhere, so restore the genuine primitive.
+    monkeypatch.setattr(shutil, "rmtree", _RMTREE)
+    code = maintenance_report.main(["--root", str(root), "--out", str(out),
+        "--command-report", str(root / "application-run.json"), "--run-id", auth.run_id,
+        "--authorization-id", auth.authorization_id])
+    text = capsys.readouterr().out
+    packet = json.loads(text)
+    assert code == 0 and packet["complete"] is True, packet
+    assert len(text.encode()) <= maintenance_report.MAX_PACKET_BYTES
+    assert packet["purpose"] == "channel-stored-reply"
+    assert packet["leases"]["summary"] == "recorded-closed"
+    # The copy is not the request's authority: the target is not guessed.
+    assert packet["target"]["reason"] == "request-names-another-repository"
+    assert tree(root) == before
+    for marker in (str(root), str(Path(resources.authority.repository_id))):
+        assert marker not in text
+    if candidate == "accepted":
+        assert packet["status"] == "succeeded"
+        assert packet["outcome"] == "succeeded-with-acceptance-record"
+        assert packet["attestation"]["observation"] == "recorded"
+        assert packet["attestation"]["ok"] is True
+        assert packet["result"] == {"observation": "historical-acceptance-observed",
+            "candidate_commit": str(result.candidate.commit),
+            "base_sha256": result.base_sha256, "candidate_sha256": result.candidate_sha256}
+        return
+    assert packet["status"] == "failed" and packet["outcome"] == "refused"
+    assert packet["result"] == {"observation": "missing"}
+    assert packet["refusal"]["node"] == ("writer" if candidate == "noop" else "checker")
+    # A crossed copy: this task's run beside a same-run plan-manifest stored result.
+    from constructicon.core.envelope import GitRef
+    from constructicon.core.gates import MergeEvaluation
+    from constructicon.core.maintenance import PlanManifestResult
+
+    crossed = PlanManifestResult(run_id=auth.run_id,
+        candidate=GitRef(repository=resources.request.repository,
+                         commit=resources.request.base_commit),
+        evaluation=MergeEvaluation(subject=None, attestation_id=None, checks=()),
+        input_sha256="a" * 64, render_sha256="b" * 64)
+    (root / "maintenance-result.json").write_text(json.dumps({"schema_version": 1,
+        "meaning": "historical-application-acceptance",
+        "authorization_digest": "sha256:" + "c" * 64,
+        "result": crossed.model_dump(mode="json")}), encoding="utf-8")
+    code = maintenance_report.main(["--root", str(root), "--out", str(out.parent / "again"),
+        "--command-report", str(root / "application-run.json"), "--run-id", auth.run_id,
+        "--authorization-id", auth.authorization_id])
+    text = capsys.readouterr().out
+    refused = json.loads(text)
+    assert code == 1 and refused["diagnostic_stage"] == "task"
+    assert_closed_refusal(refused, text, "diagnostic")
 
 
 @CHANNEL

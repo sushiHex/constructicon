@@ -87,6 +87,14 @@ call or spending.
 CHANNEL_DIAGNOSTIC_SHA256=f202f8b9ea48baedd1ca66f8bdd9e9ed4258dbfe066801f9a35fed1a620ea2ba
 ```
 
+- **Result packet.** `api/maintenance_report.py` (#394) reads the run's retained
+  graph and selects the matching row of the diagnostic's table. That row
+  provides the request model, the checker and lease scopes, and the result
+  fields. A channel packet reports `base_sha256` and `candidate_sha256` in
+  place of the plan task's `input_sha256` and `render_sha256`. Every packet now
+  names its `purpose`. A stored result naming another task than the journal is
+  refused, and a diagnostic `task` refusal is passed through by name.
+
 ## Evidence
 
 Credential-free and fake-first. The positive candidate is a hand-written
