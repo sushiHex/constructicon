@@ -35,7 +35,15 @@ transport failure; one derived actionlint archive name binds restore, download,
 checksum, save and extraction. Codex cache identity reuses its existing pin
 emitter so the pin-bump tool does not leave stale cache keys.
 
-The first delivery run at `8e66add` exposed insufficient margin on foundation:
+The first delivery run at `8e66add` also exposed three introduced policy-guard
+failures: existing tests
+forbade every advisory step, including the new cache transport exception. The
+shared test guard now permits only literal step-level opt-outs on the six named,
+commit-pinned archive cache actions in their acquiring jobs, with no run body.
+Injected job, proof, aggregate, non-cache, mispinned and expression-valued
+exceptions still refuse; acquisition, integrity and required outcomes stay strict.
+
+That run exposed insufficient margin on foundation:
 GitHub [affirmatively reported the thirty-minute job limit](https://github.com/sushiHex/constructicon/actions/runs/42475032733/job/128714433888),
 leaving the final generated Claude READ rehearsal only 2m10s. The same step had
 taken 3m06s in the preceding successful run. Its two failure diagnostics coincided

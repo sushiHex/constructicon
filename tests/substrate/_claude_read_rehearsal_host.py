@@ -3,7 +3,7 @@
 Only the vendor archive and private drift observer are test doubles. The
 artifact helpers, locked controller closure, D2 probe, store and READ commands
 are real. Fixture git commits explicitly pin the fake archive; they make no
-claim about reviewed main or the private host. Run only after other foundation
+claim about reviewed main or the private host. Run only after other selected-lane
 consumers have finished, as root with RUNNER_ENVIRONMENT=github-hosted.
 """
 from __future__ import annotations
@@ -129,7 +129,7 @@ def _sync_directory(path: Path) -> None:
 def protect_opt() -> None:
     """The hosted image makes /opt 0777; satisfy the unchanged root-custody law.
 
-    This changes only the disposable runner after other foundation consumers
+    This changes only the disposable runner after other selected-lane consumers
     finish. Save the exact original mode before tightening, and restore it only
     after every rehearsal installation beneath /opt has been removed.
     """

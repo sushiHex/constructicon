@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from tests import native_account
+from tests.ci_cache_policy import assert_only_archive_cache_is_advisory
 from tests.git_bash import git_bash
 from tests.substrate._evidence_secrecy import (
     BRIDGE_N4,
@@ -326,7 +327,8 @@ def test_gate_always_checks_the_selected_proof_set_without_bypass():
     assert 'python3 "$RUNNER_TEMP/m8-ci-scope.py" classify' in text
     assert "python3 scripts/ci/m8_ci_scope.py classify" not in text
     assert "fetch-depth: 0" in text
-    for forbidden in ("continue-on-error", "paths-ignore:", "pull_request_target", "secrets."):
+    assert_only_archive_cache_is_advisory(text)
+    for forbidden in ("paths-ignore:", "pull_request_target", "secrets."):
         assert forbidden not in text
 
 

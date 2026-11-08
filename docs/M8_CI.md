@@ -121,10 +121,10 @@ The stable `containment` check aggregates four independent hosted-runner lanes:
 
 | Lane | Proofs |
 | --- | --- |
-| `foundation` | N3a store custody; N3b egress; N3c persistence, refresh and non-widening over that shared store; the N4-preparation proxy bridge, including the pinned binary's telemetry flush to a controlled peer; the zone's sealed catalog and environment file on production's own launch path; launcher, workspace, capture, gates and duplex; their mutation inventories |
+| `foundation` | N3a store custody; N3b egress; N3c persistence, refresh and non-widening over that shared store; the N4-preparation proxy bridge, including the pinned binary's telemetry flush to a controlled peer; the zone's sealed catalog and environment file on production's own launch path; non-sudo launcher, workspace, acquisition, capture/recovery and duplex checks |
 | `lifecycle` | N3c protected-root maintenance and packaged qualification; native startup, test-only provider placement and journal recovery; their mutation inventories |
 | `combined` | Combined startup/mediation and Codex adapter; combined and N2 mutation inventories |
-| `mediation` | Credential-free native mediation probes and their mutation inventory; the generated credential-free Claude READ rehearsal |
+| `mediation` | Credential-free native mediation probes and their mutation inventory; common-runtime capture/gate lifecycles; native containment/capture/gate/duplex regression inventories; the generated credential-free Claude READ rehearsal |
 
 Every lane provisions its own host, immutable runtime, service user and evidence
 directory. Tests and mutants remain serial inside a lane; each mutant still

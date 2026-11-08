@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.ci_cache_policy import assert_only_archive_cache_is_advisory
 from tests.test_m8_operator_commands import _bash
 
 WORKFLOWS = Path(__file__).parents[1] / ".github/workflows"
@@ -39,8 +40,8 @@ def test_portable_aggregate_covers_every_other_job_and_always_runs() -> None:
         assert f"          {variable}: ${{{{ needs.{job}.result }}}}" in gate
     assert "      fail-fast: false\n" in workflow
     assert "          SCOPE: ${{ needs.classify.outputs.scope }}" in gate
-    # No selected job or step may quietly become optional under the aggregate.
-    assert "continue-on-error" not in workflow
+    # Required outcomes stay strict; only identified archive cache transport is advisory.
+    assert_only_archive_cache_is_advisory(workflow)
     assert "name:" not in gate.split("    steps:\n", 1)[0]
     assert re.findall(r"^    if: (.+)$", workflow, re.M) == [
         "needs.classify.outputs.scope == 'docs'",
@@ -140,7 +141,7 @@ def test_required_contexts_are_unconditional_pr_checks_without_path_filters() ->
         workflow = (WORKFLOWS / filename).read_text(encoding="utf-8")
         assert "  pull_request:\n" in workflow
         assert "paths:" not in workflow and "paths-ignore:" not in workflow
-        assert "continue-on-error" not in workflow
+        assert_only_archive_cache_is_advisory(workflow)
         assert workflow.count(f"\n  {context}:\n") == 1
     qualification = (WORKFLOWS / "m8-runner-qualification.yml").read_text(encoding="utf-8")
     assert re.findall(r"^  ([\w-]+):$", qualification.split("\njobs:\n", 1)[1], re.M) == [
