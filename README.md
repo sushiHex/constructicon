@@ -17,11 +17,15 @@ same typed control plane.
 
 > Authored intent may be ergonomic. Executed reality must be explicit.
 
-**Developer preview.** M1 through M7.1 are complete. M8 has landed executor
-contracts, networkless Linux containment, safe WRITE capture, contained gates,
-and the Codex subscription adapter with bounded historical READ, WRITE and
-maintenance-application acceptance. Those results do not enable a generally
-available production provider; Claude Code and Pi remain independently gated. See
+**Developer preview.** M1 through M7.1 are complete, and M8 (live executors)
+reached its bounded closure: executor contracts, networkless Linux containment,
+contained WRITE capture and gates, and three adapters with recorded evidence.
+Codex and Claude Code have accepted historical subscription READ and WRITE
+evidence; Pi has a qualified bounded local READ profile. M9 (self-improvement
+through evaluated candidates) delivered its bounded first phase: an installed
+fixed selector trial, run live once through owner approval, promotion and
+rollback.
+None of this enables a generally available production provider. See
 [current status](#what-is-implemented) and
 [open work](https://github.com/sushiHex/constructicon/issues).
 
@@ -113,8 +117,10 @@ belong in the adapter; the graph language and walker do not grow provider
 switches. An adapter is interchangeable only where it can enforce the admitted
 capabilities.
 
-Subscription reuse has bounded historical Codex evidence, **not general
-production availability**. Accepted [ADR 0021](docs/adr/0021-subscription-executors-bind-operator-stores.md)
+Subscription reuse has bounded, revision-specific historical evidence for Codex
+and Claude Code, **not general production availability**. Pi's evidence is a
+pinned local model on a disposable hosted Linux runner, not a vendor account.
+Accepted [ADR 0021](docs/adr/0021-subscription-executors-bind-operator-stores.md)
 selects an operator-bound subscription route for the explicit v3 profile;
 gateway v1 under ADR 0018 is unchanged and unselected. The
 [authentication record](docs/designs/EXECUTOR_AUTHENTICATION.md) holds the
@@ -311,7 +317,8 @@ argument.
 Constructicon `0.1.0` is a developer preview, not a hosted coding-agent service.
 The execution and authority laws are governed by the
 [invariants](docs/INVARIANTS.md) and accepted [ADRs](docs/adr/README.md).
-Milestones M1 through M7.1 are complete:
+Milestones M1 through M7.1 are complete, and M8 and M9 each closed a bounded
+scope:
 
 | Milestone | Capability |
 | --- | --- |
@@ -323,9 +330,14 @@ Milestones M1 through M7.1 are complete:
 | M6 | Durable authenticated command law, race-safe hosting, revision-pinned reads, MCP v2 adapter, and counterfactual replay |
 | M7 | Durable channels, human advice and approval, restart-safe waiting, and deterministic panels |
 | M7.1 | Explicit panel membership, ordered mapped fan-in, exact endpoint diagnostics, and strengthened counterfactual admission |
+| M8 (bounded closure) | Executor policy and launch identity, networkless Linux containment, contained WRITE capture and gates, and Codex, Claude Code and Pi adapters with bounded evidence |
+| M9 (bounded first phase) | A fixed self-improvement trial, run live once: catalog selection, scripted exam, owner approval, journal proof, promotion and rollback |
 
-**M8 is in progress.** Implemented work includes complete executor grant policy,
-content-bound launch identity, record-before-materialization leases, a
+### M8: live executors
+
+M8 closed under the bounded acceptance recorded in
+[#42](https://github.com/sushiHex/constructicon/issues/42). It includes complete
+executor grant policy, content-bound launch identity, record-before-materialization leases, a
 networkless Linux launcher, owned READ/WRITE workspaces, and process cleanup
 that survives controller death. Failure of the trusted reaper itself is outside
 that recovery guarantee. The physical boundary is tested on GitHub Actions with
@@ -361,15 +373,56 @@ vectors were recovered into an ordinary contribution in [PR #250](https://github
 The [recovery record](docs/plans/handoffs/M8-implementation-record.md#q13-contribution-recovered-and-published-for-review-refs-245-186)
 separates the historical exam from current-source regression evidence.
 
+Claude Code is the independent second subscription adapter
+([#40](https://github.com/sushiHex/constructicon/issues/40)). Its fixed
+pre-dispatch startup predicate, admitted READ composition and contained WRITE
+callback, capture and gate path were qualified, followed by one authorized live
+subscription READ and one live WRITE at recorded revisions.
+
+Pi has a qualified bounded local READ profile: pinned Pi with a small local
+model on a disposable hosted Linux runner, one correlated READ with an
+unchanged workspace and joined teardown. That smoke does not establish live Pi
+through ControlPlane. The same workspace component runs unchanged through
+ControlPlane and RunHost under scripted Claude Code and Pi bindings; Codex's no-workspace
+profile is refused before dispatch. The composed contained WRITE proof installs
+the attested merge commit, reconciles an interrupted install without a second
+write, and keeps malformed READ output from checkpointing. See the
+[bounded integration acceptance](docs/plans/handoffs/M8-implementation-record.md#n7--bounded-integration-acceptance).
+
 These results do not auto-enable a provider, supply general vendor conformance,
 or qualify another boot: fresh continuity and qualification remain required.
-Claude Code's startup/tool restrictions and Pi's lifecycle require independent
-proofs; M8 is not complete. See the [implementation record](docs/plans/handoffs/M8-implementation-record.md)
+The gateway route ([#39](https://github.com/sushiHex/constructicon/issues/39))
+and OpenRouter ([#47](https://github.com/sushiHex/constructicon/issues/47))
+remain unselected. See the [implementation record](docs/plans/handoffs/M8-implementation-record.md)
 for current evidence and the [authentication assessment](docs/designs/EXECUTOR_AUTHENTICATION.md)
 for the route decision and its historical investigation.
 
-**M9 remains planned:** self-improvement through evaluated immutable candidates
-and explicit promotion, without letting the learner define its own exam.
+### M9: self-improvement (bounded first phase)
+
+M9 learns through evaluated immutable candidates and explicit promotion,
+without letting the learner define its own exam
+([design](docs/designs/SELF_IMPROVEMENT.md),
+[plan](docs/plans/milestones/M9-prompt-context.md),
+[#45](https://github.com/sushiHex/constructicon/issues/45)).
+
+The first phase is deliberately narrow. The installed
+[fixed selector trial](docs/plans/handoffs/M9-model-selector-guide.md)
+(`python -m constructicon.api.m9_trial`) asks a Codex READ to choose one entry
+from a finite reviewed instruction catalog. A fixed scripted diagnostic exam
+then evaluates the choice, the owner approves or rejects the exact candidate
+edge through the durable approval channel, and the issuer mints journal proof
+before any promotion. Promotion, its replay and rollback act only on that
+exact edge. The trial survives operator process restarts, and a credential-free
+rehearsal runs it with the shipped fake executor.
+
+The bounded live trial completed end to end, closing #45: an owner-approved
+Codex READ selected `cite-evidence`, the owner approved the exact candidate,
+proof was issued, and promotion and rollback each ran with a replay before an
+independent read confirmed the stable pointer back at the baseline
+([live record](docs/plans/handoffs/M9-live-selector-record.md)).
+This proves the lifecycle, not improved answers: the exam measures scripted
+behavior, not prompt quality on real model answers, and free-form prompt bytes
+remain deferred.
 
 ## When Constructicon fits
 
@@ -435,6 +488,8 @@ plus Pydantic. CI enforces both rules.
   recovered records, and implementation handoffs
 - [Self-improvement design](docs/designs/SELF_IMPROVEMENT.md): learning as
   candidates, never self-authorized mutation
+- [M9 selector trial guide](docs/plans/handoffs/M9-model-selector-guide.md):
+  the installed fixed trial, its stages, and its live boundary
 - [Architecture decisions](docs/adr/): why the system is shaped this way
 
 ## Contributing
