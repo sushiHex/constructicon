@@ -74,6 +74,7 @@ the eventual code differs.
 
 | Record | Purpose |
 | --- | --- |
+| [Stored-reply operator package](handoffs/maintenance-channel-reply-session.md) | Source-bound closed-step template and producer-to-consumer offline composition; unresolved declarations refuse a normal build, original installers retain their shell settings, and no host operation or model attempt is authorized |
 | [Second fixed maintenance task delivery](handoffs/maintenance-channel-reply-delivery.md) | Credential-free implementation of the closed `channel-stored-reply` task: stdlib whole-module exam, unchanged plan-manifest wire (golden), task-crossing, revision and redispatch boundaries, differential calibration; the target stays unrefactored, and no installation or live run is authorized |
 | [Maintenance rehearsal launcher and packet](handoffs/maintenance-launcher-record.md) | Test-side credential-free maintenance rehearsal outside pytest (synthetic base, fake peer/store, portable launcher) and a shipped bounded read-only result packet; current journal schema only, no live attempt |
 | [Second fixed maintenance task decision](handoffs/maintenance-channel-reply-task.md) | Proposed closed `channel-stored-reply` task beside the unchanged plan-manifest task: stdlib whole-module exact-extraction exam, identity/installation consequences and exception boundaries; no implementation, installation or live run authorized |

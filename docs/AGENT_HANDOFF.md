@@ -16,6 +16,18 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Stored-reply operator composition
+
+The [operator package](plans/handoffs/maintenance-channel-reply-session.md)
+composes the existing compiler, frozen N4 lane boundaries and T5 transport with
+the new task's source/preview checks and historical inspector. Credential-free
+producer tests cover preparation, a task-specific preview, joined accepting and
+no-op entry teardown, inherited withdrawal receipt and retained authority bytes.
+They substitute the existing platform custody/process seams and establish no
+host qualification, physical cleanup or spending authority. Unresolved inputs
+refuse an ordinary build; template output is never a host-ready package. The
+original installer blocks keep their plain Bash context and separate receipts.
+
 ## Second fixed maintenance task
 
 The [delivery record](plans/handoffs/maintenance-channel-reply-delivery.md) adds
