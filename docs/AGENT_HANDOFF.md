@@ -35,6 +35,15 @@ transport failure; one derived actionlint archive name binds restore, download,
 checksum, save and extraction. Codex cache identity reuses its existing pin
 emitter so the pin-bump tool does not leave stale cache keys.
 
+The first delivery run at `8e66add` exposed insufficient margin on foundation:
+GitHub [affirmatively reported the thirty-minute job limit](https://github.com/sushiHex/constructicon/actions/runs/42475032733/job/128714433888),
+leaving the final generated Claude READ rehearsal only 2m10s. The same step had
+taken 3m06s in the preceding successful run. Its two failure diagnostics coincided
+with cancellation and fixture teardown; exact signal ordering was not retained,
+so these do not independently prove a product regression. The unchanged,
+self-contained rehearsal now follows mediation's other consumers. No invocation
+or job deadline, prerequisite, proof or physical lane was removed or relaxed.
+
 This does not make cold or evicted caches network-independent, warm the default
 branch from a pull request, or cover uv binary acquisition. It performs no host
 installation or qualification. The changed retained workflow/script bytes alter

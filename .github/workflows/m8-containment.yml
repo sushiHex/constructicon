@@ -832,7 +832,8 @@ jobs:
             PYTEST_ADDOPTS=-pno:cacheprovider \
             "$PWD/.venv/bin/python" scripts/check_m8_duplex_mutations.py
       - name: Rehearse the generated Claude READ chain
-        if: matrix.lane == 'foundation'
+        # Its fixture owns installation/cleanup; keep it after other lane consumers.
+        if: matrix.lane == 'mediation'
         shell: bash
         run: |
           set -euo pipefail

@@ -124,7 +124,7 @@ The stable `containment` check aggregates four independent hosted-runner lanes:
 | `foundation` | N3a store custody; N3b egress; N3c persistence, refresh and non-widening over that shared store; the N4-preparation proxy bridge, including the pinned binary's telemetry flush to a controlled peer; the zone's sealed catalog and environment file on production's own launch path; launcher, workspace, capture, gates and duplex; their mutation inventories |
 | `lifecycle` | N3c protected-root maintenance and packaged qualification; native startup, test-only provider placement and journal recovery; their mutation inventories |
 | `combined` | Combined startup/mediation and Codex adapter; combined and N2 mutation inventories |
-| `mediation` | Credential-free native mediation probes and their mutation inventory |
+| `mediation` | Credential-free native mediation probes and their mutation inventory; the generated credential-free Claude READ rehearsal |
 
 Every lane provisions its own host, immutable runtime, service user and evidence
 directory. Tests and mutants remain serial inside a lane; each mutant still
@@ -132,6 +132,12 @@ gets a fresh process. No deadline, test file or mutation inventory is removed.
 The workflow inventory test pins that routing. Each pytest invocation reports
 its ten slowest phases, and each mutant reports elapsed time, including failure
 and timeout outcomes. Only assertion failures count as killed mutants.
+
+The generated Claude READ rehearsal runs after mediation's other consumers. It
+provisions and cleans up its own D2, controller, Claude, store, checker and drift
+fixtures; it requires the common hosted-runner setup rather than foundation's
+store or N4 fixtures. Moving this existing step off foundation redistributes the
+same proof inventory within the unchanged four lanes and thirty-minute ceiling.
 
 The protected-root N3c suite creates and removes per-test store roots; synthetic
 launch sets belong to those same roots.

@@ -251,7 +251,7 @@ def provision_controller(commit: str) -> None:
 
 
 def retire_prior_fake() -> None:
-    """The earlier foundation fixture is finished; refuse any unfamiliar install."""
+    """Any earlier lane consumers are finished; refuse any unfamiliar install."""
     if not os.path.lexists(INSTALLED):
         return
     require(INSTALLED.is_dir() and not INSTALLED.is_symlink()
