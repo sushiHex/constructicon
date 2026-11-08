@@ -22,9 +22,9 @@ reached its bounded closure: executor contracts, networkless Linux containment,
 contained WRITE capture and gates, and three adapters with recorded evidence.
 Codex and Claude Code have accepted historical subscription READ and WRITE
 evidence; Pi has a qualified bounded local READ profile. M9 (self-improvement
-through evaluated candidates) is in progress: its fixed selector trial is
-installed, and one bounded live trial has completed through owner approval,
-promotion and rollback.
+through evaluated candidates) delivered its bounded first phase: an installed
+fixed selector trial, run live once through owner approval, promotion and
+rollback.
 None of this enables a generally available production provider. See
 [current status](#what-is-implemented) and
 [open work](https://github.com/sushiHex/constructicon/issues).
@@ -317,8 +317,8 @@ argument.
 Constructicon `0.1.0` is a developer preview, not a hosted coding-agent service.
 The execution and authority laws are governed by the
 [invariants](docs/INVARIANTS.md) and accepted [ADRs](docs/adr/README.md).
-Milestones M1 through M7.1 are complete, M8 reached its bounded closure, and
-M9 is in progress:
+Milestones M1 through M7.1 are complete, and M8 and M9 each closed a bounded
+scope:
 
 | Milestone | Capability |
 | --- | --- |
@@ -331,7 +331,7 @@ M9 is in progress:
 | M7 | Durable channels, human advice and approval, restart-safe waiting, and deterministic panels |
 | M7.1 | Explicit panel membership, ordered mapped fan-in, exact endpoint diagnostics, and strengthened counterfactual admission |
 | M8 (bounded closure) | Executor policy and launch identity, networkless Linux containment, contained WRITE capture and gates, and Codex, Claude Code and Pi adapters with bounded evidence |
-| M9 (in progress) | A fixed self-improvement trial: catalog selection, sealed exam, owner approval, journal proof, promotion and rollback |
+| M9 (bounded first phase) | A fixed self-improvement trial, run live once: catalog selection, scripted exam, owner approval, journal proof, promotion and rollback |
 
 ### M8: live executors
 
@@ -397,7 +397,7 @@ remain unselected. See the [implementation record](docs/plans/handoffs/M8-implem
 for current evidence and the [authentication assessment](docs/designs/EXECUTOR_AUTHENTICATION.md)
 for the route decision and its historical investigation.
 
-### M9: self-improvement (in progress)
+### M9: self-improvement (bounded first phase)
 
 M9 learns through evaluated immutable candidates and explicit promotion,
 without letting the learner define its own exam
@@ -415,11 +415,11 @@ before any promotion. Promotion, its replay and rollback act only on that
 exact edge. The trial survives operator process restarts, and a credential-free
 rehearsal runs it with the shipped fake executor.
 
-The first bounded live trial has completed end to end: an owner-approved
+The bounded live trial completed end to end, closing #45: an owner-approved
 Codex READ selected `cite-evidence`, the owner approved the exact candidate,
 proof was issued, and promotion and rollback each ran with a replay before an
 independent read confirmed the stable pointer back at the baseline
-([record](https://github.com/sushiHex/constructicon/issues/45#issuecomment-6718199574)).
+([live record](docs/plans/handoffs/M9-live-selector-record.md)).
 This proves the lifecycle, not improved answers: the exam measures scripted
 behavior, not prompt quality on real model answers, and free-form prompt bytes
 remain deferred.
