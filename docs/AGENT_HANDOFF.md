@@ -16,6 +16,24 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Maintenance rehearsal outside pytest and its packet
+
+The [delivery record](plans/handoffs/maintenance-launcher-record.md) covers a
+test-side `tests.e2e.maintenance_rehearsal` command that runs the existing
+credential-free maintenance world (fake native peer and operator store,
+portable launcher, synthetic base with the vector file stripped) through the
+real entry, one fresh process per step, with same-key replay and resume after
+real process death. It also covers a shipped
+`constructicon.api.maintenance_report` that composes capture, the read-only
+diagnostic, `inspect_result` and journal reads on its own disposable copy into
+one bounded packet. It establishes no physical containment, vendor observation
+or live attempt. The report never opens the original store or constructs a
+`GitAuthority`. It reads only journal schema 11 and refuses C490's schema 10 by
+name. It refuses at `capture` on Windows unless the custody predicates are
+substituted, as the rehearsal does. On a Windows CRLF checkout,
+`maintenance_application_revision()` differs from the LF-blob value; it is
+equal after EOL normalization.
+
 ## Repeatable software-change review
 
 The [delivery record](plans/handoffs/productization-workflow-record.md) covers a

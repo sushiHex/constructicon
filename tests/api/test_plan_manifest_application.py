@@ -442,7 +442,7 @@ class PortableProcessLauncher:
 
     def __init__(self, root, git):
         self.root, self.git = root, git
-        root.mkdir()
+        root.mkdir(exist_ok=True)  # A reopened rehearsal world reuses its scratch.
         self.calls = []
 
     async def run(self, command, **kwargs):
@@ -559,27 +559,57 @@ class PortableVectorWriter(Writer):
 
 @pytest.fixture
 async def concrete_application(tmp_path, monkeypatch, request, portable_acquisition_namespace):
-    from constructicon.substrate.gates import contained as gate_module
-
-    if getattr(request, "param", None) == "committed-tree":
+    committed_tree = getattr(request, "param", None) == "committed-tree"
+    if committed_tree:
         # Seed the callback's fake store before this fixture substitutes its
         # narrowly scoped guarded-removal primitive below.
         request.getfixturevalue("portable_binding")
+    resources, launch = await concrete_resources(tmp_path, monkeypatch,
+                                                 committed_tree=committed_tree)
+    executor = FakeExecutorProvider()
+    executor.executor = PortableVectorWriter()
+    executor._identity = launch_identity(executor.executor.profile)
+    system = await maintenance_system(resources, executor_id="executor", executor=executor,
+        executor_descriptor=executor.descriptor("executor"), writer_grants=WRITE_GRANTS)
+    control = ControlPlane(system=system, store=resources.journal)
+    await control.startup()
+    try:
+        yield resources, executor, system, control, launch
+    finally:
+        await control.shutdown()
+
+
+async def concrete_resources(tmp_path, monkeypatch, *, committed_tree,
+                             journal_name="application.sqlite"):
+    """The fixture's real Git/journal/gate world, also reopened by the rehearsal.
+
+    A second call over the same ``tmp_path`` reuses the existing authority and
+    its base rather than minting another; ``monkeypatch`` may be a programmatic
+    ``pytest.MonkeyPatch`` outside pytest. No control plane is started here.
+    """
+    from constructicon.substrate.gates import contained as gate_module
+
     source = (Path(__file__).resolve().parents[2] / "scripts/regen_plan_manifest.py").read_bytes()
-    repo = seed_authority(tmp_path, {"seed.txt": "trusted fixture seed\n"})
+    fresh = not (tmp_path / "authority.git").exists()
+    repo = (seed_authority(tmp_path, {"seed.txt": "trusted fixture seed\n"}) if fresh
+            else tmp_path / "authority.git")
     authority = GitAuthority(repo.resolve(), tmp_path / "authority-workspaces")
-    blob = authority._run("hash-object", "-w", "--stdin", input_text=source.decode()).stdout.strip()
-    scripts = authority._run("mktree",
-        input_text=f"100644 blob {blob}\tregen_plan_manifest.py\n").stdout.strip()
-    tree = authority._run("mktree", input_text=f"040000 tree {scripts}\tscripts\n").stdout.strip()
-    base = authority._run(
-        "commit-tree", tree, input_text="trusted maintenance base\n",
-    ).stdout.strip()
-    authority._run("update-ref", "refs/heads/main", base)
-    if getattr(request, "param", None) == "committed-tree":
+    if fresh:
+        blob = authority._run("hash-object", "-w", "--stdin",
+                              input_text=source.decode()).stdout.strip()
+        scripts = authority._run("mktree",
+            input_text=f"100644 blob {blob}\tregen_plan_manifest.py\n").stdout.strip()
+        tree = authority._run("mktree",
+                              input_text=f"040000 tree {scripts}\tscripts\n").stdout.strip()
+        base = authority._run(
+            "commit-tree", tree, input_text="trusted maintenance base\n",
+        ).stdout.strip()
+        authority._run("update-ref", "refs/heads/main", base)
+    if committed_tree:
         from tests.maintenance_task_world import committed_tree_base
 
-        base = await committed_tree_base(authority)
+        if fresh:
+            await committed_tree_base(authority)
         attributes = tmp_path / "ambient.attributes"
         attributes.write_text("* text eol=crlf\n", encoding="ascii")
         for name, value in {
@@ -588,7 +618,7 @@ async def concrete_application(tmp_path, monkeypatch, request, portable_acquisit
             "GIT_CONFIG_VALUE_1": str(attributes),
         }.items():
             monkeypatch.setenv(name, value)
-    journal = SqliteJournal(tmp_path / "application.sqlite")
+    journal = SqliteJournal(tmp_path / journal_name)
     launch = PortableProcessLauncher(tmp_path / "scratch", authority.git_executable)
     locks = {}
 
@@ -648,17 +678,7 @@ async def concrete_application(tmp_path, monkeypatch, request, portable_acquisit
         base_commit=base, target_sha256=hashlib.sha256(source).hexdigest(),
         check_set_hash=gate.check_set_hash)
     resources = MaintenanceResources(journal, authority, workspace, gate, request, source)
-    executor = FakeExecutorProvider()
-    executor.executor = PortableVectorWriter()
-    executor._identity = launch_identity(executor.executor.profile)
-    system = await maintenance_system(resources, executor_id="executor", executor=executor,
-        executor_descriptor=executor.descriptor("executor"), writer_grants=WRITE_GRANTS)
-    control = ControlPlane(system=system, store=journal)
-    await control.startup()
-    try:
-        yield resources, executor, system, control, launch
-    finally:
-        await control.shutdown()
+    return resources, launch
 
 
 @pytest.fixture

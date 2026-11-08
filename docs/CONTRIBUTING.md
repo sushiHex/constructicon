@@ -99,11 +99,79 @@ Both tests passing includes the deliberate application refusal:
   acceptance result, and closes its leases. The target ref stays at the base
   in **both** cases: application acceptance is not merge or installation.
 
-The entrypoint is an executable test, not a general contribution launcher or
-an exported evidence-report command. Its native peer and operator store are
-fake; its portable process launcher substitutes the OS isolation primitives.
-Real Git, capture, gate code and journal evidence do not make that substitution
-physical containment or a vendor/host observation. The separate
+### Run it outside pytest and read the packet
+
+The same world also runs as a test-side command (never shipped), one fresh
+process per step. Use a short private state path: on Windows the full-tree
+checkout exceeds the path limit under a long one, and on POSIX capture refuses
+a root that is not `0700` or whose ancestors others can write (so not directly
+under `/tmp`).
+
+```bash
+mkdir -m 700 "$HOME/mr"   # private parent; must not already exist
+STATE="$HOME/mr/state"    # created by run; use a fresh one per attempt
+PYTHONIOENCODING=utf-8 uv run --no-active python -m tests.e2e.maintenance_rehearsal run \
+  --state "$STATE" --change --key first </dev/null
+PYTHONIOENCODING=utf-8 uv run --no-active python -m tests.e2e.maintenance_rehearsal report \
+  --state "$STATE" --out "$HOME/mr/packet-1" </dev/null
+```
+
+`run` prints `{"accepted":true,"run_id":"run-…","this_process":{…}}` (exit 0;
+`--noop` exits 2 with `accepted:false`) and writes the entry's own command
+output, `{"accepted":…,"run_id":…}`, to `application-run.json`. Repeating `run`
+with the same `--key` and state in a new process reopens that world and
+replays the one durable run: `this_process` reports zero `turn/start` calls and
+zero task workers, and the attempt record is unchanged. A different key in the
+same state is refused. If a process dies mid-run, the same command resumes it
+from its journal; the writer checkpoint is not dispatched again.
+
+The rehearsal base is synthetic: the committed `HEAD` tree with
+`tests/vectors/plan_manifest.json` stripped (`import_fixture_tree`). Current
+main already contains that file and `prepare_source` refuses such a base, so a
+rehearsal acceptance is not a new contribution against current main.
+
+`report` runs the shipped `python -m constructicon.api.maintenance_report
+--root … --out … --command-report … --run-id … --authorization-id …` in-process,
+substituting on Windows only the capture custody/ctime predicates that the
+journal tests substitute. The shipped command itself refuses at `capture` on
+Windows. It prints one JSON object of at most 8 KiB holding fixed identifiers,
+digests and enums, never a host path, repository path or subprocess text:
+
+- `outcome`: `contribution-accepted`, `refused`, `incomplete`,
+  `succeeded-without-stored-acceptance` or `unknown`. `refusal` carries the
+  diagnostic's producer-mapped `NodeFailed` cause, for example
+  `{"node":"writer","cause":"capture-unchanged"}` for the no-op.
+- `diagnostic`: the existing read-only diagnostic's selected facts (journal
+  nodes and checks, attempt record, command, result).
+- `result`: candidate commit and input/render digests from the stored
+  acceptance, or `missing`.
+- `metering` / `capability_accounting`: the schema-3 run-result projection's
+  coverage, groups and counts as the journal reports them. Estimate and charge
+  remain `unknown`; unmeasured is never zero cost.
+- `leases`: journal-recorded states, labelled
+  `journal-recorded-states-not-physical-quiescence`; `recorded-closed` is not a
+  claim that the processes or files are gone.
+- `attestation`: the run's journal attestation id, `ok` and
+  `created_by_this_run`, or `missing`.
+- `target`: one fixed, hook-free, non-fetching `git rev-parse` of the target
+  ref compared with the request's base. `observed-at-base` is a current read,
+  not proof that cleanup ran.
+
+Any refusal prints `{"complete":false,"stage":…,"error":"maintenance report
+refused or incomplete"}`, sometimes with a fixed fact such as
+`"journal":"missing"`, and exits 1. The report reads only the current journal
+schema (11): a store written by the installed C490 controller (schema 10) is
+refused as `"journal":"unsupported-schema"`, never migrated or read. The report
+captures bytes, diagnoses that copy read-only, and opens a `SqliteJournal` only
+on its own disposable copy. It never opens the original store or constructs a
+`GitAuthority` over the original authority. Its test hashes every file under the
+root, including the authority's refs and hooks, before and after.
+
+The pytest entrypoint and this command share one fake world. Its native peer
+and operator store are fake; its portable process launcher substitutes the OS
+isolation primitives. Real Git, capture, gate code and journal evidence do not
+make that substitution physical containment or a vendor/host observation. The
+packet reports historical evidence and does not authorize a new attempt. The separate
 [Linux containment lane](M8_CI.md#pr-b-the-separate-containment-gate) provides
 credential-free physical containment evidence, not live vendor/host
 qualification. A skipped case is not a successful rehearsal.
