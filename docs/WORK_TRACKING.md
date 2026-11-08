@@ -248,6 +248,34 @@ evidence. Reuse unchanged proofs; this is not another full-suite requirement.
 
 Ground accepting protocol fixtures in the pinned producer's source/schema or an
 authorized recorded observation, rather than only the consumer's expectations.
+When a guard consumes another stage's files or receipts, generate its accepting
+input through that producer, including teardown, with fake external boundaries.
+A hand-built tree that repeats the guard's assumptions is not composition proof.
+Keep malformed-input and fault fixtures alongside that real accepting path.
+
+State the authority or integrity invariant behind a guard. An exact published
+schema or a physical ownership boundary can justify strict equality; incidental
+file presence cannot substitute for either. Preserve bounded opaque state under
+the existing custody checks where the operation does not interpret or execute
+it. Change a guard only for a producer-grounded semantic reason, with accepting
+and refusing evidence; a blocked run is not a reason to bypass it.
+
+Select an outcome-oriented, bounded operating scope before a live window. Name
+its permitted observations, reviewed cleanup, attempt/deadline/cost limits and
+stop conditions, including whether a refusal permits read-only diagnosis or
+another attempt. Continue work already covered by that approval without asking
+again for each routine step. Expanded authority, destructive actions, account or
+credential operations and model spending still need the applicable approval.
+An explicit frozen stop/resume rule takes precedence; a general debugging scope
+does not silently authorize a stopped procedure's replay.
+
+Classify local preparation errors, completed application refusals, transport
+failures and unknown native effects separately. Use affirmative completion and
+physical cleanup evidence instead of requiring manual reconciliation solely
+because an operation failed. Verified cleanup does not make the operation
+successful, and a failed operation never grants a retry. Preserve uncertainty
+when dispatch, withdrawal or host idleness remains unproved.
+
 Distinguish local preparation errors, issued remote commands and observed vendor
 refusals in the result. Correct an operator error at that boundary; it is not
 evidence for a product patch, broader hardening or repeated design review.

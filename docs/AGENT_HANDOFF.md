@@ -16,6 +16,22 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Producer lifecycle and completed qualification refusal
+
+The [delivery record](plans/handoffs/operator-helper-contract-record.md) covers
+the small operator correction and shared delivery rules: accepting fixtures
+exercise the real producer through teardown, guards name their invariant, and
+bounded scope includes reviewed observations/cleanup without inventing retries.
+A completed pre-store refusal may consume one existing locked withdrawal probe,
+then prove Off; qualification still fails and uncertainty remains recorded.
+Unknown transports, entered store phases or failed physical proofs retain custody.
+
+The transient lane was removed by the producer; requiring it afterward was an
+operator assumption, not an observed native-provider failure. Fake lifecycle
+and boundary tests establish this distinction. They neither qualify a live
+host nor reconcile historical retained markers. No controller, accepted plan,
+credential, vendor execution or live-state change belongs to this slice.
+
 ## Selected operator helper/caller source contracts
 
 The [delivery record](plans/handoffs/operator-helper-contract-record.md) covers

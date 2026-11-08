@@ -402,3 +402,28 @@ Windows checkout line endings are not interchangeable with reviewed Git bytes.
 Live use requires the bounded owner-selected window and fresh custody/boot/drift
 checks. Unexpected output stops collection; retain the prefix and park without
 retry. This metadata window carries no model-call authority.
+
+
+## Completed qualification refusal and custody
+
+`m9_qualification_boundary.py` permits one read-only withdrawal observation
+following an affirmatively completed qualification phase exit in `1..127`,
+only before any store phase was entered. The exit does not establish that
+native work joined. The existing `_WITHDRAWN` reader must acquire the actual
+store lock and read the existing withdrawal record at the selected generation
+floor; a missing record or unavailable lock refuses. Its eligibility is consumed
+before that single observation. No mutating cleanup command runs on this path.
+
+Only that affirmative withdrawal and the existing clean stop plus independent
+Off observation permit custody release. Qualification remains unproved, its
+uncertainty remains recorded, and no pin challenge, READ or retry follows.
+Timeouts, transport failures (including SSH exit 255), signal-style exits,
+malformed completion, any entered store phase, a failed withdrawal observation
+or an unproved Off state retain custody. This operator correction is not an
+installation and cannot reconcile a historical retained marker retrospectively.
+
+Selections still require independent review of the actual phase commands and
+fresh custody/boot checks. A completed shell exit alone cannot prove remote
+process quiescence. The physical locked withdrawal observation is load-bearing;
+this path does not grant another operation or another attempt. Explicit frozen
+stop/recovery rules and bounded owner scope continue to apply.
