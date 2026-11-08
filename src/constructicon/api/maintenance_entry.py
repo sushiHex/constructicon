@@ -27,20 +27,27 @@ from constructicon.api._maintenance_identity import (
 from constructicon.api._maintenance_source import (
     git,
     inspect_source,
+    pinned_purpose,
     prepare_source,
     read_bounded,
     write_once,
 )
 from constructicon.api.control import ControlPlane
 from constructicon.api.plan_manifest_application import (
+    CHANNEL_STORED_REPLY,
     GRAPH_NAME,
+    PLAN_MANIFEST,
+    TASKS,
     MaintenanceResources,
+    channel_reply_checks,
     derive_maintenance_result,
     maintenance_checks,
     maintenance_definitions,
     maintenance_graph,
     maintenance_system,
     require_maintenance_resources,
+    task_for,
+    task_for_purpose,
 )
 from constructicon.api.system import Constructicon
 from constructicon.core.address import GitSha, ScopePath
@@ -58,10 +65,11 @@ from constructicon.core.executor import ExecutorProvider
 from constructicon.core.grants import Posture
 from constructicon.core.identity import Digest, canonical_json, digest, parse_json_value
 from constructicon.core.maintenance import (
-    TARGET_PATH,
+    ChannelReplyAttemptAuthorization,
+    ChannelReplyResult,
     MaintenanceAttemptAuthorization,
+    MaintenanceAuthorization,
     MaintenanceCapabilityPin,
-    PlanManifestRequest,
     PlanManifestResult,
 )
 from constructicon.core.manifest import parse_manifest_json, source_graph_hash_for
@@ -88,6 +96,7 @@ EXECUTOR = "codex-operator"
 WORKSPACE = "maintenance-workspace"
 GATE = "maintenance-gate"
 WRITER_SCOPE = ScopePath(segments=(GRAPH_NAME, "writer"))
+CHANNEL_WRITER_SCOPE = CHANNEL_STORED_REPLY.writer_scope
 MAX_RESULT_BYTES = 65536
 
 
@@ -120,21 +129,26 @@ class MaintenanceAssembly:
 
 async def assemble_maintenance(
     *, host: HostSession, root: Path, journal: SqliteJournal,
-    authorization: MaintenanceAttemptAuthorization | None = None,
+    authorization: MaintenanceAuthorization | None = None,
 ) -> MaintenanceAssembly:
     pin = await inspect_source(root)  # Before authority constructor writes its hook.
+    # The prepared pin names the task; installed authority must name the same one.
+    task = task_for_purpose(pinned_purpose(pin))
+    if authorization is not None and not isinstance(authorization, task.authorization_model):
+        raise ContractViolation("maintenance authorization purpose differs from the prepared task")
     authority = GitAuthority(root / "authority.git", root / "authority-workspaces")
     launcher = codex_lane._launcher(host.launch_root)
     workspace = ContainedWriteWorkspaceProvider(authority, root=root / "workspace-acquisitions",
         target_ref=pin.target_ref, provider_id=WORKSPACE, posture=Posture.WRITE, launcher=launcher)
-    source = await git(root / "authority.git", "show", f"{pin.base_commit}:{TARGET_PATH}")
+    source = await git(root / "authority.git", "show", f"{pin.base_commit}:{task.target_path}")
     inventory = await git(root / "authority.git", "ls-tree", "-r", "-z", pin.base_commit)
     before = workspace.revision
+    checks = maintenance_checks if task is PLAN_MANIFEST else channel_reply_checks
     gate = await ContainedGateRunner.create(journal=journal, authority=authority,
         root=root / "gate-acquisitions", target_ref=pin.target_ref, provider_id=GATE,
-        launcher=launcher, checks=maintenance_checks(source, hashlib.sha256(source).hexdigest(),
+        launcher=launcher, checks=checks(source, hashlib.sha256(source).hexdigest(),
             inventory, authority.environment.object_format))
-    request = PlanManifestRequest(repository=authority.repository_id, target_ref=pin.target_ref,
+    request = task.request_model(repository=authority.repository_id, target_ref=pin.target_ref,
         base_commit=pin.base_commit, target_sha256=hashlib.sha256(source).hexdigest(),
         check_set_hash=gate.check_set_hash)
     resources = MaintenanceResources(journal, authority, workspace, gate, request, source)
@@ -152,23 +166,26 @@ async def assemble_maintenance(
 
 async def require_maintenance_attempt(
     resources: MaintenanceResources, executor: ExecutorProvider,
-    descriptor: CapabilityDescriptor, authorization: MaintenanceAttemptAuthorization,
+    descriptor: CapabilityDescriptor, authorization: MaintenanceAuthorization,
 ) -> None:
     """Before RunHost startup: exact world, journal, retained inputs and descriptors."""
-    authorization = MaintenanceAttemptAuthorization.model_validate_json(
+    task = task_for(resources.request)
+    if not isinstance(authorization, task.authorization_model):
+        raise ContractViolation("maintenance authorization purpose differs from the assembled task")
+    authorization = task.authorization_model.model_validate_json(
         authorization.model_dump_json(),
     )
     await require_maintenance_resources(resources)
     graph = maintenance_graph(executor_id=authorization.capability_id,
         workspace_id=resources.workspace.provider_id, gate_id=resources.gate.provider_id,
-        writer_grants=authorization.grants)
+        writer_grants=authorization.grants, task=task)
     journal = resources.journal
     journal_path = Path(authorization.journal)
     attempt_path = Path(authorization.attempt_record)
     if not (
         authorization.request == resources.request
         and authorization.application_revision == maintenance_application_revision()
-        and authorization.scope == WRITER_SCOPE and authorization.binding == "executor"
+        and authorization.scope == task.writer_scope and authorization.binding == "executor"
         and authorization.source_graph_hash == source_graph_hash_for(graph)
         and authorization.workspace == MaintenanceCapabilityPin(
             capability_id=resources.workspace.provider_id, revision=resources.workspace.revision)
@@ -190,7 +207,7 @@ async def require_maintenance_attempt(
         or executor.launcher is not resources.workspace.launcher
     ):
         raise ContractViolation("maintenance operator binding differs")
-    definitions = maintenance_definitions()
+    definitions = maintenance_definitions(task)
     expected_versions = {bundle.definition.name: str(bundle.definition.content_hash())
                          for bundle in definitions}
     snapshot = journal.snapshot()
@@ -233,15 +250,36 @@ class _StoredResult(BaseModel):
     result: PlanManifestResult
 
 
+class _StoredChannelResult(BaseModel):
+    """The channel task's own stored meaning; never the plan-manifest result type."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    schema_version: Literal[1] = 1
+    purpose: Literal["channel-stored-reply"] = "channel-stored-reply"
+    meaning: Literal["historical-application-acceptance"] = "historical-application-acceptance"
+    authorization_digest: Digest
+    result: ChannelReplyResult
+
+
 def inspect_result(path: Path) -> dict[str, object]:
     """Historical file observation only; no claim of current validity or authenticity."""
     raw = read_bounded(path, MAX_RESULT_BYTES).decode("utf-8", errors="strict")
-    stored = _StoredResult.model_validate(parse_json_value(raw))
+    record = parse_json_value(raw)
+    stored: _StoredResult | _StoredChannelResult = (
+        _StoredChannelResult.model_validate(record)
+        if isinstance(record, dict) and "purpose" in record
+        else _StoredResult.model_validate(record)
+    )
     result = stored.result
     if re.fullmatch(r"run-[0-9a-f]{32}", result.run_id) is None or (
         re.fullmatch(r"[0-9a-f]{40}([0-9a-f]{24})?", result.candidate.commit) is None
     ):
         raise ContractViolation("maintenance historical evidence has malformed public identifiers")
+    if isinstance(result, ChannelReplyResult):
+        return {"schema_version": 1, "meaning": stored.meaning,
+                "purpose": "channel-stored-reply", "run_id": str(result.run_id),
+                "base_sha256": result.base_sha256, "candidate_sha256": result.candidate_sha256,
+                "candidate_commit": str(result.candidate.commit)}
     return {"schema_version": 1, "meaning": stored.meaning, "run_id": str(result.run_id),
             "input_sha256": result.input_sha256, "render_sha256": result.render_sha256,
             "candidate_commit": str(result.candidate.commit)}
@@ -249,10 +287,11 @@ def inspect_result(path: Path) -> dict[str, object]:
 
 async def run_maintenance(
     *, resources: MaintenanceResources, executor: ExecutorProvider,
-    executor_descriptor: CapabilityDescriptor, authorization: MaintenanceAttemptAuthorization,
+    executor_descriptor: CapabilityDescriptor, authorization: MaintenanceAuthorization,
     timeout_s: float = 1200,
-) -> PlanManifestResult | None:
+) -> PlanManifestResult | ChannelReplyResult | None:
     await require_maintenance_attempt(resources, executor, executor_descriptor, authorization)
+    task = task_for(resources.request)
     system: Constructicon = await maintenance_system(resources,
         executor_id=authorization.capability_id, executor=executor,
         executor_descriptor=executor_descriptor, writer_grants=authorization.grants)
@@ -263,7 +302,7 @@ async def run_maintenance(
     control = ControlPlane(system=system, store=resources.journal)
     try:
         await control.startup()
-        for bundle in maintenance_definitions():
+        for bundle in maintenance_definitions(task):
             version = str(bundle.definition.content_hash())
             registered = await control.registry_register(actor, definition=bundle,
                 idempotency_key="maintenance-register-" + version)
@@ -276,7 +315,7 @@ async def run_maintenance(
                 raise ContractViolation("maintenance fixed promotion failed")
         submitted = await control.runs_start(actor, proposal=maintenance_graph(
             executor_id=authorization.capability_id, workspace_id=resources.workspace.provider_id,
-            gate_id=resources.gate.provider_id, writer_grants=authorization.grants),
+            gate_id=resources.gate.provider_id, writer_grants=authorization.grants, task=task),
             inputs={"request": resources.request.model_dump(mode="json")},
             idempotency_key=authorization.idempotency_key)
         if not isinstance(submitted, RunSubmission) or submitted.run_id != authorization.run_id:
@@ -294,8 +333,13 @@ async def run_maintenance(
     if state.status is not RunStatus.SUCCEEDED:
         return None
     result = await derive_maintenance_result(system, resources, authorization.run_id)
-    stored = _StoredResult(authorization_digest=digest("maintenance-authorization", 1,
-        authorization.model_dump(mode="json")), result=result)
+    authorization_digest = digest("maintenance-authorization", 1,
+                                  authorization.model_dump(mode="json"))
+    stored: _StoredResult | _StoredChannelResult = (
+        _StoredChannelResult(authorization_digest=authorization_digest, result=result)
+        if isinstance(result, ChannelReplyResult)
+        else _StoredResult(authorization_digest=authorization_digest, result=result)
+    )
     raw = stored.model_dump_json().encode()
     if len(raw) > MAX_RESULT_BYTES:
         raise ContractViolation("maintenance accepted evidence exceeds publication bound")
@@ -314,7 +358,7 @@ def _host(args: argparse.Namespace) -> HostSession:
                        launch_root=args.launch_root)
 
 
-def _authorization_preview(authorization: MaintenanceAttemptAuthorization) -> dict[str, object]:
+def _authorization_preview(authorization: MaintenanceAuthorization) -> dict[str, object]:
     preview: dict[str, object] = authorization.model_dump(mode="json")
     raw = json.dumps(preview, sort_keys=True, separators=(",", ":")).encode("utf-8")
     if len(raw) + 1 > MAX_AUTHORIZATION_BYTES:
@@ -325,7 +369,8 @@ def _authorization_preview(authorization: MaintenanceAttemptAuthorization) -> di
 async def _command(args: argparse.Namespace) -> object:
     if args.command == "prepare":
         return (await prepare_source(args.root, args.bundle, bundle_sha256=args.bundle_sha256,
-            base_commit=GitSha(args.base), target_ref=args.target_ref)).model_dump(mode="json")
+            base_commit=GitSha(args.base), target_ref=args.target_ref,
+            purpose=getattr(args, "task", PLAN_MANIFEST.purpose))).model_dump(mode="json")
     if args.command == "inspect":
         return inspect_result(args.result)
     with _failure_stage(_PreflightStage.SOURCE):
@@ -341,11 +386,15 @@ async def _command(args: argparse.Namespace) -> object:
                                               authorization=authorization)
     if args.command == "preflight":
         with _failure_stage(_PreflightStage.PREVIEW):
-            authorization = MaintenanceAttemptAuthorization(authorization_id=args.authorization_id,
-                actor_id=args.actor, idempotency_key=args.key, scope=WRITER_SCOPE,
+            task = task_for(assembly.resources.request)
+            model = (MaintenanceAttemptAuthorization if task is PLAN_MANIFEST
+                     else ChannelReplyAttemptAuthorization)
+            authorization = model(authorization_id=args.authorization_id,
+                actor_id=args.actor, idempotency_key=args.key, scope=task.writer_scope,
                 binding="executor",
                 source_graph_hash=source_graph_hash_for(maintenance_graph(executor_id=EXECUTOR,
-                    workspace_id=WORKSPACE, gate_id=GATE, writer_grants=WRITE_GRANTS)),
+                    workspace_id=WORKSPACE, gate_id=GATE, writer_grants=WRITE_GRANTS,
+                    task=task)),
                 capability_id=EXECUTOR, revision=str(assembly.executor.identity.revision),
                 operator_binding_digest=assembly.executor.identity.store.operator_binding_digest,
                 journal=str(journal_path), max_epoch=1, not_after=utc_now() + timedelta(hours=1),
@@ -373,6 +422,8 @@ def main() -> None:
     prepare.add_argument("--bundle-sha256", required=True)
     prepare.add_argument("--base", required=True)
     prepare.add_argument("--target-ref", default="refs/heads/maintenance")
+    prepare.add_argument("--task", choices=tuple(task.purpose for task in TASKS),
+                         default=PLAN_MANIFEST.purpose)
     inspect = commands.add_parser("inspect")
     inspect.add_argument("--result", type=Path, required=True)
     for command in ("preflight", "run"):

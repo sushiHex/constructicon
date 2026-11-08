@@ -64,8 +64,10 @@ Both revisions therefore change, for both tasks.
   target already contains the helper, so a finished #327 removes this task's
   value instead of being re-proved.
 - **Allowed change:** exactly one path, modified in place with mode 100644. The
-  candidate's only parent is the base. Byte size and diff size are bounded
-  before the gate runs.
+  candidate's only parent is the base. Inside the gate program, before the
+  candidate is parsed, inventory equality allows only this path to change and
+  its byte size is bounded. Before the gate, only the generic Git process and
+  pack ceilings apply, as for the existing task.
 - **Instruction:** a fixed constant. It asks for one private method,
   `_stored_reply(self, request, request_id)`, with a fixed position and
   annotations. The method extracts the reply-port guard, the derived reply id

@@ -23,7 +23,7 @@ DIAGNOSTIC_MODULE = "constructicon.substrate.journal.maintenance_diagnostic:"
 DIAGNOSTIC_TESTS = "tests/substrate/journal/test_maintenance_diagnostic.py::"
 VM_ADDRESS_MODULE = "scripts.m8_vm_address:"
 VM_ADDRESS_TESTS = "tests/test_m8_vm_address.py::"
-WRITER = "constructicon.api.plan_manifest_application:maintenance_writer"
+WRITER = "constructicon.api.plan_manifest_application:_write_candidate"
 WRITER_TESTS = "tests/api/test_plan_manifest_application.py::"
 
 MUTANTS = (
@@ -994,7 +994,30 @@ MUTANTS = (
             ("core-law", "core/maintenance.py"),
             ("maintenance-reader", "substrate/executors/maintenance.py"),
             ("root-custody-reader", "substrate/executors/qualification.py"),
+            ("channel-oracle", "substrate/gates/channel_reply.py"),
         )
+    ),
+    (
+        "channel exam accepts only the whole expected module",
+        "constructicon.substrate.gates.channel_reply:check_extraction",
+        "if observed != expected:", "if False:",
+        "tests/substrate/test_channel_reply_oracle.py::"
+        "test_whole_module_equality_refuses_every_other_tree[noop]",
+    ),
+    (
+        "channel exam refuses a base that already has the helper",
+        "constructicon.substrate.gates.channel_reply:expected_module",
+        'raise ExtractionRefusal("base-has-helper")', "pass",
+        "tests/substrate/test_channel_reply_oracle.py::"
+        "test_a_base_the_one_rewrite_cannot_apply_to_is_refused[has-helper]",
+    ),
+    (
+        "channel preparation refuses a finished extraction",
+        "constructicon.api._maintenance_source:prepare_source",
+        "channel_reply.expected_module(source)", "None",
+        "tests/api/test_channel_reply_entry.py::"
+        "test_preparation_pins_the_target_and_refuses_a_finished_extraction"
+        "[already-refactored]",
     ),
 )
 

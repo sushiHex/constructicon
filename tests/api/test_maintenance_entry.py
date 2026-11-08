@@ -41,7 +41,10 @@ AUTHORIZATION_LAW_CHANGES = (
     ("substrate/executors/maintenance.py", b"record = parse_json_value(",
      b"record = dict("),
     ("substrate/executors/qualification.py", b"info.st_nlink != 1", b"info.st_nlink > 2"),
+    ("substrate/gates/channel_reply.py", b'raise ExtractionRefusal("candidate-differs")',
+     b"pass"),
 )
+LAW_IDS = ("core-law", "maintenance-reader", "root-custody-reader", "channel-oracle")
 
 
 def change_authorization_law(monkeypatch, relative_path, before, after):
@@ -59,7 +62,7 @@ def change_authorization_law(monkeypatch, relative_path, before, after):
 
 
 @pytest.mark.parametrize(("relative_path", "before", "after"), AUTHORIZATION_LAW_CHANGES,
-                         ids=("core-law", "maintenance-reader", "root-custody-reader"))
+                         ids=LAW_IDS)
 def test_application_revision_pins_each_authorization_law(
     monkeypatch, relative_path, before, after,
 ):
@@ -240,7 +243,7 @@ async def test_task_witness_substitutes_only_non_linux_executor_guards(
 
 
 @pytest.mark.parametrize(("relative_path", "before", "after"), AUTHORIZATION_LAW_CHANGES,
-                         ids=("core-law", "maintenance-reader", "root-custody-reader"))
+                         ids=LAW_IDS)
 async def test_changed_authorization_law_refuses_old_authority_before_startup(
     concrete_application, monkeypatch, relative_path, before, after,
 ):
@@ -531,7 +534,7 @@ def test_cli_preflight_failure_publishes_only_actual_bounded_stage(
         return SimpleNamespace(executor=SimpleNamespace(identity=SimpleNamespace(
             revision="sha256:" + "0" * 64, store=SimpleNamespace(
                 operator_binding_digest="sha256:" + "0" * 64))),
-            resources=SimpleNamespace(request=None,
+            resources=SimpleNamespace(request=application_tests.REQUEST,
                 workspace=SimpleNamespace(revision="sha256:" + "0" * 64),
                 gate=SimpleNamespace(revision="sha256:" + "0" * 64)))
 

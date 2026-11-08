@@ -354,6 +354,60 @@ def test_new_reader_accepts_the_separate_type_and_rejects_ambiguous_bytes(monkey
             reader.read_maintenance_authorization(Path("/owner/auth.json"))
 
 
+async def test_channel_task_authority_is_accepted_as_itself_and_records_its_purpose(
+    tmp_path, portable_binding,
+):
+    from constructicon.core.maintenance import ChannelReplyAttemptAuthorization
+    from tests.core.test_maintenance_channel_authorization import channel_authorization
+
+    plain = provider(tmp_path, portable_binding)
+    granted = channel_authorization(
+        revision=plain.identity.revision,
+        operator_binding_digest=plain.identity.store.operator_binding_digest,
+        not_after=datetime.now(UTC) + timedelta(hours=1),
+        attempt_record=str(tmp_path / "channel.attempt"),
+    )
+    executor = provider(tmp_path, portable_binding, maintenance=granted)
+    assert type(executor.maintenance) is ChannelReplyAttemptAuthorization
+    assert executor.maintenance == granted
+    await executor.acquire(context(granted))
+    record = json.loads(Path(granted.attempt_record).read_text())
+    assert record["purpose"] == "channel-stored-reply" and record["phase"] == "acquired"
+    # Revalidation keeps each type's own law: a copied foreign purpose is refused.
+    with pytest.raises(ContractViolation, match="maintenance authorization is invalid"):
+        provider(tmp_path, portable_binding, maintenance=granted.model_copy(
+            update={"purpose": "plan-manifest-maintenance"}))
+
+
+def test_shared_law_base_is_not_a_task_authority(tmp_path, portable_binding):
+    from constructicon.core import maintenance as core
+
+    fields = authorization().model_dump()
+    base = core._AttemptAuthorization.model_construct(**fields)
+    with pytest.raises(ContractViolation, match="separate authorization"):
+        provider(tmp_path, portable_binding, maintenance=base)
+
+
+def test_reader_selects_exactly_one_closed_type_by_purpose(monkeypatch):
+    from constructicon.core.maintenance import ChannelReplyAttemptAuthorization
+    from tests.core.test_maintenance_channel_authorization import channel_authorization
+
+    channel, plan = channel_authorization(), authorization()
+    for granted, kind in ((channel, ChannelReplyAttemptAuthorization),
+                          (plan, MaintenanceAttemptAuthorization)):
+        raw = granted.model_dump_json().encode()
+        monkeypatch.setattr(reader, "_read_authorization_bytes", lambda path, raw=raw: raw)
+        read = reader.read_maintenance_authorization(Path("/owner/auth.json"))
+        assert type(read) is kind and read == granted
+    crossed = json.loads(channel.model_dump_json())
+    crossed["request"] = plan.request.model_dump(mode="json")
+    for record in (crossed, {**json.loads(plan.model_dump_json()), "purpose": "other-task"}):
+        raw = json.dumps(record).encode()
+        monkeypatch.setattr(reader, "_read_authorization_bytes", lambda path, raw=raw: raw)
+        with pytest.raises(ContractViolation, match="maintenance authorization is unavailable"):
+            reader.read_maintenance_authorization(Path("/owner/auth.json"))
+
+
 async def test_plain_unavailable_provider_never_inherits_the_exception(tmp_path, portable_binding):
     _, granted = authorized(tmp_path, portable_binding)
     plain = provider(tmp_path, portable_binding)

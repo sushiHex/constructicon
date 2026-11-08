@@ -16,6 +16,20 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Second fixed maintenance task
+
+The [delivery record](plans/handoffs/maintenance-channel-reply-delivery.md) adds
+the closed `channel-stored-reply` task beside the unchanged plan-manifest task.
+A golden captured from `b0d2c0b`'s source checks the plan-manifest
+authorization wire, model, digest and schema. A stdlib oracle accepts only the
+one exact whole-module extraction of `_stored_reply`. The positive candidate is
+hand-written test data, calibrated by a fresh-interpreter differential battery.
+`in_process.py` itself is not refactored; that remains #327's future attempt.
+Both application and adapter revisions changed, so no C490 pin carries over. A
+new reviewed installation precedes any live attempt. The port guard's fault
+text is proved only by tree equality, because coherent damage cannot reach it.
+No Linux or Python 3.12 worker run is claimed.
+
 ## Verified CI release archives
 
 The bounded [release-availability slice](https://github.com/sushiHex/constructicon/issues/395)
