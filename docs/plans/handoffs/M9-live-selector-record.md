@@ -1,8 +1,13 @@
-# M9 live catalog-selector evidence
+# M9 live selector and lifecycle evidence
 
 Living implementation record for [#45](https://github.com/sushiHex/constructicon/issues/45).
 The accepted M9 plan and operator runbooks remain unchanged. This records the
 bounded live selector, not measured improvement in model-answer quality.
+
+The bounded C490 trial completed live catalog selection, fixed scripted
+evaluation, actual owner approval, proof issuance, promotion and rollback with
+both replays. An independent snapshot confirmed the restored baseline; normal
+park and Off checks passed and custody was released.
 
 ## Accepted READ
 
@@ -62,7 +67,7 @@ not a VM or provider failure. It stopped before the helper subprocess; the
 corrected scaffold was independently checked before the owner-approved resume.
 Historical unknown results and their recovery records remain unchanged.
 
-The live result proves model-backed selection between the fixed catalog
+The READ on its own proves model-backed selection between the fixed catalog
 entries. It does not prove improved answers under the selected instruction,
 perform the trusted scripted evaluation, approve a candidate or move a stable
 pointer. Those later stages retain their existing contracts and required
@@ -89,11 +94,46 @@ The instruction adds "Cite the supplied evidence ID." to the existing
 network/storage classification instruction. The fixed FakeExecutor exam and
 its cases remain separate from the model's selection.
 
-Preparation parked an issuance request; it did not record the owner's candidate
-decision, mint its proof or move a stable pointer. The proposed completion is
-approval, promotion and replay, then rollback and replay, with an independent
-final-baseline read and normal park. Its actual-subject owner decision remains
-required; the packet is durable and the VM is Off while that decision is pending.
+Preparation parked an issuance request without recording the owner's candidate
+decision, minting its proof or moving a stable pointer. The VM was Off while
+the owner considered the durable exact packet; no short live-pin countdown
+applied to this decision.
+
+## Approved lifecycle and final baseline
+
+The owner [approved the exact candidate and bounded rehearsal](https://github.com/sushiHex/constructicon/issues/45#issuecomment-6718158008).
+One new non-model window rechecked custody/Off, paired boot, guarded drift,
+retained source/controller and original selection. Pending-packet replay matched
+the approved request, run, subject, seal and exam before the decision was recorded.
+
+The [completed rehearsal](https://github.com/sushiHex/constructicon/issues/45#issuecomment-6718199574)
+retains these receipts:
+
+| Operation | Observed result |
+| --- | --- |
+| Approval/issuance | Approved; creating run succeeded |
+| Promotion | Baseline to candidate, replayed false |
+| Promotion replay | Identical original edge and proof, replayed true |
+| Rollback | Candidate to baseline, replayed false |
+| Rollback replay | Identical original rollback receipt, replayed true |
+| Independent final read | Actual stable pointer equals the exact baseline |
+
+Proof ID:
+`att-7de028837c4b19c9035c7966676f51a7da6224cff47958e47ee1da1d2c89dd24`.
+The final reader loaded that journal proof, checked its action, exact subject,
+creating run and manifest binding, and checked the reviewed issuer source graph.
+Replayed receipts were not treated as evidence of the current pointer.
+
+Final result SHA-256:
+`5c497f68f3bc2661d04b4095c8edb8299bb423408958e054cc1c5efbec48192f`.
+Normal park and an independent Off/Ok/zero-idle observation passed; custody was
+released. No additional model, credential operation, installation, re-baseline,
+checkpoint or production deployment occurred. The original C490 store and all
+historical results remain retained. This establishes the bounded lifecycle,
+not real-answer improvement or present provider availability after withdrawal.
+Independent read-only review matched the pending packet, approval and both
+edge/replay pairs, final proof/baseline, Off receipt and custody release. It
+reviewed retained observations rather than making another host query.
 
 ## Review dispositions
 
