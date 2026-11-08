@@ -4,6 +4,10 @@ The components consume L0 contracts. Concrete containment and Git evidence are
 checked here at the L4 injection boundary, outside the ordinary walker.
 The Graph's generic MergeEvaluation proves the candidate tree. Application
 acceptance additionally requires derive_maintenance_result's history proof.
+
+Two closed tasks share these mechanics through a fixed two-row table selected
+by the exact request type: the plan-manifest data file and the channel
+stored-reply extraction. Neither task's instruction or exam is caller-selected.
 """
 
 from __future__ import annotations
@@ -11,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -20,7 +24,7 @@ from pydantic import BaseModel
 
 from constructicon.api._maintenance_identity import maintenance_application_revision
 from constructicon.api.system import Constructicon
-from constructicon.core.address import RunId
+from constructicon.core.address import RunId, ScopePath
 from constructicon.core.component import CapabilityRequirement, ComponentDef, PythonRef
 from constructicon.core.envelope import GitRef
 from constructicon.core.errors import ContractViolation
@@ -30,8 +34,12 @@ from constructicon.core.grants import EffectiveGrants, GrantRequest, Posture
 from constructicon.core.graph import Connection, Graph, GraphNode, Ref
 from constructicon.core.identity import canonical_json, digest
 from constructicon.core.maintenance import (
+    CHANNEL_TARGET_PATH,
     TARGET_PATH,
     VECTOR_PATH,
+    ChannelReplyAttemptAuthorization,
+    ChannelReplyRequest,
+    ChannelReplyResult,
     MaintenanceAttemptAuthorization,
     MaintenanceCapabilityPin,
     PlanManifestRequest,
@@ -47,6 +55,7 @@ from constructicon.runtime.registry import CapabilityDescriptor, source_digest_f
 from constructicon.sdk.types import DefinitionBundle
 from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.executors.linux import ProcessLimits
+from constructicon.substrate.gates import channel_reply
 from constructicon.substrate.gates.contained import ContainedGateRunner
 from constructicon.substrate.gates.runner import CheckSpec
 from constructicon.substrate.git.authority import GitAuthority
@@ -65,6 +74,24 @@ WRITE_INSTRUCTION = (
     "scripts/regen_plan_manifest.py. Do not add expected answers, executable code, "
     "or change any other file. The trusted harness supplies all expected answers."
 )
+CHANNEL_GRAPH_NAME = "constructicon-channel-stored-reply"
+# Fixed position and annotations: the trusted oracle's exact helper, spelled once.
+CHANNEL_INSTRUCTION = (
+    f"Modify only {CHANNEL_TARGET_PATH} in place; keep it a regular nonexecutable "
+    "UTF-8 file. In class InProcessChannel, add exactly one private method, placed "
+    "immediately after _complete_message as the last method of the class, with exactly "
+    "this signature and body and no docstring:\n\n"
+    + "".join("    " + line if line.strip() else line
+              for line in channel_reply.HELPER_SOURCE.splitlines(True))
+    + "\nIn reply_for, replace the reply-port guard, the reply_id assignment and the "
+    "stored lookup with `stored = self._stored_reply(request, request_id)`. In "
+    "acknowledge, replace the same three statements with "
+    "`reply = self._stored_reply(request, message_id)`. Change nothing else: keep every "
+    "lock scope, validation order, missing-request handling, _complete_reply call, "
+    "detach, return, import and other statement exactly as it is. Do not add, remove, "
+    "rename or change the mode of any other file. The trusted harness compares the "
+    "whole module's syntax tree with this one exact extraction."
+)
 
 
 def _port(name: str, model: type[BaseModel]) -> Port:
@@ -74,12 +101,23 @@ def _port(name: str, model: type[BaseModel]) -> Port:
 
 
 REQUEST = _port("request", PlanManifestRequest)
+CHANNEL_REQUEST = _port("request", ChannelReplyRequest)
 CANDIDATE = _port("candidate", GitRef)
 EVALUATION = _port("evaluation", MergeEvaluation)
 
 
 async def maintenance_writer(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[str, Any]:
-    request = PlanManifestRequest.model_validate(inputs["request"])
+    return await _write_candidate(ctx, inputs, PLAN_MANIFEST)
+
+
+async def channel_reply_writer(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[str, Any]:
+    return await _write_candidate(ctx, inputs, CHANNEL_STORED_REPLY)
+
+
+async def _write_candidate(
+    ctx: NodeContext, inputs: Mapping[str, Any], task: MaintenanceTask,
+) -> Mapping[str, Any]:
+    request = task.request_model.model_validate(inputs["request"])
     workspace = ctx.capability("workspace")
     if not isinstance(workspace, AsyncWriteWorkspace):
         raise ContractViolation("maintenance requires an asynchronous WRITE workspace")
@@ -88,11 +126,11 @@ async def maintenance_writer(ctx: NodeContext, inputs: Mapping[str, Any]) -> Map
         raise ContractViolation("maintenance workspace differs from the pinned base")
     executor = cast(Executor, ctx.capability("executor"))
     outcome = await executor.execute(
-        TaskSpec(instruction=WRITE_INSTRUCTION), workspace=workspace, grants=ctx.grants,
+        TaskSpec(instruction=task.instruction), workspace=workspace, grants=ctx.grants,
     )
     if not isinstance(outcome, ExecutorSuccess):
         raise ContractViolation("maintenance writer did not positively succeed")
-    captured = await workspace.commit_all("constructicon plan-manifest regression vectors")
+    captured = await workspace.commit_all(task.capture_message)
     candidate = workspace.git_ref()
     if candidate.commit != captured:
         raise ContractViolation("maintenance captured candidate differs from capture return")
@@ -108,7 +146,17 @@ async def maintenance_writer(ctx: NodeContext, inputs: Mapping[str, Any]) -> Map
 
 
 async def maintenance_checker(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[str, Any]:
-    request = PlanManifestRequest.model_validate(inputs["request"])
+    return await _check_candidate(ctx, inputs, PLAN_MANIFEST)
+
+
+async def channel_reply_checker(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[str, Any]:
+    return await _check_candidate(ctx, inputs, CHANNEL_STORED_REPLY)
+
+
+async def _check_candidate(
+    ctx: NodeContext, inputs: Mapping[str, Any], task: MaintenanceTask,
+) -> Mapping[str, Any]:
+    request = task.request_model.model_validate(inputs["request"])
     candidate = GitRef.model_validate(inputs["candidate"])
     gate = ctx.capability("gate")
     if not isinstance(gate, MergeGate) or (
@@ -127,15 +175,83 @@ async def maintenance_checker(ctx: NodeContext, inputs: Mapping[str, Any]) -> Ma
     return {"evaluation": evaluation.model_dump(mode="json")}
 
 
-def maintenance_definitions() -> tuple[DefinitionBundle, DefinitionBundle]:
+NodeBody = Callable[[NodeContext, Mapping[str, Any]], Any]
+
+
+@dataclass(frozen=True)
+class MaintenanceTask:
+    """One row of the fixed two-case table; never caller-selected or extensible."""
+
+    purpose: str
+    graph_name: str
+    request_model: type[PlanManifestRequest] | type[ChannelReplyRequest]
+    authorization_model: (
+        type[MaintenanceAttemptAuthorization] | type[ChannelReplyAttemptAuthorization]
+    )
+    request_port: Port
+    instruction: str
+    capture_message: str
+    writer_name: str
+    checker_name: str
+    writer: NodeBody
+    checker: NodeBody
+    target_path: str
+    check_name: str
+
+    @property
+    def writer_scope(self) -> ScopePath:
+        return ScopePath(segments=(self.graph_name, "writer"))
+
+
+PLAN_MANIFEST = MaintenanceTask(
+    purpose="plan-manifest-maintenance", graph_name=GRAPH_NAME,
+    request_model=PlanManifestRequest, authorization_model=MaintenanceAttemptAuthorization,
+    request_port=REQUEST, instruction=WRITE_INSTRUCTION,
+    capture_message="constructicon plan-manifest regression vectors",
+    writer_name="constructicon.maintenance/plan-manifest-writer",
+    checker_name="constructicon.maintenance/plan-manifest-checker",
+    writer=maintenance_writer, checker=maintenance_checker, target_path=TARGET_PATH,
+    check_name="plan-manifest-trusted-vectors",
+)
+CHANNEL_STORED_REPLY = MaintenanceTask(
+    purpose="channel-stored-reply", graph_name=CHANNEL_GRAPH_NAME,
+    request_model=ChannelReplyRequest, authorization_model=ChannelReplyAttemptAuthorization,
+    request_port=CHANNEL_REQUEST, instruction=CHANNEL_INSTRUCTION,
+    capture_message="constructicon channel stored-reply extraction",
+    writer_name="constructicon.maintenance/channel-stored-reply-writer",
+    checker_name="constructicon.maintenance/channel-stored-reply-checker",
+    writer=channel_reply_writer, checker=channel_reply_checker,
+    target_path=CHANNEL_TARGET_PATH, check_name=channel_reply.CHECK_NAME,
+)
+TASKS = (PLAN_MANIFEST, CHANNEL_STORED_REPLY)
+
+
+def task_for(request: object) -> MaintenanceTask:
+    """The exact request type names its task; a subclass or foreign model names none."""
+    for task in TASKS:
+        if type(request) is task.request_model:
+            return task
+    raise ContractViolation("maintenance request belongs to no fixed task")
+
+
+def task_for_purpose(purpose: object) -> MaintenanceTask:
+    for task in TASKS:
+        if purpose == task.purpose:
+            return task
+    raise ContractViolation("maintenance purpose names no fixed task")
+
+
+def maintenance_definitions(
+    task: MaintenanceTask = PLAN_MANIFEST,
+) -> tuple[DefinitionBundle, DefinitionBundle]:
     revision = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     bundles = []
     for name, body, inputs, outputs, requirements in (
-        ("constructicon.maintenance/plan-manifest-writer", maintenance_writer, (REQUEST,),
+        (task.writer_name, task.writer, (task.request_port,),
          (CANDIDATE,), (CapabilityRequirement(alias="workspace", kind="workspace.contained"),
                         CapabilityRequirement(alias="executor", kind="executor"))),
-        ("constructicon.maintenance/plan-manifest-checker", maintenance_checker,
-         (REQUEST, CANDIDATE), (EVALUATION,),
+        (task.checker_name, task.checker,
+         (task.request_port, CANDIDATE), (EVALUATION,),
          (CapabilityRequirement(alias="gate", kind="gates.contained"),)),
     ):
         body.__constructicon_adapter_revision__ = revision  # type: ignore[attr-defined]
@@ -154,10 +270,11 @@ def maintenance_definitions() -> tuple[DefinitionBundle, DefinitionBundle]:
 
 def maintenance_graph(
     *, executor_id: str, workspace_id: str, gate_id: str, writer_grants: EffectiveGrants,
+    task: MaintenanceTask = PLAN_MANIFEST,
 ) -> Graph:
     if writer_grants.posture is not Posture.WRITE:
         raise ContractViolation("maintenance writer requires explicit WRITE grants")
-    writer, checker = maintenance_definitions()
+    writer, checker = maintenance_definitions(task)
     grants = GrantRequest(
         posture=Posture.WRITE, model=writer_grants.model_selection.model,
         effort=writer_grants.effort, allowed_tools=writer_grants.allowed_tools,
@@ -165,7 +282,7 @@ def maintenance_graph(
         timeout_s=writer_grants.timeout_s,
     )
     return Graph(
-        name=GRAPH_NAME, inputs=(REQUEST,), outputs=(CANDIDATE, EVALUATION),
+        name=task.graph_name, inputs=(task.request_port,), outputs=(CANDIDATE, EVALUATION),
         nodes=(
             GraphNode(id="writer", body=Ref(component=writer.definition.name,
                 version=str(writer.definition.content_hash()),
@@ -185,7 +302,7 @@ class MaintenanceResources:
     authority: GitAuthority
     workspace: ContainedWriteWorkspaceProvider
     gate: ContainedGateRunner
-    request: PlanManifestRequest
+    request: PlanManifestRequest | ChannelReplyRequest
     target_source: bytes
 
 
@@ -267,9 +384,98 @@ def maintenance_checks(
                       argv=("/usr/bin/python3", "-I", "-c", program), timeout_s=120),)
 
 
+def channel_reply_checks(
+    base_source: bytes, base_sha256: str, baseline_inventory: bytes, object_format: str,
+) -> tuple[CheckSpec, ...]:
+    """The fixed extraction exam embeds the whole stdlib oracle and the pinned base.
+
+    The program pins the base blob and every other path's mode and blob before
+    it parses the candidate; it imports no project module, base or candidate.
+    """
+    if hashlib.sha256(base_source).hexdigest() != base_sha256:
+        raise ContractViolation("maintenance check target digest differs")
+    if object_format not in {"sha1", "sha256"}:
+        raise ContractViolation("maintenance check object format is unsupported")
+    try:
+        # Preparation and assembly both refuse a base this exact rewrite cannot
+        # apply to, including one whose target already defines the helper.
+        channel_reply.expected_module(base_source)
+    except channel_reply.ExtractionRefusal as error:
+        raise ContractViolation(f"maintenance channel base refused: {error.code}") from None
+    inventory: dict[str, tuple[str, str]] = {}
+    for record in baseline_inventory.split(b"\0"):
+        if not record:
+            continue
+        metadata, raw_name = record.split(b"\t", 1)
+        mode, kind, oid = metadata.decode("ascii").split()
+        if kind != "blob" or mode not in {"100644", "100755", "120000"}:
+            raise ContractViolation("maintenance base has an unsupported tree entry")
+        name = raw_name.decode("utf-8", errors="strict")
+        if name in inventory:
+            raise ContractViolation("maintenance base inventory repeats a path")
+        inventory[name] = mode, oid
+    base_oid = hashlib.new(object_format, f"blob {len(base_source)}\0".encode() + base_source)
+    if inventory.pop(CHANNEL_TARGET_PATH, None) != ("100644", base_oid.hexdigest()):
+        raise ContractViolation("maintenance channel target is not the pinned regular base blob")
+    inventory_hash = hashlib.sha256(json.dumps(
+        sorted((name, mode, oid) for name, (mode, oid) in inventory.items()),
+        ensure_ascii=True, separators=(",", ":"),
+    ).encode("ascii")).hexdigest()
+    source = Path(channel_reply.__file__).read_text(encoding="utf-8")
+    limit = channel_reply.MAX_SOURCE_BYTES
+    program = (
+        "import hashlib,json,linecache,os,pathlib,stat,sys,types\n"
+        f"expected_hash={inventory_hash!r}\n"
+        f"allowed={CHANNEL_TARGET_PATH!r}\nobject_format={object_format!r}\n"
+        f"base={base_source!r}\nbase_sha256={base_sha256!r}\nlimit={limit!r}\n"
+        "assert len(base)<=limit and hashlib.sha256(base).hexdigest()==base_sha256\n"
+        "candidate=None\n"
+        "observed=[]\n"
+        "for p in pathlib.Path('.').rglob('*'):\n"
+        " name=p.as_posix()\n"
+        " if p.is_symlink():\n"
+        "  mode='120000';raw=os.fsencode(os.readlink(p))\n"
+        " elif p.is_file():\n"
+        "  if name==allowed: assert p.stat().st_size<=limit\n"
+        "  mode='100755' if p.stat().st_mode & 0o111 else '100644';raw=p.read_bytes()\n"
+        " else:\n"
+        "  continue\n"
+        " if name==allowed:\n"
+        "  assert mode=='100644' and len(raw)<=limit\n"
+        "  candidate=raw\n"
+        "  continue\n"
+        " oid=hashlib.new(object_format,f'blob {len(raw)}\\0'.encode()+raw).hexdigest()\n"
+        " observed.append((name,mode,oid))\n"
+        "actual_hash=hashlib.sha256(json.dumps(sorted(observed),ensure_ascii=True,"
+        "separators=(',',':')).encode('ascii')).hexdigest()\n"
+        "assert actual_hash==expected_hash\n"
+        "p=pathlib.Path(allowed)\n"
+        "assert candidate is not None\n"
+        "assert stat.S_ISREG(p.lstat().st_mode) and not (p.lstat().st_mode & 0o111)\n"
+        # Base blob and inventory are pinned above; only now is the candidate parsed.
+        "m=types.ModuleType('trusted_channel_stored_reply')\n"
+        "sys.modules[m.__name__]=m\n"
+        "filename='<trusted-channel-stored-reply>'\n"
+        "m.__file__=filename\n"
+        f"source={source!r}\n"
+        "linecache.cache[filename]=(len(source),None,source.splitlines(True),filename)\n"
+        "exec(compile(source,filename,'exec'),m.__dict__)\n"
+        "report=m.check_extraction(base,candidate)\n"
+        "assert report['passed'] is True\n"
+        "summary=json.dumps(report,sort_keys=True,separators=(',',':'))\n"
+        "assert len(summary.encode('ascii'))<=4096\n"
+        "print(summary)\n"
+    )
+    if len(program.encode("utf-8")) > 120_000:
+        raise ContractViolation("maintenance trusted check exceeds the fixed argument bound")
+    return (CheckSpec(name=channel_reply.CHECK_NAME,
+                      argv=("/usr/bin/python3", "-I", "-c", program), timeout_s=120),)
+
+
 async def require_maintenance_resources(resources: MaintenanceResources) -> None:
     """Refuse relabeled resources, target drift, and a candidate-defined check."""
-    PlanManifestRequest.model_validate(resources.request.model_dump(mode="json"))
+    task = task_for(resources.request)
+    task.request_model.model_validate(resources.request.model_dump(mode="json"))
     request, authority, workspace, gate = (
         resources.request, resources.authority, resources.workspace, resources.gate,
     )
@@ -289,11 +495,14 @@ async def require_maintenance_resources(resources: MaintenanceResources) -> None
     if hashlib.sha256(resources.target_source).hexdigest() != request.target_sha256:
         raise ContractViolation("maintenance trusted target digest differs")
     actual_base = (await _git(authority, "rev-parse", "--verify", request.target_ref)).strip()
-    source = await _git(authority, "show", f"{request.base_commit}:{TARGET_PATH}")
-    existing = await _git(authority, "ls-tree", request.base_commit, "--", VECTOR_PATH)
+    source = await _git(authority, "show", f"{request.base_commit}:{task.target_path}")
+    # The extraction's precondition (no helper yet) is the oracle's, below.
+    existing = (await _git(authority, "ls-tree", request.base_commit, "--", VECTOR_PATH)
+                if task is PLAN_MANIFEST else b"")
     inventory = await _git(authority, "ls-tree", "-r", "-z", request.base_commit)
-    expected_checks = maintenance_checks(resources.target_source, request.target_sha256, inventory,
-                                         authority.environment.object_format)
+    checks = maintenance_checks if task is PLAN_MANIFEST else channel_reply_checks
+    expected_checks = checks(resources.target_source, request.target_sha256, inventory,
+                             authority.environment.object_format)
     revision = await finish_owned(asyncio.create_task(asyncio.to_thread(
         lambda: gate.check_set_hash,
     )))
@@ -309,6 +518,7 @@ async def maintenance_system(
 ) -> Constructicon:
     """Inject existing resources; never creates or enables a production executor."""
     await require_maintenance_resources(resources)
+    task = task_for(resources.request)
     if executor_id in {resources.workspace.provider_id, resources.gate.provider_id}:
         raise ContractViolation("maintenance capability identities must be distinct")
     if not isinstance(executor, ExecutorProvider) or (
@@ -317,11 +527,11 @@ async def maintenance_system(
         or executor_descriptor.executor_incoherence(executor) is not None
         or (executor.unavailable_reasons and not (
             isinstance(executor, QualificationAuthorizing)
-            and isinstance(getattr(executor, "maintenance", None), MaintenanceAttemptAuthorization)
+            and isinstance(getattr(executor, "maintenance", None), task.authorization_model)
             and executor.authorizes_admission(source_graph_hash=source_graph_hash_for(
                 maintenance_graph(executor_id=executor_id,
                     workspace_id=resources.workspace.provider_id,
-                    gate_id=resources.gate.provider_id, writer_grants=writer_grants),
+                    gate_id=resources.gate.provider_id, writer_grants=writer_grants, task=task),
             ), capability_id=executor_id)
         ))
         or writer_grants.posture is not Posture.WRITE
@@ -332,7 +542,7 @@ async def maintenance_system(
         # companion pins. The operational entry separately owns durable run
         # and recovery checks; assembly enforces these same application pins.
         authorization = getattr(executor, "maintenance", None)
-        if not isinstance(authorization, MaintenanceAttemptAuthorization) or (
+        if not isinstance(authorization, task.authorization_model) or (
             authorization.request != resources.request
             or authorization.application_revision != maintenance_application_revision()
             or authorization.workspace != MaintenanceCapabilityPin(
@@ -363,7 +573,7 @@ async def maintenance_system(
 
 async def derive_maintenance_result(
     system: Constructicon, resources: MaintenanceResources, run_id: RunId,
-) -> PlanManifestResult:
+) -> PlanManifestResult | ChannelReplyResult:
     """Accept only the one-base-parent candidate, exact tree and journal proof.
 
     A successful generic tree gate alone is not application acceptance: its
@@ -372,6 +582,7 @@ async def derive_maintenance_result(
     from constructicon.substrate.gates.maintenance import parse_vectors, render_unittest
 
     await require_maintenance_resources(resources)
+    task = task_for(resources.request)
     journal, request, authority = resources.journal, resources.request, resources.authority
     if system._journal is not journal or (
         system._capabilities.get(resources.workspace.provider_id) is not resources.workspace
@@ -388,16 +599,16 @@ async def derive_maintenance_result(
         if binding.binding in {"executor", "workspace", "gate"}
     }
     writer_key, workspace_key, gate_key = (
-        (GRAPH_NAME + "/writer", "executor"),
-        (GRAPH_NAME + "/writer", "workspace"),
-        (GRAPH_NAME + "/checker", "gate"),
+        (task.graph_name + "/writer", "executor"),
+        (task.graph_name + "/writer", "workspace"),
+        (task.graph_name + "/checker", "gate"),
     )
     if set(bindings) != {writer_key, workspace_key, gate_key}:
         raise ContractViolation("maintenance manifest has another capability boundary")
     expected_graph = maintenance_graph(
         executor_id=bindings[writer_key].capability_id,
         workspace_id=resources.workspace.provider_id, gate_id=resources.gate.provider_id,
-        writer_grants=bindings[writer_key].effective_grants,
+        writer_grants=bindings[writer_key].effective_grants, task=task,
     )
     if (
         canonical_json(manifest.source_graph) != canonical_json(expected_graph)
@@ -442,6 +653,27 @@ async def derive_maintenance_result(
                        "--no-renames", request.base_commit, candidate.commit)
     fields = delta.split(b"\0")
     metadata = fields[0].split() if fields else []
+    if task is CHANNEL_STORED_REPLY:
+        if (
+            subject.tested_tree != tree or merged_tree.strip().decode() != tree
+            or parents.split()[1:] != [request.base_commit.encode(), candidate.commit.encode()]
+            or len(fields) != 3 or fields[1] != CHANNEL_TARGET_PATH.encode() or fields[2]
+            or len(metadata) != 5 or metadata[0] != b":100644" or metadata[1] != b"100644"
+            or metadata[4] != b"M"
+            or channel_reply.CHECK_NAME not in tuple(check.name for check in attestation.checks)
+        ):
+            raise ContractViolation(
+                "maintenance candidate changed more than its one modified source file",
+            )
+        modified = await _git(authority, "show", f"{candidate.commit}:{CHANNEL_TARGET_PATH}")
+        if len(modified) > channel_reply.MAX_SOURCE_BYTES:
+            raise ContractViolation("maintenance modified source exceeds its byte bound")
+        await require_maintenance_resources(resources)
+        return ChannelReplyResult(
+            run_id=run_id, candidate=candidate, evaluation=evaluation,
+            base_sha256=request.target_sha256,
+            candidate_sha256=hashlib.sha256(modified).hexdigest(),
+        )
     if (
         subject.tested_tree != tree or merged_tree.strip().decode() != tree
         or parents.split()[1:] != [request.base_commit.encode(), candidate.commit.encode()]

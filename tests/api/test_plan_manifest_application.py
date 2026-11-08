@@ -557,17 +557,70 @@ class PortableVectorWriter(Writer):
         return ExecutorSuccess()
 
 
+class PortableChannelWriter(Writer):
+    """Writes the hand-written channel candidate (test data) through the launcher."""
+
+    def __init__(self, candidate=None):
+        from tests.substrate.test_channel_reply_oracle import CANDIDATE
+
+        super().__init__()
+        self.candidate = CANDIDATE if candidate is None else candidate
+
+    async def execute(self, task, *, workspace, grants):
+        from constructicon.api.plan_manifest_application import CHANNEL_INSTRUCTION
+        from constructicon.core.maintenance import CHANNEL_TARGET_PATH
+
+        assert task.instruction == CHANNEL_INSTRUCTION and not self.validate_grants(grants)
+        self.calls.append(task)
+        program = (
+            "from pathlib import Path\n"
+            f"Path({CHANNEL_TARGET_PATH!r}).write_bytes({self.candidate!r})\n"
+        )
+        async with workspace.use() as guard:
+            result = await workspace.provider.launcher.run(
+                ("/usr/bin/python3", "-I", "-c", program),
+                workspace=Path(workspace.path), posture=Posture.WRITE,
+                guard_fds=(guard,), timeout_s=30,
+            )
+        assert result.returncode == 0, result.stderr.decode()
+        return ExecutorSuccess()
+
+
+async def channel_base(authority) -> str:
+    """A parentless base holding the real unrefactored target and one other blob."""
+    from constructicon.core.maintenance import CHANNEL_TARGET_PATH
+    from tests.substrate.test_channel_reply_oracle import BASE
+
+    git = GitProcess(authority.git_executable, ProcessLimits())
+    cwd = authority.repository_id
+    blob = (await git.run("hash-object", "-w", "--stdin", cwd=cwd, stdin=BASE)).strip().decode()
+    other = (await git.run("hash-object", "-w", "--stdin", cwd=cwd,
+                           stdin=b"unchanged sibling\n")).strip().decode()
+    *directories, leaf = CHANNEL_TARGET_PATH.split("/")
+    entry = f"100644 blob {blob}\t{leaf}\n"
+    for index, directory in reversed(list(enumerate(directories))):
+        extra = f"100644 blob {other}\tREADME.txt\n" if index == 0 else ""
+        tree = (await git.run("mktree", cwd=cwd, stdin=entry.encode())).strip().decode()
+        entry = f"040000 tree {tree}\t{directory}\n" + extra
+    tree = (await git.run("mktree", cwd=cwd, stdin=entry.encode())).strip().decode()
+    base = (await git.run("commit-tree", tree, cwd=cwd,
+                          stdin=b"channel stored-reply base\n")).strip().decode()
+    await git.run("update-ref", "refs/heads/main", base, cwd=cwd)
+    return base
+
+
 @pytest.fixture
 async def concrete_application(tmp_path, monkeypatch, request, portable_acquisition_namespace):
     committed_tree = getattr(request, "param", None) == "committed-tree"
-    if committed_tree:
+    channel = getattr(request, "param", None) == "channel-stored-reply"
+    if committed_tree or channel:
         # Seed the callback's fake store before this fixture substitutes its
         # narrowly scoped guarded-removal primitive below.
         request.getfixturevalue("portable_binding")
     resources, launch = await concrete_resources(tmp_path, monkeypatch,
-                                                 committed_tree=committed_tree)
+                                                 committed_tree=committed_tree, channel=channel)
     executor = FakeExecutorProvider()
-    executor.executor = PortableVectorWriter()
+    executor.executor = PortableChannelWriter() if channel else PortableVectorWriter()
     executor._identity = launch_identity(executor.executor.profile)
     system = await maintenance_system(resources, executor_id="executor", executor=executor,
         executor_descriptor=executor.descriptor("executor"), writer_grants=WRITE_GRANTS)
@@ -579,7 +632,7 @@ async def concrete_application(tmp_path, monkeypatch, request, portable_acquisit
         await control.shutdown()
 
 
-async def concrete_resources(tmp_path, monkeypatch, *, committed_tree,
+async def concrete_resources(tmp_path, monkeypatch, *, committed_tree, channel=False,
                              journal_name="application.sqlite"):
     """The fixture's real Git/journal/gate world, also reopened by the rehearsal.
 
@@ -657,10 +710,16 @@ async def concrete_resources(tmp_path, monkeypatch, *, committed_tree,
         return await original_run(self, *args, **kwargs)
 
     monkeypatch.setattr(GitProcess, "run", portable_git)
+    if channel and fresh:
+        await channel_base(authority)
     base = authority.resolve_ref("refs/heads/main")
     # Pin the actual immutable authority blob, exactly as assembly must do.
+    from constructicon.api.plan_manifest_application import channel_reply_checks
+    from constructicon.core.maintenance import CHANNEL_TARGET_PATH, ChannelReplyRequest
+
     source = await GitProcess(authority.git_executable, ProcessLimits()).run(
-        "show", f"{base}:scripts/regen_plan_manifest.py", cwd=repo,
+        "show", f"{base}:{CHANNEL_TARGET_PATH if channel else 'scripts/regen_plan_manifest.py'}",
+        cwd=repo,
     )
     inventory = await GitProcess(authority.git_executable, ProcessLimits()).run(
         "ls-tree", "-r", "-z", base, cwd=repo,
@@ -670,11 +729,12 @@ async def concrete_resources(tmp_path, monkeypatch, *, committed_tree,
         launcher=launch)
     gate = await ContainedGateRunner.create(journal=journal, authority=authority,
         root=tmp_path / "gate-acquisitions", target_ref="refs/heads/main", provider_id="gate",
-        launcher=launch, checks=maintenance_checks(
+        launcher=launch, checks=(channel_reply_checks if channel else maintenance_checks)(
             source, hashlib.sha256(source).hexdigest(), inventory,
             authority.environment.object_format,
         ))
-    request = PlanManifestRequest(repository=authority.repository_id, target_ref=gate.target_ref,
+    request = (ChannelReplyRequest if channel else PlanManifestRequest)(
+        repository=authority.repository_id, target_ref=gate.target_ref,
         base_commit=base, target_sha256=hashlib.sha256(source).hexdigest(),
         check_set_hash=gate.check_set_hash)
     resources = MaintenanceResources(journal, authority, workspace, gate, request, source)

@@ -13,8 +13,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from constructicon.core.address import GitSha
 from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import parse_json_value
-from constructicon.core.maintenance import TARGET_PATH, VECTOR_PATH
+from constructicon.core.maintenance import CHANNEL_TARGET_PATH, TARGET_PATH, VECTOR_PATH
 from constructicon.substrate.executors.linux import ProcessLimits
+from constructicon.substrate.gates import channel_reply
 from constructicon.substrate.git.process import GitProcess
 
 SOURCE_FILES = (TARGET_PATH, "tests/test_plan_manifest_contribution.py",
@@ -24,6 +25,11 @@ SOURCE_HASHES = {
     SOURCE_FILES[1]: "2460fe133113aaf1f6b8756a624fb73e0765295d0912dc9402ac0fc2f396399c",
     SOURCE_FILES[2]: "17cae803579f8ec4ebf1518a2beaa7533d0fc3cd16068c59cac55bbe92c7e28e",
 }
+# The channel task pins its one target blob at preparation; its trusted oracle
+# is hashed by the application revision and embedded whole in the check set.
+CHANNEL_SOURCE_FILES = (CHANNEL_TARGET_PATH,)
+PLAN_PURPOSE = "plan-manifest-maintenance"
+CHANNEL_PURPOSE = "channel-stored-reply"
 CONFIG = (
     b"[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = true\n"
     b"\tsharedRepository = 0600\n"
@@ -39,6 +45,19 @@ class SourcePin(BaseModel):
     target_ref: str = Field(pattern=r"^refs/heads/[A-Za-z0-9/_-]+$")
     config_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     sources: dict[str, str]
+
+
+def pinned_purpose(pin: SourcePin) -> str:
+    """The pinned source set names exactly one of the two fixed tasks.
+
+    The pin wire is unchanged: a plan-manifest pin keeps its three consumers,
+    and a channel pin names only its target. Anything else is refused.
+    """
+    if set(pin.sources) == set(SOURCE_FILES):
+        return PLAN_PURPOSE
+    if set(pin.sources) == set(CHANNEL_SOURCE_FILES):
+        return CHANNEL_PURPOSE
+    raise ContractViolation("maintenance source pin omits the ordinary consumer")
 
 
 def private_root(root: Path) -> None:
@@ -103,8 +122,11 @@ async def git(root: Path, *args: str) -> bytes:
 
 async def prepare_source(
     root: Path, bundle: Path, *, bundle_sha256: str, base_commit: GitSha, target_ref: str,
+    purpose: str = PLAN_PURPOSE,
 ) -> SourcePin:
     """Require a new private root and review-pinned bytes before Git parses them."""
+    if purpose not in {PLAN_PURPOSE, CHANNEL_PURPOSE}:
+        raise ContractViolation("maintenance preparation names no fixed task")
     if root.exists() or not root.is_absolute() or root.parent.resolve() != root.parent:
         raise ContractViolation("maintenance preparation requires a fresh canonical root")
     raw = read_bounded(bundle, MAX_BUNDLE_BYTES)
@@ -132,13 +154,21 @@ async def prepare_source(
     await git(root / "authority.git", "update-ref", target_ref, str(base_commit))
     await git(root / "authority.git", "symbolic-ref", "HEAD", target_ref)
     sources = {}
-    for name in SOURCE_FILES:
+    for name in (SOURCE_FILES if purpose == PLAN_PURPOSE else ()):
         source = await git(root / "authority.git", "show", f"{base_commit}:{name}")
         # The ordinary consumer and trusted harness must be the installed exam.
         if hashlib.sha256(source).hexdigest() != SOURCE_HASHES[name]:
             raise ContractViolation("maintenance base does not contain the installed consumer")
         sources[name] = hashlib.sha256(source).hexdigest()
-    if await git(root / "authority.git", "ls-tree", str(base_commit), "--", VECTOR_PATH):
+    if purpose == CHANNEL_PURPOSE:
+        source = await git(root / "authority.git", "show", f"{base_commit}:{CHANNEL_TARGET_PATH}")
+        try:
+            # A finished #327 removes this task's value instead of being re-proved.
+            channel_reply.expected_module(source)
+        except channel_reply.ExtractionRefusal as error:
+            raise ContractViolation(f"maintenance channel base refused: {error.code}") from None
+        sources[CHANNEL_TARGET_PATH] = hashlib.sha256(source).hexdigest()
+    elif await git(root / "authority.git", "ls-tree", str(base_commit), "--", VECTOR_PATH):
         raise ContractViolation("maintenance base already has a vector contribution")
     pin = SourcePin(bundle_sha256=bundle_sha256, base_commit=base_commit, target_ref=target_ref,
         config_sha256=hashlib.sha256((root / "authority.git/config").read_bytes()).hexdigest(),
@@ -153,8 +183,7 @@ async def inspect_source(root: Path) -> SourcePin:
     pin = SourcePin.model_validate(parse_json_value(
         read_bounded(root / "source-pin.json", 8192).decode("utf-8", errors="strict"),
     ))
-    if set(pin.sources) != set(SOURCE_FILES):
-        raise ContractViolation("maintenance source pin omits the ordinary consumer")
+    purpose = pinned_purpose(pin)
     for name in ("source-pin.json", "reviewed.bundle", "maintenance.sqlite",
                  "maintenance.sqlite-wal", "maintenance.sqlite-shm",
                  "maintenance-attempt.json", "maintenance-result.json"):
@@ -204,10 +233,10 @@ async def inspect_source(root: Path) -> SourcePin:
     base = (await git(repo, "rev-parse", "--verify", pin.target_ref)).strip().decode()
     if base != pin.base_commit:
         raise ContractViolation("maintenance authority base drifted")
-    for name in SOURCE_FILES:
+    for name in pin.sources:
         source = await git(repo, "show", f"{pin.base_commit}:{name}")
         if hashlib.sha256(source).hexdigest() != pin.sources[name] or (
-            hashlib.sha256(source).hexdigest() != SOURCE_HASHES[name]
+            purpose == PLAN_PURPOSE and hashlib.sha256(source).hexdigest() != SOURCE_HASHES[name]
         ):
             raise ContractViolation("maintenance immutable consumer differs")
     return pin

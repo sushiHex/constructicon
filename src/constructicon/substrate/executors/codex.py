@@ -79,7 +79,7 @@ from constructicon.core.executor import (
 )
 from constructicon.core.grants import EffectiveGrants, Posture
 from constructicon.core.identity import Digest, canonical_json, digest, parse_json_value
-from constructicon.core.maintenance import MaintenanceAttemptAuthorization
+from constructicon.core.maintenance import MAINTENANCE_AUTHORIZATIONS, MaintenanceAuthorization
 from constructicon.core.metering import MeteringWriter
 from constructicon.core.native_operator import (
     NativeEgressIdentityV1,
@@ -2319,18 +2319,20 @@ class CodexOperatorProvider:
         closure: AcquisitionClosure | None = None,
         egress: EgressPolicy | None = None,
         qualification: QualificationAuthorization | None = None,
-        maintenance: MaintenanceAttemptAuthorization | None = None,
+        maintenance: MaintenanceAuthorization | None = None,
     ) -> None:
         if qualification is not None and maintenance is not None:
             raise ContractViolation("qualification and maintenance authorizations are exclusive")
         if qualification is not None and not isinstance(qualification, QualificationAuthorization):
             raise ContractViolation("qualification requires its separate authorization")
         if maintenance is not None:
-            if not isinstance(maintenance, MaintenanceAttemptAuthorization):
+            # One of exactly two closed task types, each revalidated as itself.
+            kinds = [kind for kind in MAINTENANCE_AUTHORIZATIONS if isinstance(maintenance, kind)]
+            if len(kinds) != 1:
                 raise ContractViolation("maintenance requires its separate authorization")
             # model_copy can bypass validators; assembly trusts only revalidated bytes.
             try:
-                maintenance = MaintenanceAttemptAuthorization.model_validate_json(
+                maintenance = kinds[0].model_validate_json(
                     maintenance.model_dump_json(),
                 )
             except ValueError as exc:

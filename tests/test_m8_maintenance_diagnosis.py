@@ -175,7 +175,16 @@ def test_historical_helper_pins_and_successor_source_are_distinct():
             )
             newer = re.search(r"^SCHEMA10_DIAGNOSTIC_SHA256=([0-9a-f]{64})$", schema10, re.M)
             assert newer is not None and newer.group(1) != current.group(1)
-            current = newer
+            assert newer.group(1) == (
+                "0e89e8f6c6cfcaf37d1a785dd1b2e1198d2d101c6605361dcc682e3c36c637b8"
+            )
+            # The channel stored-reply task adds an explicit second case; its
+            # delivery record pins the new bytes without rewriting the older pins.
+            channel = (ROOT / "docs/plans/handoffs/maintenance-channel-reply-delivery.md"
+                       ).read_text(encoding="utf-8")
+            newest = re.search(r"^CHANNEL_DIAGNOSTIC_SHA256=([0-9a-f]{64})$", channel, re.M)
+            assert newest is not None and newest.group(1) != newer.group(1)
+            current = newest
         assert hashlib.sha256(raw).hexdigest() == current.group(1)
 
 

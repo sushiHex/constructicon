@@ -28,7 +28,7 @@ from pydantic import ValidationError
 from constructicon.core.errors import ContractViolation
 from constructicon.core.grants import EffectiveGrants, ModelSelection, Posture
 from constructicon.core.identity import Digest, canonical_json, digest
-from constructicon.core.maintenance import MaintenanceAttemptAuthorization
+from constructicon.core.maintenance import MaintenanceAuthorization
 from constructicon.core.native_operator import (
     NativeEgressIdentityV1,
     NativeOperatorExecutorProfileV3,
@@ -264,7 +264,7 @@ def _operator_provider(
     host: HostSession, qualification: QualificationAuthorization | None,
     profile: NativeOperatorExecutorProfileV3, catalog: tuple[str, ...],
     shared_launcher: LinuxLauncher | None = None,
-    *, maintenance: MaintenanceAttemptAuthorization | None = None,
+    *, maintenance: MaintenanceAuthorization | None = None,
 ) -> CodexOperatorProvider:
     if sys.platform != "linux":
         raise ContractViolation("the host assembly requires the Linux host")
@@ -330,7 +330,7 @@ def _operator_provider(
 
 def maintenance_operator_provider(
     host: HostSession, workspace: ContainedWriteWorkspaceProvider,
-    maintenance: MaintenanceAttemptAuthorization,
+    maintenance: MaintenanceAuthorization,
 ) -> CodexOperatorProvider:
     """Same unavailable WRITE host provider, with one separate exact application attempt."""
     if not isinstance(workspace, ContainedWriteWorkspaceProvider):

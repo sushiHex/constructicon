@@ -24,7 +24,7 @@ from constructicon.api.plan_manifest_application import maintenance_graph
 from constructicon.core.address import ExecutionPath
 from constructicon.core.envelope import utc_now
 from constructicon.core.identity import digest
-from constructicon.core.maintenance import MaintenanceAttemptAuthorization, MaintenanceCapabilityPin
+from constructicon.core.maintenance import MaintenanceAuthorization, MaintenanceCapabilityPin
 from constructicon.core.manifest import source_graph_hash_for
 from constructicon.core.run import RunStatus
 from constructicon.substrate.executors.codex import CodexOperatorProvider, launch_identity
@@ -138,7 +138,7 @@ class TaskAttempt:
     resources: object
     scripted: ScriptedWorkerLauncher
     executor: CodexOperatorProvider
-    authorization: MaintenanceAttemptAuthorization
+    authorization: MaintenanceAuthorization
     configuration: str
     program: str
     blob: bytes
@@ -165,6 +165,32 @@ async def prepare_task_attempt(
         + "print('task callback completed')\n"
     )
     assert len(blob) <= 32768 and len(program.encode()) <= process_launcher.limits.input_bytes
+    resources, executor, scripted, configuration, authorization = await scripted_task_executor(
+        resources, process_launcher, binding, tmp_path, program, authorization=authorization,
+        authorization_id=authorization_id, key=key, attempt_record=attempt_record)
+    configure_executor_guard(monkeypatch)
+    capture = []
+    original_capture = resources.workspace.capture
+
+    async def observe_capture(workspace, message):
+        candidate = await original_capture(workspace, message)
+        capture.append(candidate)
+        return candidate
+
+    monkeypatch.setattr(resources.workspace, "capture", observe_capture)
+    return TaskAttempt(resources, scripted, executor, authorization, configuration, program,
+                       blob, capture)
+
+
+async def scripted_task_executor(
+    resources, process_launcher, binding, tmp_path, program, *, task=None,
+    authorization=None, authorization_id="full-tree-task-witness", key="one-task",
+    attempt_record=None,
+):
+    """The real adapter, scripted native peer and the task's own exact authorization."""
+    from constructicon.api.plan_manifest_application import PLAN_MANIFEST
+
+    task = PLAN_MANIFEST if task is None else task
     prototype = bare_launcher()
     scripted = ScriptedWorkerLauncher(
         **{name: getattr(prototype, name) for name in (
@@ -196,11 +222,12 @@ async def prepare_task_attempt(
         catalog=CONTAINED_PYTHON_CATALOG, acquisition_root=tmp_path / "executor",
         binding_store=binding[1], closure=binding[2])
     graph = maintenance_graph(executor_id="executor", workspace_id=resources.workspace.provider_id,
-        gate_id=resources.gate.provider_id, writer_grants=GRANTS)
+        gate_id=resources.gate.provider_id, writer_grants=GRANTS, task=task)
     if authorization is None:
-        authorization = MaintenanceAttemptAuthorization(
+        # A supplied authorization (the rehearsal's retained one) is installed unchanged.
+        authorization = task.authorization_model(
             authorization_id=authorization_id, actor_id="operator:test",
-            idempotency_key=key, scope=entry.WRITER_SCOPE, binding="executor",
+            idempotency_key=key, scope=task.writer_scope, binding="executor",
             source_graph_hash=source_graph_hash_for(graph), capability_id="executor",
             revision=executor.identity.revision,
             operator_binding_digest=executor.identity.store.operator_binding_digest,
@@ -215,18 +242,7 @@ async def prepare_task_attempt(
                                          revision=resources.gate.revision),
         )
     executor.maintenance = authorization
-    configure_executor_guard(monkeypatch)
-    capture = []
-    original_capture = resources.workspace.capture
-
-    async def observe_capture(workspace, message):
-        candidate = await original_capture(workspace, message)
-        capture.append(candidate)
-        return candidate
-
-    monkeypatch.setattr(resources.workspace, "capture", observe_capture)
-    return TaskAttempt(resources, scripted, executor, authorization, configuration, program,
-                       blob, capture)
+    return resources, executor, scripted, configuration, authorization
 
 
 async def exercise_task_entry(

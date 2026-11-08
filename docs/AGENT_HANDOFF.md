@@ -16,6 +16,36 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Stored-reply operator composition
+
+The [operator package](plans/handoffs/maintenance-channel-reply-session.md)
+composes the existing compiler, frozen N4 lane boundaries and T5 transport with
+the new task's source/preview checks and historical inspector. Credential-free
+producer tests cover preparation, a task-specific preview, joined accepting and
+no-op entry teardown, inherited withdrawal receipt and retained authority bytes.
+The report CLI carries either channel outcome through the transport with its
+task purpose; a mismatched RunId produces a named refusal, with source copies
+unchanged. The packet remains an observation rather than authentication of an
+unsealed result sidecar or proof of physical cleanup.
+They substitute the existing platform custody/process seams and establish no
+host qualification, physical cleanup or spending authority. Unresolved inputs
+refuse an ordinary build; template output is never a host-ready package. The
+original installer blocks keep their plain Bash context and separate receipts.
+
+## Second fixed maintenance task
+
+The [delivery record](plans/handoffs/maintenance-channel-reply-delivery.md) adds
+the closed `channel-stored-reply` task beside the unchanged plan-manifest task.
+A golden captured from `b0d2c0b`'s source checks the plan-manifest
+authorization wire, model, digest and schema. A stdlib oracle accepts only the
+one exact whole-module extraction of `_stored_reply`. The positive candidate is
+hand-written test data, calibrated by a fresh-interpreter differential battery.
+`in_process.py` itself is not refactored; that remains #327's future attempt.
+Both application and adapter revisions changed, so no C490 pin carries over. A
+new reviewed installation precedes any live attempt. The port guard's fault
+text is proved only by tree equality, because coherent damage cannot reach it.
+No Linux or Python 3.12 worker run is claimed.
+
 ## Verified CI release archives
 
 The bounded [release-availability slice](https://github.com/sushiHex/constructicon/issues/395)

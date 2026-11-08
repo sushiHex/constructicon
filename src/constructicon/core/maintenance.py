@@ -1,9 +1,14 @@
-"""Closed data contracts for the fixed plan-manifest maintenance application."""
+"""Closed data contracts for the two fixed maintenance tasks.
+
+The tasks form a fixed two-case table selected by the authorization's purpose
+literal: ``plan-manifest-maintenance`` (one absent data file) and
+``channel-stored-reply`` (one exact helper extraction). There is no registry.
+"""
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Self
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -20,6 +25,7 @@ from constructicon.core.identity import Digest, canonical_json
 
 VECTOR_PATH = "tests/vectors/plan_manifest.json"
 TARGET_PATH = "scripts/regen_plan_manifest.py"
+CHANNEL_TARGET_PATH = "src/constructicon/substrate/channels/in_process.py"
 
 
 class PlanManifestRequest(BaseModel):
@@ -51,6 +57,42 @@ class PlanManifestResult(BaseModel):
     render_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class ChannelReplyRequest(BaseModel):
+    """Trusted assembly data for the channel stored-reply extraction task.
+
+    The base target blob is pinned during preparation; no instruction or exam
+    is caller-selected. Its shape is disjoint from ``PlanManifestRequest``.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    schema_version: Literal[1] = 1
+    repository: str = Field(min_length=1, max_length=4096)
+    target_ref: str = Field(pattern=r"^refs/heads/[A-Za-z0-9/_-]+$", max_length=256)
+    base_commit: GitSha = Field(pattern=r"^[0-9a-f]{40}([0-9a-f]{24})?$")
+    target_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    check_set_hash: Digest
+    target_path: Literal["src/constructicon/substrate/channels/in_process.py"] = (
+        "src/constructicon/substrate/channels/in_process.py"
+    )
+
+
+class ChannelReplyResult(BaseModel):
+    """Acceptance proves one base parent plus one exact in-place modification.
+
+    Its own type and meaning: never a plan-manifest result. This does not claim
+    installation, merge, or general semantic equivalence.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    run_id: RunId
+    candidate: GitRef
+    evaluation: MergeEvaluation
+    base_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class MaintenanceCapabilityPin(BaseModel):
     """An exact application provider descriptor checked by trusted assembly."""
 
@@ -60,18 +102,17 @@ class MaintenanceCapabilityPin(BaseModel):
     revision: Digest
 
 
-class MaintenanceAttemptAuthorization(BaseModel):
-    """Owner configuration for one application attempt while the executor stays unavailable.
+class _AttemptAuthorization(BaseModel):
+    """The exact-attempt law both closed tasks share; only its two subclasses are used.
 
-    Assembly proves the request, application and companion provider pins before
-    admission or recovery. Acquisition independently checks its exact executor
-    invocation and reserves the existing exclusive attempt record. Reservation
-    alone is not dispatch evidence. This is separate from N5 qualification.
+    Each subclass narrows ``purpose`` to its own literal and ``request`` to its
+    own model. Redeclaring a field keeps its position, so the plan-manifest
+    wire and field order are unchanged.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    purpose: Literal["plan-manifest-maintenance"] = "plan-manifest-maintenance"
+    purpose: str
     authorization_id: str = Field(strict=True, min_length=1, max_length=256)
     actor_id: str = Field(strict=True, min_length=1, max_length=256)
     idempotency_key: str = Field(strict=True, min_length=1, max_length=IDEMPOTENCY_KEY_MAX_LENGTH)
@@ -86,7 +127,7 @@ class MaintenanceAttemptAuthorization(BaseModel):
     not_after: AwareDatetime
     grants: EffectiveGrants
     attempt_record: str = Field(strict=True, min_length=1, max_length=4096)
-    request: PlanManifestRequest
+    request: BaseModel
     application_revision: Digest
     workspace: MaintenanceCapabilityPin
     gate: MaintenanceCapabilityPin
@@ -99,7 +140,7 @@ class MaintenanceAttemptAuthorization(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _write_grants(self) -> MaintenanceAttemptAuthorization:
+    def _write_grants(self) -> Self:
         grants = self.grants
         if (
             grants.posture is not Posture.WRITE
@@ -147,3 +188,34 @@ class MaintenanceAttemptAuthorization(BaseModel):
             (now < self.not_after, "an expired authorization"),
         )
         return tuple(f"maintenance refuses {fault}" for held, fault in checks if not held)
+
+
+class MaintenanceAttemptAuthorization(_AttemptAuthorization):
+    """Owner configuration for one application attempt while the executor stays unavailable.
+
+    Assembly proves the request, application and companion provider pins before
+    admission or recovery. Acquisition independently checks its exact executor
+    invocation and reserves the existing exclusive attempt record. Reservation
+    alone is not dispatch evidence. This is separate from N5 qualification.
+    """
+
+    purpose: Literal["plan-manifest-maintenance"] = "plan-manifest-maintenance"
+    request: PlanManifestRequest
+
+
+class ChannelReplyAttemptAuthorization(_AttemptAuthorization):
+    """The same exact-attempt law for the channel stored-reply task only.
+
+    A distinct closed type: it never admits the plan-manifest task, and a
+    plan-manifest authorization never admits this one.
+    """
+
+    purpose: Literal["channel-stored-reply"] = "channel-stored-reply"
+    request: ChannelReplyRequest
+
+
+# The fixed two-case table's authorization types, in no extensible registry.
+MaintenanceAuthorization = MaintenanceAttemptAuthorization | ChannelReplyAttemptAuthorization
+MAINTENANCE_AUTHORIZATIONS: tuple[
+    type[MaintenanceAttemptAuthorization], type[ChannelReplyAttemptAuthorization],
+] = (MaintenanceAttemptAuthorization, ChannelReplyAttemptAuthorization)

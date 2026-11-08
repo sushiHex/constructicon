@@ -416,6 +416,62 @@ async def test_native_maintenance_recipe_runs_its_fixed_exam_and_refuses_scope(
     assert runner.authority.resolve_ref(runner.target_ref) == base
 
 
+async def test_native_channel_reply_exam_runs_its_stdlib_oracle_and_refuses(launcher, tmp_path):
+    """The embedded channel oracle in the real contained Python 3.12 gate: accept, refuse."""
+    from constructicon.api.plan_manifest_application import channel_reply_checks
+    from constructicon.core.maintenance import CHANNEL_TARGET_PATH
+    from tests.substrate.test_channel_reply_oracle import BASE, CANDIDATE
+
+    journal = RecordingJournal()
+    runner = unqualified(tmp_path, launcher, journal=journal)
+    authority = runner.authority
+
+    def write(entries: dict[str, bytes], parent: str, message: str) -> GitSha:
+        authority._run("read-tree", "--empty")
+        for name, raw in entries.items():
+            oid = authority._run("hash-object", "-w", "--stdin",
+                                 input_text=raw.decode("utf-8")).stdout.strip()
+            authority._run("update-index", "--add", "--cacheinfo", f"100644,{oid},{name}")
+        tree = authority._run("write-tree").stdout.strip()
+        return GitSha(authority._run("commit-tree", tree, "-p", parent,
+                                     input_text=message + "\n").stdout.strip())
+
+    old = authority.resolve_ref(runner.target_ref)
+    files = {"README.txt": b"unchanged sibling\n", CHANNEL_TARGET_PATH: BASE}
+    base = write(files, old, "channel base")
+    authority._run("update-ref", runner.target_ref, base, old)
+    accepted = write({**files, CHANNEL_TARGET_PATH: CANDIDATE}, base, "extraction")
+    refused = write({**files, CHANNEL_TARGET_PATH: CANDIDATE.replace(
+        b"if max_batch <= 0:", b"if max_batch < 0:")}, base, "extraction plus an edit")
+    source = authority._run("show", f"{base}:{CHANNEL_TARGET_PATH}").stdout.encode()
+    assert source == BASE
+    inventory = authority._run("ls-tree", "-r", "-z", base).stdout.encode()
+    runner.checks = channel_reply_checks(source, hashlib.sha256(source).hexdigest(), inventory,
+                                         authority.environment.object_format)
+    runner = await qualify(runner)
+    acquired = await started(runner)
+    try:
+        for proposed, ok in ((accepted, True), (refused, False)):
+            result = await acquired.resource.verify(proposed)
+            assert result.subject is not None and result.subject.candidate == proposed
+            assert [check.name for check in result.checks] == [
+                "channel-stored-reply-exact-extraction"]
+            assert result.checks[0].status == ("passed" if ok else "failed")
+            assert result.ok is ok
+            if ok:
+                report = json.loads(result.checks[0].detail)
+                assert report["passed"] is True
+                # The receipt is the contained worker's interpreter, not the host's.
+                assert report["python"].startswith("3.12")
+                assert report["candidate_sha256"] == hashlib.sha256(CANDIDATE).hexdigest()
+        assert len(journal.drafts) == 2
+        assert all(draft.check_set_hash == runner.check_set_hash for _, draft in journal.drafts)
+        assert runner.authority.resolve_ref(runner.target_ref) == base
+    finally:
+        await runner.close(acquired, "discard")
+    assert runner.closure.is_closed(acquired.resource.paths)
+
+
 @pytest.mark.parametrize("stream", ["stdout", "stderr"])
 async def test_native_output_overflow_cannot_pass(launcher, tmp_path, stream):
     launch = replace(launcher, limits=replace(launcher.limits, stdout_bytes=2048))

@@ -22,7 +22,12 @@ from constructicon.core.address import ExecutionPath, RunId, ScopePath
 from constructicon.core.effect import MergeSubject
 from constructicon.core.envelope import GitRef
 from constructicon.core.identity import actor_id_is_canonical, parse_json_value
-from constructicon.core.maintenance import PlanManifestRequest, PlanManifestResult
+from constructicon.core.maintenance import (
+    ChannelReplyRequest,
+    ChannelReplyResult,
+    PlanManifestRequest,
+    PlanManifestResult,
+)
 from constructicon.core.qualification_write import CallbackObservation
 from constructicon.core.workspace import acquisition_id_for, lease_id_for
 from constructicon.substrate.journal._sqlite_attestations import attestation_for_id
@@ -44,6 +49,16 @@ from constructicon.substrate.journal.maintenance_evidence import (
 )
 
 GRAPH = "constructicon-plan-manifest-maintenance"
+CHANNEL_GRAPH = "constructicon-channel-stored-reply"
+# Exactly two explicit cases, keyed by graph: (attempt purpose, request, result,
+# trusted check name). Any other graph or purpose is refused, never widened.
+_CASES: dict[str, tuple[str, type[PlanManifestRequest] | type[ChannelReplyRequest],
+                        type[PlanManifestResult] | type[ChannelReplyResult], str]] = {
+    GRAPH: ("plan-manifest-maintenance", PlanManifestRequest, PlanManifestResult,
+            "plan-manifest-trusted-vectors"),
+    CHANNEL_GRAPH: ("channel-stored-reply", ChannelReplyRequest, ChannelReplyResult,
+                    "channel-stored-reply-exact-extraction"),
+}
 MAX_JSON_BYTES = 1024 * 1024
 MAX_EVENTS = 256
 MAX_ATTESTATIONS = 32
@@ -131,7 +146,8 @@ def _copy_snapshot(snapshot: Path, scratch: Path) -> set[str]:
     return present
 
 
-def _attempt(path: Path, run_id: RunId, authorization_id: str) -> dict[str, object]:
+def _attempt(path: Path, run_id: RunId, authorization_id: str,
+             purposes: list[str]) -> dict[str, object]:
     record = _object(_read(path, MAX_JSON_BYTES))
     required = {"authorization_id", "run_id", "epoch", "acquisition_id", "purpose", "phase", "at"}
     phase = record.get("phase")
@@ -139,9 +155,11 @@ def _attempt(path: Path, run_id: RunId, authorization_id: str) -> dict[str, obje
     keys = required | ({"dispatch", "facts"} if phase == "outcome" else set())
     _require(set(record) in (keys, keys | {"callbacks"}))
     _require(record["authorization_id"] == authorization_id and record["run_id"] == run_id)
-    _require(record["purpose"] == "plan-manifest-maintenance")
+    graphs = [graph for graph, case in _CASES.items() if record["purpose"] == case[0]]
+    _require(len(graphs) == 1)
+    purposes.append(_CASES[graphs[0]][0])
     _require(type(record["epoch"]) is int and record["epoch"] == 1)
-    path_identity = ExecutionPath(scope=ScopePath(segments=(GRAPH, "writer")))
+    path_identity = ExecutionPath(scope=ScopePath(segments=(graphs[0], "writer")))
     logical = lease_id_for(run_id, path_identity, "executor")
     _require(record["acquisition_id"] == acquisition_id_for(logical, 1))
     at = datetime.fromisoformat(record["at"])
@@ -190,14 +208,21 @@ def _command(path: Path, run_id: RunId) -> str:
     raise _Refused
 
 
-def _result(path: Path, run_id: RunId) -> str:
+def _result(path: Path, run_id: RunId, purposes: list[str]) -> str:
     record = _object(_read(path, 65536))
-    _require(set(record) == {"schema_version", "meaning", "authorization_digest", "result"})
+    fields = {"schema_version", "meaning", "authorization_digest", "result"}
+    channel = "purpose" in record
+    _require(set(record) == (fields | {"purpose"} if channel else fields))
+    _require(not channel or record["purpose"] == _CASES[CHANNEL_GRAPH][0])
+    purposes.append(_CASES[CHANNEL_GRAPH if channel else GRAPH][0])
     _require(type(record["schema_version"]) is int and record["schema_version"] == 1)
     _require(record["meaning"] == "historical-application-acceptance")
     _require(isinstance(record["authorization_digest"], str) and re.fullmatch(
         r"sha256:[0-9a-f]{64}", record["authorization_digest"]) is not None)
-    result = PlanManifestResult.model_validate(record["result"])
+    result: PlanManifestResult | ChannelReplyResult = (
+        ChannelReplyResult.model_validate(record["result"]) if channel
+        else PlanManifestResult.model_validate(record["result"])
+    )
     _require(result.run_id == run_id and re.fullmatch(
         r"[0-9a-f]{40}([0-9a-f]{24})?", result.candidate.commit) is not None)
     return "historical-acceptance-observed"
@@ -237,7 +262,7 @@ def _connection(path: Path) -> sqlite3.Connection:
     return connection
 
 
-def _journal(path: Path, run_id: RunId) -> dict[str, object]:
+def _journal(path: Path, run_id: RunId, purposes: list[str]) -> dict[str, object]:
     connection = _connection(path)
     try:
         with read_snapshot(connection):
@@ -246,8 +271,11 @@ def _journal(path: Path, run_id: RunId) -> dict[str, object]:
             if facts is None:
                 return {"observation": "missing"}
             world, _, _ = facts
-            _require(world.manifest.source_graph.name == GRAPH)
-            request = PlanManifestRequest.model_validate(world.inputs["request"])
+            graph = world.manifest.source_graph.name
+            _require(graph in _CASES)
+            purposes.append(_CASES[graph][0])
+            _, request_model, _, check_name = _CASES[graph]
+            request = request_model.model_validate(world.inputs["request"])
             status = connection.execute("SELECT status FROM runs WHERE run_id = ?",
                                         (run_id,)).fetchone()[0]
             rows = connection.execute("SELECT * FROM events WHERE run_id = ? ORDER BY seq LIMIT ?",
@@ -258,7 +286,7 @@ def _journal(path: Path, run_id: RunId) -> dict[str, object]:
             for row in rows:
                 event = stored_event_from_row(connection, row)
                 for name in nodes:
-                    expected = ExecutionPath(scope=ScopePath(segments=(GRAPH, name)))
+                    expected = ExecutionPath(scope=ScopePath(segments=(graph, name)))
                     if event.path != expected:
                         continue
                     if event.kind == "NodeStarted":
@@ -279,7 +307,7 @@ def _journal(path: Path, run_id: RunId) -> dict[str, object]:
             candidate = None
             for name in nodes:
                 checkpoint = stored_checkpoint_for(connection, run_id=run_id,
-                    path=ExecutionPath(scope=ScopePath(segments=(GRAPH, name))))
+                    path=ExecutionPath(scope=ScopePath(segments=(graph, name))))
                 if checkpoint is not None:
                     nodes[name]["checkpoint"] = "validated"
                     if name == "writer":
@@ -307,7 +335,7 @@ def _journal(path: Path, run_id: RunId) -> dict[str, object]:
                 for check in attestation.checks:
                     _require(len(checks) < 8)
                     checks.append({"name": check.name if check.name in {
-                        "plan-manifest-trusted-vectors", "snapshot-integrity"} else "unknown",
+                        check_name, "snapshot-integrity"} else "unknown",
                                    "status": check.status})
             return {"observation": "selected-facts-validated", "status": status,
                     "command_origin": ("validated" if world.creation_plan is not None
@@ -335,21 +363,26 @@ def analyze_snapshot(snapshot_dir: Path, run_id: RunId,
             stage = "journal"
             _require("maintenance.sqlite" in present or not any(
                 name in present for name in FILES if name.startswith("maintenance.sqlite-")))
+            # Each section names its task independently; they must all name one.
+            purposes: list[str] = []
             if "maintenance.sqlite" in present:
-                report["journal"] = _journal(scratch / "maintenance.sqlite", run_id)
+                report["journal"] = _journal(scratch / "maintenance.sqlite", run_id, purposes)
             stage = "attempt"
             if "maintenance-attempt.json" in present:
                 report["attempt"] = _attempt(scratch / "maintenance-attempt.json", run_id,
-                                             authorization_id)
+                                             authorization_id, purposes)
             if "maintenance-attempt.json.next" in present:
-                _attempt(scratch / "maintenance-attempt.json.next", run_id, authorization_id)
+                _attempt(scratch / "maintenance-attempt.json.next", run_id, authorization_id,
+                         purposes)
                 report["pending_attempt"] = "identity-matched-not-published"
             stage = "command"
             if "application-run.json" in present:
                 report["command"] = _command(scratch / "application-run.json", run_id)
             stage = "result"
             if "maintenance-result.json" in present:
-                report["result"] = _result(scratch / "maintenance-result.json", run_id)
+                report["result"] = _result(scratch / "maintenance-result.json", run_id, purposes)
+            stage = "task"
+            _require(len(set(purposes)) <= 1)
             stage = "output"
             _require(len(json.dumps(report).encode("utf-8")) <= MAX_REPORT_BYTES)
             return report

@@ -331,6 +331,54 @@ def test_cli_emits_exact_lf_bytes_at_the_cap_and_refuses_one_byte_over(layout, m
     assert len(over.stdout) < len(raw)
 
 
+def channel_world(root: Path) -> None:
+    """A channel-task journal and run, its stored result and command report."""
+    from tests.substrate.journal.test_maintenance_channel_diagnostic import (
+        CHANNEL_REQUEST,
+        _journal,
+        _result,
+    )
+
+    _journal(root, diagnostic.CHANNEL_GRAPH, CHANNEL_REQUEST)
+    root.chmod(0o700)
+    _result(root, purpose="channel-stored-reply")
+    (root / "application-run.json").write_text(json.dumps({"accepted": False, "run_id": RUN}),
+                                               encoding="utf-8")
+
+
+def test_a_channel_run_reads_as_its_own_task(layout, capsys):
+    root, out = layout
+    channel_world(root)
+    before = tree(root)
+    code, packet, _ = run_main(root, out, capsys)
+    assert code == 0 and packet["complete"] is True, packet
+    assert packet["purpose"] == "channel-stored-reply"
+    assert packet["result"] == {"observation": "historical-acceptance-observed",
+        "candidate_commit": packet["result"]["candidate_commit"],
+        "base_sha256": "a" * 64, "candidate_sha256": "b" * 64}
+    # A stored record beside an unfinished journal is still named a contradiction.
+    assert packet["outcome"] == "contradictory-evidence"
+    assert tree(root) == before
+
+
+def test_a_plan_run_names_its_purpose(layout, capsys):
+    root, out = layout
+    failed_world(root)
+    code, packet, _ = run_main(root, out, capsys)
+    assert code == 0 and packet["purpose"] == "plan-manifest-maintenance"
+
+
+def test_a_channel_result_beside_a_plan_journal_is_refused_as_another_task(layout, capsys):
+    from tests.substrate.journal.test_maintenance_channel_diagnostic import _result
+
+    root, out = layout
+    failed_world(root)
+    _result(root, purpose="channel-stored-reply")
+    code, packet, text = run_main(root, out, capsys)
+    assert code == 1 and packet["diagnostic_stage"] == "task"
+    assert_closed_refusal(packet, text, "diagnostic")
+
+
 def test_capture_refusal_is_closed(tmp_path, capsys):
     # No platform seam: production custody refuses here (Windows, or /tmp
     # ancestry on POSIX) and the packet names only the stage.
