@@ -32,6 +32,17 @@ mutation anchors was edited.
 
 ## Labels and limits
 
+The verdict follows the validated journal. `maintenance-result.json` is a
+sidecar the diagnostic only shape- and RunId-checks, so it never decides
+acceptance by its presence: `contribution-accepted` needs a succeeded run and
+this run's own positive attestation, and a stored acceptance the journal does
+not confirm is reported as `contradictory-evidence`. The packet is one
+LF-terminated record of at most 8192 bytes including that newline, emitted as a
+single binary write so Windows text-mode translation cannot exceed the bound.
+Integration review (root lane) found both gaps in the first head; focused
+tests now bind each, including the real CLI's raw bytes at and one byte over the
+cap.
+
 Leases are journal-recorded states, not physical quiescence. A target observed
 at the base is a current read, not proof that cleanup ran. Metering coverage is
 the projection's own, with estimate and charge unknown. A no-op names the

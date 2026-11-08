@@ -26,6 +26,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -240,8 +241,16 @@ def _status(value: object) -> str:
         else "unknown"
 
 
-def _outcome(status: str, result: dict[str, object],
-             nodes: dict[str, Any]) -> tuple[str, dict[str, object] | None]:
+def _outcome(status: str, result: dict[str, object], nodes: dict[str, Any],
+             attestation: dict[str, object]) -> tuple[str, dict[str, object] | None]:
+    """The verdict follows the validated journal, never the result file alone.
+
+    ``maintenance-result.json`` is a sidecar the diagnostic only shape- and
+    RunId-checks; it does not authenticate acceptance. Acceptance therefore
+    needs a succeeded run *and* this run's own positive journal attestation.
+    A stored acceptance that the journal does not confirm is named as a
+    contradiction rather than resolved either way.
+    """
     refusal = None
     for name in _NODES:
         failures = nodes[name]["failures"]
@@ -250,15 +259,33 @@ def _outcome(status: str, result: dict[str, object],
             refusal = {"node": name, "cause": failures[0]["cause"],
                        "source": "diagnostic-producer-mapped-node-failure"}
             break
-    if result["observation"] == "historical-acceptance-observed":
-        return "contribution-accepted", refusal
+    stored = result["observation"] == "historical-acceptance-observed"
+    confirmed = (attestation.get("observation") == "recorded" and attestation.get("ok") is True
+                 and attestation.get("created_by_this_run") is True)
+    if status == RunStatus.SUCCEEDED:
+        if stored and confirmed:
+            return "contribution-accepted", refusal
+        if stored:
+            return "contradictory-evidence", refusal
+        return "succeeded-without-stored-acceptance", refusal
+    if stored:
+        return "contradictory-evidence", refusal
     if status == RunStatus.FAILED:
         return "refused", refusal
     if status in {RunStatus.PENDING, RunStatus.RUNNING}:
         return "incomplete", refusal
-    if status == RunStatus.SUCCEEDED:
-        return "succeeded-without-stored-acceptance", refusal
     return "unknown", refusal
+
+
+def _encode(packet: dict[str, object]) -> bytes:
+    """The exact bytes printed, including the terminating newline."""
+    return (json.dumps(packet, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
+
+
+def _bounded(packet: dict[str, object]) -> bytes:
+    raw = _encode(packet)
+    _require(len(raw) <= MAX_PACKET_BYTES)
+    return raw
 
 
 def _report(root: Path, out: Path, command_report: Path, run_id: str,
@@ -315,7 +342,7 @@ def _report(root: Path, out: Path, command_report: Path, run_id: str,
         target = _target(root, request)
     with _stage("output"):
         status = _status(facts.get("status"))
-        outcome, refusal = _outcome(status, result, facts["nodes"])
+        outcome, refusal = _outcome(status, result, facts["nodes"], attestation)
         packet: dict[str, object] = {
             "schema_version": 1, "complete": True,
             "meaning": "selected-historical-run-facts-from-a-private-copy",
@@ -325,8 +352,7 @@ def _report(root: Path, out: Path, command_report: Path, run_id: str,
             "result": result, "metering": metering, "capability_accounting": accounting,
             "leases": leases, "attestation": attestation, "target": target,
         }
-        _require(len(json.dumps(packet, sort_keys=True, separators=(",", ":")).encode())
-                 <= MAX_PACKET_BYTES)
+        _bounded(packet)
     return packet
 
 
@@ -356,7 +382,17 @@ def main(argv: list[str] | None = None) -> int:
                         args.run_id, args.authorization_id)
     except Exception:
         packet = _refused("arguments")
-    print(json.dumps(packet, sort_keys=True, separators=(",", ":")))
+    # Exactly the bounded bytes, LF included, as one binary write: text-mode
+    # newline translation (CRLF on Windows) never changes the emitted record.
+    raw = _encode(packet)
+    binary = getattr(sys.stdout, "buffer", None)
+    sys.stdout.flush()
+    if binary is not None:
+        binary.write(raw)
+        binary.flush()
+    else:
+        sys.stdout.write(raw.decode("ascii"))
+        sys.stdout.flush()
     return 0 if packet["complete"] is True else 1
 
 

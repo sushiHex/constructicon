@@ -134,10 +134,15 @@ rehearsal acceptance is not a new contribution against current main.
 --root … --out … --command-report … --run-id … --authorization-id …` in-process,
 substituting on Windows only the capture custody/ctime predicates that the
 journal tests substitute. The shipped command itself refuses at `capture` on
-Windows. It prints one JSON object of at most 8 KiB holding fixed identifiers,
-digests and enums, never a host path, repository path or subprocess text:
+Windows. It writes one LF-terminated JSON record of at most 8 KiB (8192 bytes,
+newline included, as a single binary write) holding fixed identifiers, digests
+and enums, never a host path, repository path or subprocess text:
 
-- `outcome`: `contribution-accepted`, `refused`, `incomplete`,
+- `outcome` follows the validated journal, not the result file:
+  `contribution-accepted` needs a succeeded run and this run's own positive
+  journal attestation. A stored acceptance the journal does not confirm (a
+  failed or unfinished run, or no positive attestation) is
+  `contradictory-evidence`. Otherwise `refused`, `incomplete`,
   `succeeded-without-stored-acceptance` or `unknown`. `refusal` carries the
   diagnostic's producer-mapped `NodeFailed` cause, for example
   `{"node":"writer","cause":"capture-unchanged"}` for the no-op.

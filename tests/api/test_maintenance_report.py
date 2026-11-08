@@ -147,6 +147,94 @@ def test_hostile_records_yield_bounded_private_safe_packet_and_originals_unchang
     assert tree(root) == before
 
 
+def failed_world(root: Path) -> None:
+    """A failed run whose writer failure is producer-mapped, with its attempt and command."""
+    journal = _world(root)
+    root.chmod(0o700)
+    lease = start_test_run(journal, RUN, owner_id="fixture")
+    journal.append_event(lease, "NodeStarted", path=WRITER)
+    journal.append_event(lease, "NodeFailed", path=WRITER, payload={
+        "error_type": "ContractViolation",
+        "error": "maintenance captured candidate equals the pinned base"})
+    journal.transition_run(lease, expected=frozenset({RunStatus.RUNNING}),
+        target=RunStatus.FAILED, event_kind="RunFailed", payload={"error": "failed"})
+    _attempt(root)
+    (root / "application-run.json").write_text(json.dumps({"accepted": False, "run_id": RUN}),
+                                               encoding="utf-8")
+
+
+def stored_acceptance(root: Path) -> None:
+    """A shape-valid same-run sidecar; the diagnostic does not authenticate it."""
+    from constructicon.core.gates import MergeEvaluation
+    from constructicon.core.maintenance import PlanManifestResult
+    from tests.substrate.journal.test_maintenance_diagnostic import CANDIDATE
+
+    result = PlanManifestResult(run_id=RUN, candidate=CANDIDATE,
+        evaluation=MergeEvaluation(subject=None, attestation_id=None, checks=()),
+        input_sha256="a" * 64, render_sha256="b" * 64)
+    (root / "maintenance-result.json").write_text(json.dumps({"schema_version": 1,
+        "meaning": "historical-application-acceptance",
+        "authorization_digest": "sha256:" + "c" * 64,
+        "result": result.model_dump(mode="json")}), encoding="utf-8")
+
+
+def test_stored_acceptance_beside_a_failed_journal_is_a_named_contradiction(layout, capsys):
+    root, out = layout
+    failed_world(root)
+    stored_acceptance(root)
+    before = tree(root)
+    code, packet, _ = run_main(root, out, capsys)
+    assert code == 0 and packet["complete"] is True, packet
+    assert packet["status"] == "failed"
+    assert packet["result"]["observation"] == "historical-acceptance-observed"
+    assert packet["outcome"] == "contradictory-evidence"
+    assert packet["refusal"] == {"node": "writer", "cause": "capture-unchanged",
+                                 "source": "diagnostic-producer-mapped-node-failure"}
+    assert tree(root) == before
+
+
+STORED = {"observation": "historical-acceptance-observed"}
+MISSING = {"observation": "missing"}
+CONFIRMED = {"observation": "recorded", "ok": True, "created_by_this_run": True}
+NODES = {name: {"failures": []} for name in ("writer", "checker")}
+
+
+@pytest.mark.parametrize(("status", "result", "attestation", "expected"), [
+    ("succeeded", STORED, CONFIRMED, "contribution-accepted"),
+    ("succeeded", STORED, MISSING, "contradictory-evidence"),
+    ("succeeded", STORED, {**CONFIRMED, "ok": False}, "contradictory-evidence"),
+    ("succeeded", STORED, {**CONFIRMED, "created_by_this_run": False}, "contradictory-evidence"),
+    ("succeeded", MISSING, CONFIRMED, "succeeded-without-stored-acceptance"),
+    ("failed", STORED, CONFIRMED, "contradictory-evidence"),
+    ("running", STORED, MISSING, "contradictory-evidence"),
+    ("failed", MISSING, MISSING, "refused"),
+    ("running", MISSING, MISSING, "incomplete"),
+    ("unknown", MISSING, MISSING, "unknown"),
+])
+def test_outcome_follows_the_validated_journal_not_the_sidecar(status, result, attestation,
+                                                               expected):
+    assert packet_module._outcome(status, result, NODES, attestation)[0] == expected
+
+
+def test_packet_bound_counts_the_printed_newline_and_binds_at_the_cap(layout, capsys,
+                                                                      monkeypatch):
+    root, out = layout
+    failed_world(root)
+    code, packet, text = run_main(root, out, capsys)
+    assert code == 0 and packet["complete"] is True
+    printed = text.encode()
+    assert printed == packet_module._encode(packet) and printed.endswith(b"\n")
+    # Permitting exactly at the cap, newline included; refusing one byte below.
+    monkeypatch.setattr(packet_module, "MAX_PACKET_BYTES", len(printed))
+    code, again, text = run_main(root, root.parent / "captured-2", capsys)
+    assert code == 0 and again == packet and len(text.encode()) == len(printed)
+    monkeypatch.setattr(packet_module, "MAX_PACKET_BYTES", len(printed) - 1)
+    code, refused, text = run_main(root, root.parent / "captured-3", capsys)
+    assert code == 1
+    assert_closed_refusal(refused, text, "output")
+    assert len(text.encode()) <= len(printed) - 1
+
+
 @pytest.mark.parametrize("command", [
     {"accepted": False, "run_id": HOSTILE},
     {"accepted": True, "run_id": RUN, "detail": HOSTILE},
@@ -175,6 +263,54 @@ def test_bad_arguments_refuse_without_echo(capsys, argv):
     packet = json.loads(text)
     assert packet["stage"] == "arguments"
     assert_closed_refusal(packet, text, "arguments")
+
+
+def test_cli_emits_exact_lf_bytes_at_the_cap_and_refuses_one_byte_over(layout, monkeypatch):
+    import subprocess
+    import sys
+
+    root, _ = layout
+    failed_world(root)
+    # The real CLI process, its raw stdout bytes: no text-mode CRLF, one record.
+    seam = (
+        "import os,sys\n"
+        "from constructicon.api import maintenance_report as m\n"
+        "from constructicon.substrate.journal import maintenance_diagnostic as d\n"
+        "from constructicon.substrate.journal import maintenance_evidence as e\n"
+        "import pytest\n"
+        "from tests.substrate.journal.conftest import portable_capture_custody\n"
+        "mp=pytest.MonkeyPatch()\n"
+        "portable_capture_custody.__wrapped__(mp)\n"
+        "if os.name=='nt':\n"
+        "    i=d._identity; mp.setattr(d,'_identity',lambda v:(*i(v)[:-1],0))\n"
+        "cap=os.environ.get('REPORT_CAP')\n"
+        "if cap: mp.setattr(m,'MAX_PACKET_BYTES',int(cap))\n"
+        "raise SystemExit(m.main(sys.argv[1:]))\n"
+    )
+    script = root.parent / "cli_seam.py"
+    script.write_text(seam, encoding="utf-8")
+
+    def cli(out: str, cap: int | None) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(script), "--root", str(root), "--out", str(root.parent / out),
+             "--command-report", str(root / "application-run.json"), "--run-id", RUN,
+             "--authorization-id", AUTH],
+            cwd=Path(__file__).parents[2], stdin=subprocess.DEVNULL, capture_output=True,
+            env={**os.environ, "REPORT_CAP": "" if cap is None else str(cap)},
+            timeout=120, check=False)
+
+    first = cli("c-1", None)
+    assert first.returncode == 0, first.stderr
+    raw = first.stdout
+    assert raw.endswith(b"\n") and b"\r" not in raw and raw.count(b"\n") == 1
+    assert raw == packet_module._encode(json.loads(raw))
+    at_cap = cli("c-2", len(raw))
+    assert at_cap.returncode == 0 and at_cap.stdout == raw
+    over = cli("c-3", len(raw) - 1)
+    assert over.returncode == 1 and b"\r" not in over.stdout
+    refused = json.loads(over.stdout)
+    assert refused["complete"] is False and refused["stage"] == "output"
+    assert len(over.stdout) < len(raw)
 
 
 def test_capture_refusal_is_closed(tmp_path, capsys):
