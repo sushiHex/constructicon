@@ -23,7 +23,8 @@ contained WRITE capture and gates, and three adapters with recorded evidence.
 Codex and Claude Code have accepted historical subscription READ and WRITE
 evidence; Pi has a qualified bounded local READ profile. M9 (self-improvement
 through evaluated candidates) is in progress: its fixed selector trial is
-installed, and its first owner-approved live READ selection has been recorded.
+installed, and one bounded live trial has completed through owner approval,
+promotion and rollback.
 None of this enables a generally available production provider. See
 [current status](#what-is-implemented) and
 [open work](https://github.com/sushiHex/constructicon/issues).
@@ -414,9 +415,14 @@ before any promotion. Promotion, its replay and rollback act only on that
 exact edge. The trial survives operator process restarts, and a credential-free
 rehearsal runs it with the shipped fake executor.
 
-The first owner-approved live selection and the candidate decision that
-followed are recorded in #45. The exam measures scripted behavior, not prompt
-quality on real model answers; free-form prompt bytes remain deferred.
+The first bounded live trial has completed end to end: an owner-approved
+Codex READ selected `cite-evidence`, the owner approved the exact candidate,
+proof was issued, and promotion and rollback each ran with a replay before an
+independent read confirmed the stable pointer back at the baseline
+([record](https://github.com/sushiHex/constructicon/issues/45#issuecomment-6718199574)).
+This proves the lifecycle, not improved answers: the exam measures scripted
+behavior, not prompt quality on real model answers, and free-form prompt bytes
+remain deferred.
 
 ## When Constructicon fits
 
