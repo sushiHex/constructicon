@@ -2,6 +2,7 @@
 
 import io
 import json
+import re
 import subprocess
 import sys
 import time
@@ -97,13 +98,16 @@ def selected(root):
 
 
 class NativeTwin:
-    def __init__(self, monkeypatch, work, *, lose=None, shell=None):
+    def __init__(self, monkeypatch, work, *, lose=None, shell=None, occupied_preflight=None):
         self.lose = lose
         self.work = work
         self.shell = shell
         self.shell_executed = False
         self.events = []
         self.staged = {}
+        self.claimed = set()
+        self.preflights = []
+        self.occupied_preflight = occupied_preflight
         self.pins = {
             **boundary._fixed_pins(SELECTOR),
             "provider_revision": "sha256:" + "3" * 64,
@@ -138,10 +142,29 @@ class NativeTwin:
         assert 0 < kwargs["timeout"] <= 10
         command = argv[-1]
         raw = b""
-        if argv[0] == boundary.transport.SCP:
+        if "ok=ok and not os.path.lexists" in command:
+            names = re.findall(r"m9-qual-[0-9a-f]{24}", command)
+            assert len(names) == 1
+            remote = names[0]
+            self.preflights.append(remote)
+            if len(self.preflights) == self.occupied_preflight:
+                self.claimed.add(remote)  # occupied before the preflight
+            if remote in self.claimed:
+                return subprocess.CompletedProcess(argv, 1)
+        elif '/usr/bin/mkdir -m 0700 "$HOME/' in command:
+            names = set(re.findall(r"m9-qual-[0-9a-f]{24}", command))
+            assert len(names) == 1
+            remote, = names
+            assert self.preflights[-1] == remote and remote not in self.claimed
+            assert f'test ! -e "$HOME/{remote}"' in command
+            assert f'test ! -L "$HOME/{remote}"' in command
+            self.claimed.add(remote)
+        elif argv[0] == boundary.transport.SCP:
             # This is the actual emitted SCP argv; only the native I/O is fake.
             phase = Path(argv[-3]).parent.name
-            self.staged[command.split(":", 1)[1].strip("/")] = phase
+            remote = command.split(":", 1)[1].strip("/")
+            assert remote in self.claimed and remote not in self.staged
+            self.staged[remote] = phase
         elif command.startswith("/usr/bin/cat "):
             raw = (BOOT + "\n").encode()
         elif "/bin/bash phase.sh" in command:
@@ -252,6 +275,9 @@ def test_fresh_pins_drift_and_checked_park(tmp_path, monkeypatch):
     cutoff = time.monotonic() + 10
     qualified = host.qualify(cutoff)
     assert twin.events == list(boundary.PHASES)
+    assert len(twin.staged) == len(boundary.PHASES) + 1
+    assert set(twin.staged.values()) == {*boundary.PHASES, boundary.CLEANUP}
+    assert set(twin.preflights) == set(twin.staged) == twin.claimed
     assert twin.shell_executed
     assert qualified.boot == BOOT and qualified.closure.qualification_revision == QUALIFICATION
     assert qualified.qualification.candidate == twin.candidate
@@ -263,6 +289,18 @@ def test_fresh_pins_drift_and_checked_park(tmp_path, monkeypatch):
     host.park(cutoff)
     assert len(host.check_park(cutoff)) == 64
     assert twin.events[-2:] == [boundary.CLEANUP, "park"]
+
+
+def test_occupied_later_phase_refuses_before_copy_or_execution(tmp_path, monkeypatch):
+    # Cleanup is staged first, then d2-preserve; d2-verify is the third claim.
+    twin = NativeTwin(monkeypatch, tmp_path, occupied_preflight=3)
+    host = make(tmp_path, twin)
+    with pytest.raises(ValueError, match="COMMAND_UNPROVED"):
+        host.qualify(time.monotonic() + 10)
+    occupied = twin.preflights[-1]
+    assert occupied in twin.claimed and occupied not in twin.staged
+    assert twin.events == ["d2-preserve"]
+    assert set(twin.staged.values()) == {boundary.CLEANUP, "d2-preserve"}
 
 
 def test_lost_mutation_response_retains_custody(tmp_path, monkeypatch):
