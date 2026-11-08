@@ -74,6 +74,7 @@ the eventual code differs.
 
 | Record | Purpose |
 | --- | --- |
+| [Second fixed maintenance task decision](handoffs/maintenance-channel-reply-task.md) | Proposed closed `channel-stored-reply` task beside the unchanged plan-manifest task: stdlib whole-module exact-extraction exam, identity/installation consequences and exception boundaries; no implementation, installation or live run authorized |
 | [Review workflow and preparation evidence](handoffs/productization-workflow-record.md) | Credential-free durable change-review example, existing metering integration, supported preparation census and fixed real-answer comparison preparation; no new live execution |
 | [Operator helper/caller source contracts](handoffs/operator-helper-contract-record.md) | Bounded #308 source-binding check in the existing packager and M9 selection, with explicit legacy/source-only coverage and credential-free caller/helper composition proof; broader preparation consumers remain separate |
 | [Pi workspace READ design](handoffs/M8-Pi-READ-design.md) | Accepted in #258; direct credential-free conversation merged in #260, fixture lease/recovery successor tracked by #263. Actual workspace, existing executor/lease/process contracts, no live authentication route selected. Frozen proposal wording is historical; Claude-first qualification order remains unchanged |
