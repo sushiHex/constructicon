@@ -17,8 +17,9 @@ fresh host observations. Local fixture acceptance is never host qualification.
 
 ## Release and operating order
 
-Select the actual merged controller after #393 and #395, including the changed
-launch inventory. Export and verify its complete Git blobs using
+Select the actual merged controller containing the #393 successor and the
+merged [#396 cache/lane changes](https://github.com/sushiHex/constructicon/pull/396),
+including the changed launch inventory. Export and verify its complete Git blobs using
 [`reviewed_source.py`](../../../scripts/ops/reviewed_source.py), as documented in
 the [operator README](../../../scripts/ops/README.md#source-bytes-before-host-use).
 Check that the pinned target still lacks `_stored_reply`; the trusted task
