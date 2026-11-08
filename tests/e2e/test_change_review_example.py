@@ -19,6 +19,7 @@ from examples.change_review import (
     ReviewInput,
     assemble,
     checked,
+    committed_source,
     compare_sources,
     git,
     read_detail,
@@ -185,6 +186,8 @@ def test_syntax_failure_retains_diagnostic_without_inventing_symbol_comparison()
     assert report["comparison_available"] is False
     assert report["syntax_errors"]["after"].startswith("line 1:")
     assert report["symbols"] == {} and report["counts"] == {}
+    token_error = compare_sources("", "x = \N{EURO SIGN}")
+    assert token_error.syntax_errors == {"after": "line 1: SyntaxError"}
 
 
 def test_symbol_bound_binds_and_utf8_bytes_are_checked() -> None:
@@ -214,3 +217,45 @@ def test_status_does_not_create_a_missing_store(tmp_path: Path) -> None:
     assert refused.returncode == 1
     assert "review_store_missing" in refused.stderr
     assert not state.exists()
+
+
+def test_committed_utf8_bom_is_valid_source(tmp_path: Path) -> None:
+    repository, before, after = source_commits(tmp_path, b"", b"\xef\xbb\xbfdef added(): pass\n")
+    _, previous = committed_source(repository, before, "calc.py")
+    _, current = committed_source(repository, after, "calc.py")
+    report = compare_sources(previous, current)
+    assert report.comparison_available and report.syntax_errors == {}
+    assert report.symbols["added"] == ["added"]
+
+
+def test_symlink_blob_is_refused_before_creating_state(tmp_path: Path) -> None:
+    repository, before, regular = source_commits(tmp_path, b"", b"pass\n")
+    blob = git(repository, "rev-parse", f"{regular}:calc.py").decode("ascii").strip()
+    # Git index plumbing supplies the real symlink mode on Windows too; no OS
+    # symlink privilege or mocked producer is needed.
+    git(repository, "update-index", "--cacheinfo", f"120000,{blob},calc.py")
+    git(repository, "-c", "user.name=Example", "-c", "user.email=example@example.invalid",
+        "commit", "--quiet", "-m", "symlink")
+    after = git(repository, "rev-parse", "HEAD").decode("ascii").strip()
+    state = tmp_path / "state"
+    refused = entry(state, "submit", "--repository", str(repository), "--before-commit", before,
+                    "--after-commit", after, "--path", "calc.py", "--key", "symlink")
+    assert refused.returncode == 1
+    assert "ordinary committed file" in json.loads(refused.stderr)["error"]
+    assert not state.exists()
+
+
+def test_git_helper_denies_transport_even_when_repository_allows_it(tmp_path: Path) -> None:
+    repository, _, after = source_commits(tmp_path, b"", b"pass\n")
+    git(repository, "config", "protocol.file.allow", "always")
+    args = ["fetch", "--dry-run", str(repository), after]
+    # Admitting control is local-only. The same real Git transport must refuse
+    # through the example helper, regardless of the repository's configuration.
+    control = subprocess.run(
+        ["git", "-C", str(repository), *args], stdin=subprocess.DEVNULL,
+        env={key: value for key, value in os.environ.items() if not key.startswith("GIT_")},
+        capture_output=True, timeout=15, check=False,
+    )
+    assert control.returncode == 0, control.stderr
+    with pytest.raises(ValueError, match="review_git_failed: fetch"):
+        git(repository, *args)

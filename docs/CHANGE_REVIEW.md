@@ -65,11 +65,15 @@ key replays their command. Reusing a key for changed source references or advice
 is refused. Use a new key for a different review or answer.
 
 The source selector uses one relative POSIX file path at two exact commits. Each
-blob must be UTF-8 and at most 32,768 bytes. The trusted CLI parses those immutable
+entry must be an ordinary file, UTF-8 (an optional BOM is ignored for analysis)
+and at most 32,768 bytes. Symlinks and trees refuse. The trusted CLI parses those immutable
 blobs before submission; graph envelopes carry the bounded report and existing
 `GitRef` contracts, never source text. The graph composes a small pure packet
 component with `constructicon.std/human-advisor` and the existing durable mailbox.
 It pins exact registered versions and moves no stable component pointer.
+Git transports are disabled, including automatic partial-clone fetching; all
+required objects must already be local. This is a trusted local example, not a
+sandbox for malicious repository configuration.
 
 The report compares top-level public functions and classes, including their
 bodies and decorators, while ignoring formatting and comments. It does not

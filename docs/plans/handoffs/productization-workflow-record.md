@@ -66,5 +66,26 @@ second output contract. It now reuses the input's actual schema under the output
 port name; the permitting entry test validates the emitted payload against that
 published shape. This required a fresh focused run and final-head CI.
 
+Independent final-candidate review classified four introduced, non-blocking
+issues: parser messages could quote a source token, symlink blobs were accepted
+as source files, the Git helper overstated configuration isolation, and UTF-8
+BOM input was misclassified. The delivery removes quoted parser messages,
+checks ordinary Git entry modes with literal path selection, accepts a BOM and
+narrows the helper's wording. Real Git index plumbing exercises the symlink
+refusal on Windows without an OS symlink privilege; accepting BOM input is
+checked alongside the unchanged replay/recovery path.
+Follow-up source review also identified partial-clone lazy fetching as a path
+from an otherwise read-only Git operation to a transport. The helper now sets
+the documented empty protocol allowlist and disables lazy fetching. A real
+local-only admitting fetch control and the same helper's refusal check that
+repository-level protocol permission cannot enable transport. No network or
+vendor call is needed for this proof.
+
+The suggestion to trigger an additional connector review solely because the
+head changed is not adopted: the canonical delivery policy permits one
+sufficient independent review covering the final head. The PR records the
+connector's actual reviewed revision separately from final independent review;
+neither an old review nor an old CI run is represented as final-head evidence.
+
 No vendor binary, credential, model call, VM operation, controller installation,
 re-baseline or production deployment is part of this delivery.

@@ -129,7 +129,7 @@ def compare_sources(before_source: str, after_source: str) -> ChangeSummary:
         except (SyntaxError, ValueError, RecursionError) as exc:
             # Do not echo a source line, a host filename, or unbounded diagnostics.
             if isinstance(exc, SyntaxError):
-                errors[label] = f"line {exc.lineno}: {exc.msg}"[:160]
+                errors[label] = f"line {exc.lineno}: SyntaxError"
             else:
                 errors[label] = type(exc).__name__
         snapshots.append(symbols)
@@ -264,15 +264,19 @@ def request_for(control: ControlPlane, run_id: RunId) -> ChannelMessageSummary |
 
 
 def git(repository: Path, *arguments: str) -> bytes:
-    """Fixed Git operations only; no shell, credentials, hooks, or inherited Git overrides."""
+    """Fixed Git operations; no shell, hooks, or ambient Git environment/global config."""
 
     env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     env.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
                 "GIT_NO_REPLACE_OBJECTS": "1", "GIT_TERMINAL_PROMPT": "0",
+                # Git's documented empty protocol allowlist overrides local
+                # remote policy too; missing partial-clone blobs must not fetch.
+                "GIT_ALLOW_PROTOCOL": "", "GIT_NO_LAZY_FETCH": "1",
                 "GIT_AUTHOR_DATE": "2026-01-01T00:00:00 +0000",
                 "GIT_COMMITTER_DATE": "2026-01-01T00:00:00 +0000"})
     result = subprocess.run(
-        ["git", "--no-pager", "-C", str(repository), "-c", f"core.hooksPath={os.devnull}",
+        ["git", "--no-pager", "--literal-pathspecs", "-C", str(repository),
+         "-c", f"core.hooksPath={os.devnull}",
          "-c", "commit.gpgsign=false", *arguments],
         env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=15, check=False,
     )
@@ -289,13 +293,16 @@ def committed_source(repository: Path, commit: str, path: str) -> tuple[GitRef, 
         raise ValueError("review_path_invalid: supply a repository-relative POSIX file path")
     if git(repository, "cat-file", "-t", commit).strip() != b"commit":
         raise ValueError("review_commit_invalid: object is not a commit")
+    entry = git(repository, "ls-tree", "-z", commit, "--", path)
+    if entry.split(b" ", 1)[0] not in {b"100644", b"100755"}:
+        raise ValueError("review_source_invalid: select an ordinary committed file")
     selector = f"{commit}:{path}"
     if git(repository, "cat-file", "-t", selector).strip() != b"blob":
         raise ValueError("review_source_invalid: selected object is not a file blob")
     size = int(git(repository, "cat-file", "-s", selector))
     if size > SOURCE_BYTES:
         raise ValueError(f"source_bytes_exceeded: maximum {SOURCE_BYTES} UTF-8 bytes per file")
-    source = git(repository, "cat-file", "blob", selector).decode("utf-8")
+    source = git(repository, "cat-file", "blob", selector).decode("utf-8-sig")
     reference = GitRef(repository=str(repository.resolve()), commit=GitSha(commit), paths=(path,))
     return reference, source
 
