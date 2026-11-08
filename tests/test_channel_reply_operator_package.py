@@ -305,8 +305,18 @@ async def test_joined_entry_producer_and_real_inspector_cross_t5(
         executor_descriptor=executor.descriptor("executor"), authorization=authorization)
     state = resources.journal.run_state(authorization.run_id)
     assert state.owner_id is None
-    assert all(row.state == "closed" for row in resources.journal.capability_leases(
-        authorization.run_id))
+    rows = resources.journal.capability_leases(authorization.run_id)
+    # The fixed graph acquires workspace/executor for the writer; only a changed
+    # candidate reaches the checker's gate (plan_manifest_application.py:249-255).
+    expected_bindings = {
+        ((CHANNEL_STORED_REPLY.graph_name, "writer"), "workspace"),
+        ((CHANNEL_STORED_REPLY.graph_name, "writer"), "executor"),
+    }
+    if change:
+        expected_bindings.add(((CHANNEL_STORED_REPLY.graph_name, "checker"), "gate"))
+    assert len(rows) == len(expected_bindings)
+    assert {(row.path.scope.segments, row.binding_id) for row in rows} == expected_bindings
+    assert all(row.state == "closed" for row in rows)
     assert not list(resources.workspace.root.glob("payloads/*"))
     assert not list(resources.gate.root.glob("payloads/*"))
     published = Path(authorization.journal).parent / "maintenance-result.json"

@@ -55,7 +55,7 @@ The operating sequence is:
 4. Transfer the reviewed bundle as file data using the existing checked
    transfer fence, then run `cr-prepare` and `cr-preflight`. Actual WRITE
    assembly supplies the preview and exact pins; it dispatches no model task.
-   Review the full private preview and its closed public whitelist.
+   Review the full private preview and its bounded private review record.
 5. Obtain the exact one-attempt approval below. Fill the measured preview,
    derived RunId and boot through a reviewed values file; build a fresh second
    package. Run `cr-authority` and at most one `cr-run`. Never rerun earlier
@@ -73,6 +73,50 @@ declarations must already be reviewed. A fresh boot or changed source, pin,
 custody, expiry or package stops
 the ordinary route. Dispatch uncertainty remains uncertainty and grants no retry.
 An explicit frozen stop/resume rule still controls its selected stage.
+
+### Private specialization
+
+The committed living template stays unresolved. Make a separate private copy
+outside both the repository and the verified export; never edit the exported
+source tree or commit private inputs. The specialization is literal data filled
+into reviewed declarations, not a new execution framework. The existing compiler
+already supports this path (`m8_procedure_package.py:730–743`): each selected
+source path is read and its original SHA-256 and LF bytes are checked before
+assembly. No new compiler flag or API is needed.
+
+Only these substitutions belong to this template's private specialization:
+
+- In **Source and private declarations**, fill the declaration values for
+  `C`, `BASE`, `TARGET_SHA256`, `BUNDLE_SHA256`, `BUNDLE_SIZE`, `BUNDLE`, `W`, `K`,
+  `W_PRIOR`, `GEN`, `GEN_PRIOR`, `GENERATION`, `FLOOR`, `S`, `APP`, `A`, `ID`,
+  `ACTOR`, `KEY` and `REPORT` with independently reviewed literal data.
+- Fill `SOURCE_UPLOAD` in **Bundle transfer**, and `QUIESCENCE_CAPTURE` and
+  `QUIESCENCE_STDERR` in **Quiescence capture**, with reviewed private locators.
+  Quote literal shell values; never fill a command, expansion or shell expression.
+- Point each `sources.NAME.path` at that exact document in the verified export,
+  using its absolute local path. Keep `sources.NAME.sha256` unchanged. Frozen
+  source fences, their selection/order, commands, output contracts and all other
+  living-template code remain byte-for-byte unchanged.
+- For a separately selected original installer fence, the existing source-part
+  `set` may fill only its documented `C`, `O` or `D` declaration with the reviewed
+  40-hex commit (`m8_procedure_package.py:95–99`). This does not permit editing
+  the frozen source file or changing installer shell settings. These separately
+  captured installers do not acquire a T5 output contract.
+- Keep the five canonical measured declarations as `NAME=UNREVIEWED` in the
+  private document. Supply only `PREVIEW_SHA256`, `RUN_ID`, `EXPECTED_BOOT`,
+  `DRIFT_STDOUT_HEX` and `DRIFT_TOOL_SHA256` through the existing private
+  `--values` file when independently measured and approved. The first build
+  needs boot/drift values; only the explicitly deferred steps may still await
+  preview/RunId. The second build uses a fresh output and their real approved
+  values. No fictional value makes either package operational.
+
+Use ordinary `build PRIVATE_DOC FRESH_OUT --values PRIVATE_VALUES`, without
+`--template`. An unfilled source/private declaration must refuse the build;
+template output is never uploaded. Independently review the specialized literal
+data, the complete script/output-contract files, the private document digest and
+the resulting normal package manifest hash before approving host use. Retain
+those exact artifacts privately. Nothing here automatically posts a preview,
+review record or package, or makes its contents safe for public disclosure.
 
 ## Separate original installation files
 
@@ -288,7 +332,10 @@ print(json.dumps({"source_prepared": True, "purpose": "channel-stored-reply",
 The command/saver statuses are retained independently, following the corrected
 g11 C8 capture. The selected task changes the authorization model and scope.
 The authority's task, exact target and model grants must be reviewed from this
-real producer output, never synthesized in a host-ready package.
+real producer output, never synthesized in a host-ready package. The bounded
+review record is private: authorization identifiers, grants and binding digests
+are operator review facts, not an automatically public-safe whitelist. No raw
+preview or review record is posted automatically.
 
 ```bash
 "${SERVICE[@]}" /usr/bin/test ! -e "$S/preflight.json" < /dev/null
