@@ -16,6 +16,31 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Verified CI release archives
+
+The bounded [release-availability slice](https://github.com/sushiHex/constructicon/issues/395)
+reuses raw actionlint, Pi and Codex archives under exact version/platform/digest
+keys. Cache transport is best effort; every archive still passes an unconditional
+SHA-256 check before extraction. Saves follow successful acquisition steps, so
+later unrelated job failures do not discard verified downloads. Download budgets,
+Codex signature verification and all required proof lanes remain in place.
+
+The focused tests execute the workflow shell with harmless bytes and fake
+network/consumers: valid and corrupt cache hits, valid/corrupt/failed misses,
+the actionlint official-route fallback and a version bump beside stale cached
+bytes. Review caught two introduced draft defects: cache-service failure could
+stop an otherwise usable download path, and separate actionlint filenames could
+verify a new archive then extract an older one. Only cache actions now tolerate
+transport failure; one derived actionlint archive name binds restore, download,
+checksum, save and extraction. Codex cache identity reuses its existing pin
+emitter so the pin-bump tool does not leave stale cache keys.
+
+This does not make cold or evicted caches network-independent, warm the default
+branch from a pull request, or cover uv binary acquisition. It performs no host
+installation or qualification. The changed retained workflow/script bytes alter
+future launch artifact identity; existing host evidence does not qualify them.
+See [the CI guide](M8_CI.md#verified-release-archive-reuse) for the cache bounds.
+
 ## Maintenance rehearsal outside pytest and its packet
 
 The [delivery record](plans/handoffs/maintenance-launcher-record.md) covers a

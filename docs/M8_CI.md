@@ -84,6 +84,21 @@ assembly, the real `/usr/bin/python3.12 -I -S -B` imports and the outside-module
 and unwritten-tree assertions remain required. Local byte tests do not replace
 that Linux execution. No private-host procedure or dependency pin is changed.
 
+## Verified release archive reuse
+
+The required workflows cache only the pinned actionlint, Pi and Codex raw
+archives, under exact version, Linux/x64 and SHA-256 keys. Cache restore/save
+failures are best effort; acquisition, checksum checks and use remain required.
+Every restored archive passes its checksum before extraction, and corrupt bytes
+fail without extraction or cache publication. Saves follow successful acquisition
+steps rather than waiting for the full job; existing download attempt budgets
+and the Codex signature check remain in place. Cold or evicted entries still
+need the official download route. Pull-request caches do not warm the default
+branch, which must populate its own entries. uv binary acquisition remains
+uncovered. These workflow and host-artifact script changes alter retained launch
+artifact identity: future host use needs the reviewed installation and
+qualification procedure; no existing host qualification transfers to new bytes.
+
 ## PR B: the separate containment gate
 
 `M8 Linux containment` provisions its own scoped policy and immutable closure
