@@ -104,12 +104,20 @@ jobs:
       - name: Lint workflows with actionlint
         env:
           ACTIONLINT_VERSION: "1.7.12"
+          # Update the asset id together with the version and checksum.
+          ACTIONLINT_ASSET_ID: "384924896"
           ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
         run: |
           set -euo pipefail
           archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive" \
-            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/$archive"
+          # At most four attempts total, across two official routes to the same
+          # pinned asset. Both routes must pass the checksum gate below.
+          if ! curl -fsSL --retry 1 -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/$archive"; then
+            curl -fsSL --retry 1 -H 'Accept: application/octet-stream' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' -o "$RUNNER_TEMP/$archive" \
+              "https://api.github.com/repos/rhysd/actionlint/releases/assets/${ACTIONLINT_ASSET_ID}"
+          fi
           printf '%s  %s\n' "$ACTIONLINT_SHA256" "$RUNNER_TEMP/$archive" | sha256sum --check --strict
           tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" actionlint
           shellcheck --version
