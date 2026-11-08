@@ -302,13 +302,19 @@ def test_cli_emits_exact_lf_bytes_at_the_cap_and_refuses_one_byte_over(layout, m
     script = root.parent / "cli_seam.py"
     script.write_text(seam, encoding="utf-8")
 
+    checkout = Path(__file__).resolve().parents[2]
+    # A script's sys.path[0] is its own directory, not the cwd: name the
+    # checkout explicitly so `tests` imports without an ambient PYTHONPATH.
+    path = os.pathsep.join(filter(None, (str(checkout), os.environ.get("PYTHONPATH"))))
+
     def cli(out: str, cap: int | None) -> subprocess.CompletedProcess:
         return subprocess.run(
             [sys.executable, str(script), "--root", str(root), "--out", str(root.parent / out),
              "--command-report", str(root / "application-run.json"), "--run-id", RUN,
              "--authorization-id", AUTH],
-            cwd=Path(__file__).parents[2], stdin=subprocess.DEVNULL, capture_output=True,
-            env={**os.environ, "REPORT_CAP": "" if cap is None else str(cap)},
+            cwd=checkout, stdin=subprocess.DEVNULL, capture_output=True,
+            env={**os.environ, "PYTHONPATH": path,
+                 "REPORT_CAP": "" if cap is None else str(cap)},
             timeout=120, check=False)
 
     first = cli("c-1", None)
