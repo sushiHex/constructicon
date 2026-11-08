@@ -146,9 +146,10 @@ calls passed. A real C490-produced awaiting-owner packet passed the checker with
 provider construction forbidden; synthetic park/Off inputs proved only checker
 compatibility, followed by actual physical park/Off checks in the host session.
 
-An extra confirmation per VM start was suggested and not adopted for this
-already instructed non-model preparation. The ongoing owner task-4 instruction
-covered prepare; a bounded scope and its limits were recorded before entry,
-without reusing A+B or model-call authority. Installation restrictions were not
-invoked, and exact-subject approval was not inferred. This is the disposition of
-that operating-scope question, not a relaxation of an explicit stop/resume rule.
+The peer reviewer noted that the root agent recorded the task-4 preparation
+window's limits under the ongoing do1-4 instruction; the owner had not separately
+selected those limits. The root agent treated that instruction as covering
+non-model preparation and did not reuse A+B or model-call authority. This records
+the root agent's interpretation, not peer agreement. The owner's later exact
+candidate/finalization decision explicitly selected its own limits. Exact-subject
+approval remained separate, and no explicit stop/resume rule was relaxed.
