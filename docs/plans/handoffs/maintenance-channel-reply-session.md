@@ -98,6 +98,15 @@ Only these substitutions belong to this template's private specialization:
   using its absolute local path. Keep `sources.NAME.sha256` unchanged. Frozen
   source fences, their selection/order, commands, output contracts and all other
   living-template code remain byte-for-byte unchanged.
+- Fill `labels.current` with exactly the literal generation/session spellings
+  that occur in the reviewed private bindings, including prior-descriptor names
+  and path components used by this procedure's negative controls. For example,
+  the **synthetic, compile-only** bindings `GEN=g15` and `GEN_PRIOR=g14` need
+  `labels = {current = ["g14", "g15"], historical = []}`. Keep
+  `labels.historical` empty and the step selections unchanged; do not add a range
+  or unrelated labels. The compiler checks spelling, not freshness or authority:
+  listing a prior spelling in `current` permits its literal reference in this
+  current procedure, never activation, qualification or reuse of historical pins.
 - For a separately selected original installer fence, the existing source-part
   `set` may fill only its documented `C`, `O` or `D` declaration with the reviewed
   40-hex commit (`m8_procedure_package.py:95–99`). This does not permit editing
@@ -110,6 +119,19 @@ Only these substitutions belong to this template's private specialization:
   needs boot/drift values; only the explicitly deferred steps may still await
   preview/RunId. The second build uses a fresh output and their real approved
   values. No fictional value makes either package operational.
+
+`PRIVATE_VALUES` is a **TOML** file with string values, not a JSON object. Its
+complete shape is shown below; the placeholders deliberately fail the existing
+value-shape checks and must be replaced with independently approved facts. For
+the first build omit `PREVIEW_SHA256` and `RUN_ID` until preflight supplies them.
+
+```toml
+EXPECTED_BOOT = "UNREVIEWED"
+DRIFT_STDOUT_HEX = "UNREVIEWED"
+DRIFT_TOOL_SHA256 = "UNREVIEWED"
+PREVIEW_SHA256 = "UNREVIEWED"
+RUN_ID = "UNREVIEWED"
+```
 
 Use ordinary `build PRIVATE_DOC FRESH_OUT --values PRIVATE_VALUES`, without
 `--template`. An unfilled source/private declaration must refuse the build;
@@ -662,6 +684,26 @@ is established here. Source-bound original installer files, exact late pins,
 remaining complete-stage evidence and the applicable approvals must be concrete
 before any host window. This paragraph states the preparation limit, not a
 second work ledger or permission to resume a stopped procedure.
+
+### Filled private-package correction after #398
+
+The first private-specialization recipe omitted `labels.current`. Filling every
+listed declaration with generation/session spellings therefore still refused
+the normal build: the unchanged compiler correctly reported undeclared labels.
+The corrected recipe explicitly includes only the reviewed literal spellings,
+including a prior descriptor used by a negative control. An executed regression
+first reproduces the empty-label refusal, also refuses a missing prior spelling,
+then fills both and builds all fifteen normal step/contract pairs from synthetic
+data. It checks LF bytes, complete file/manifest coverage and digests, output
+contracts, absence of unresolved declarations and Bash syntax. It never executes
+or uploads those scripts and establishes no real host or generation facts.
+
+A separate initial JSON values-file attempt was a local preparation format
+error, corrected to the existing TOML input contract; it was not a product defect.
+The application, compiler and frozen fences are unchanged by this doc/test
+correction. The controller/source bundle selected for the operating window
+remains `c95ca6aaf2e9770b8e46b55f24cb70cd68ffcc71`; the corrected procedure/tooling
+revision is reviewed separately and supplies no additional attempt authority.
 
 ## Composition
 
