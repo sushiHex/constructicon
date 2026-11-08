@@ -16,6 +16,18 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Filled stored-reply operator package
+
+The [operator recipe](plans/handoffs/maintenance-channel-reply-session.md)
+omitted the private `labels.current` declaration. Its synthetic filled copy
+therefore correctly refused at the existing compiler's spelling check. The
+regression now reproduces that refusal, rejects an omitted prior spelling and
+positively builds all fifteen normal step/contract pairs with LF bytes, complete
+manifest coverage, matching hashes and Bash syntax. Literal label declarations
+carry no freshness or execution authority; the scripts are never executed or
+uploaded by the proof. Values files remain TOML strings. This doc/test correction
+changes no application, compiler, frozen fence or selected controller identity.
+
 ## Stored-reply operator composition
 
 The [operator package](plans/handoffs/maintenance-channel-reply-session.md)

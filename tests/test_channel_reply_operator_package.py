@@ -101,6 +101,87 @@ def test_actual_compiler_checks_template_and_refuses_normal_package(tmp_path):
         assert (parsed.returncode, parsed.stdout, parsed.stderr) == (0, b"", b""), path.name
 
 
+def test_filled_private_copy_builds_a_complete_normal_package(tmp_path):
+    """Synthetic compile-only data: never execute/upload this package."""
+    text = DOCUMENT.read_bytes().decode()
+    declarations = {
+        "C": "a" * 40, "BASE": "b" * 40, "TARGET_SHA256": "1" * 64,
+        "BUNDLE_SHA256": "2" * 64, "BUNDLE_SIZE": "100", "BUNDLE": "/synthetic/source.bundle",
+        "W": "/synthetic/g15/session", "K": "synthetic-store",
+        "W_PRIOR": "/synthetic/g14/session", "GEN": "g15", "GEN_PRIOR": "g14",
+        "GENERATION": "15", "FLOOR": "14", "S": "/synthetic/state",
+        "APP": "/synthetic/application", "A": "/synthetic/authority.json",
+        "ID": "synthetic-authorization", "ACTOR": "operator:synthetic", "KEY": "synthetic-key",
+        "REPORT": "/synthetic/report", "SOURCE_UPLOAD": "/synthetic/upload.bundle",
+        "QUIESCENCE_CAPTURE": "/synthetic/quiescence.stdout",
+        "QUIESCENCE_STDERR": "/synthetic/quiescence.stderr",
+    }
+    for name, value in declarations.items():
+        text, count = re.subn(rf"^{name}=UNREVIEWED$", f"{name}={shlex.quote(value)}",
+                              text, flags=re.M)
+        assert count == 1, name
+    for source in package.composition(text)["sources"].values():
+        before = "path = " + json.dumps(source["path"])
+        after = "path = " + json.dumps((DOCUMENT.parent / source["path"]).as_posix())
+        assert text.count(before) == 1
+        text = text.replace(before, after)
+    private = tmp_path / "synthetic-only.md"
+    private.write_bytes(text.encode())
+    values = {
+        "EXPECTED_BOOT": "00000000-0000-0000-0000-000000000001",
+        "DRIFT_STDOUT_HEX": b"Synthetic drift observation only.\n".hex(),
+        "DRIFT_TOOL_SHA256": "3" * 64, "PREVIEW_SHA256": "4" * 64,
+        "RUN_ID": "run-" + "5" * 32,
+    }
+    measured = tmp_path / "synthetic-values-only.toml"
+    measured.write_bytes(("\n".join(f"{key} = {json.dumps(value)}"
+                                    for key, value in values.items()) + "\n").encode())
+    command = [sys.executable, "-I", "-S", "-B", str(ROOT / "scripts/m8_procedure_package.py"),
+               "build", str(private)]
+    # The former recipe filled every declaration but omitted label metadata.
+    missing = tmp_path / "missing-labels"
+    refused = subprocess.run([*command, str(missing), "--values", str(measured)],
+                             stdin=subprocess.DEVNULL, capture_output=True, check=False)
+    assert refused.returncode == 1 and b"['g14', 'g15']" in refused.stderr
+    assert not missing.exists()
+    recipe = package.section(DOCUMENT.read_bytes().decode(), "Private specialization")
+    assert "labels.current" in recipe, "the private recipe must admit literal label metadata"
+    declaration = "labels = {current = [], historical = []}"
+    assert text.count(declaration) == 1
+    private.write_bytes(text.replace(declaration,
+        'labels = {current = ["g15"], historical = []}').encode())
+    missing_prior = tmp_path / "missing-prior"
+    refused = subprocess.run([*command, str(missing_prior), "--values", str(measured)],
+                             stdin=subprocess.DEVNULL, capture_output=True, check=False)
+    assert refused.returncode == 1 and b"['g14']" in refused.stderr
+    assert not missing_prior.exists()
+    private.write_bytes(text.replace(declaration,
+        'labels = {current = ["g14", "g15"], historical = []}').encode())
+    out = tmp_path / "synthetic-normal-package"
+    built = subprocess.run([*command, str(out), "--values", str(measured)],
+                           stdin=subprocess.DEVNULL, capture_output=True, check=False)
+    assert (built.returncode, built.stderr) == (0, b"")
+    manifest = (out / "MANIFEST.sha256").read_bytes()
+    assert built.stdout.strip() == hashlib.sha256(manifest).hexdigest().encode()
+    steps = package.assemble(private, values=values)
+    assert len(steps) == 15 and not any(step.waiting for step in steps)
+    expected_files = {step.name + suffix for step in steps
+                      for suffix in (".sh", ".expected.json")}
+    assert {path.name for path in out.iterdir()} == expected_files | {"MANIFEST.sha256"}
+    assert {line.split("  ")[1] for line in manifest.decode().splitlines()} == expected_files
+    for line in manifest.decode().splitlines():
+        digest, name = line.split("  ")
+        raw = (out / name).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == digest and b"\r" not in raw
+        assert b"UNREVIEWED" not in raw
+    for step in steps:
+        assert (out / (step.name + ".sh")).read_bytes() == step.text.encode()
+        assert (out / (step.name + ".expected.json")).read_bytes() == step.expected().encode()
+        parsed = subprocess.run([_bash(), "-n", (out / (step.name + ".sh")).as_posix()],
+                                stdin=subprocess.DEVNULL, capture_output=True, check=False)
+        assert (parsed.returncode, parsed.stdout, parsed.stderr) == (0, b"", b""), step.name
+
+
 def test_reused_capture_and_lane_bytes_remain_exact():
     old, = _fences(DOCUMENT.parent / "M8-maintenance-g11-continuation.md",
                    "C10: one application, independent statuses and closed outcome")
