@@ -137,14 +137,37 @@ jobs:
           printf 'commit=%s lane=%s image=%s/%s kernel=%s\n' "$EVIDENCE_COMMIT" "$EVIDENCE_LANE" "$ImageOS" "$ImageVersion" "$(uname -r)" > "$RUNNER_TEMP/m8-host.txt"
           id m8-service >> "$RUNNER_TEMP/m8-host.txt"
           sudo cat /sys/kernel/security/apparmor/profiles | awk '/constructicon-m8-/ {print}' >> "$RUNNER_TEMP/m8-host.txt"
+      - name: Restore pinned pi archive
+        if: matrix.lane == 'lifecycle'
+        id: pi-cache
+        continue-on-error: true
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/pi-linux-x64.tar.gz
+          key: release-archive-pi-1.3.0-Linux-X64-24f5be328b66d4da36876296989501974f43ab8434fbb57c35c523a3ea505ded
+      - name: Acquire pinned Pi archive
+        if: matrix.lane == 'lifecycle'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f "$RUNNER_TEMP/pi-linux-x64.tar.gz" ]; then
+            curl --fail --silent --show-error --location --max-time 120 \
+              https://github.com/earendil-works/pi/releases/download/v1.3.0/pi-linux-x64.tar.gz \
+              --output "$RUNNER_TEMP/pi-linux-x64.tar.gz"
+          fi
+          printf '%s  %s\n' 24f5be328b66d4da36876296989501974f43ab8434fbb57c35c523a3ea505ded "$RUNNER_TEMP/pi-linux-x64.tar.gz" | sha256sum --check --strict
+      - name: Save pinned pi archive
+        if: success() && matrix.lane == 'lifecycle' && steps.pi-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/pi-linux-x64.tar.gz
+          key: release-archive-pi-1.3.0-Linux-X64-24f5be328b66d4da36876296989501974f43ab8434fbb57c35c523a3ea505ded
       - name: Prove pinned Pi startup and its fixed local peer
         if: matrix.lane == 'lifecycle'
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error --location --max-time 120 \
-            https://github.com/earendil-works/pi/releases/download/v1.3.0/pi-linux-x64.tar.gz \
-            --output "$RUNNER_TEMP/pi-linux-x64.tar.gz"
           sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" scripts/ci/build_m8_pi_startup_fixture.py \
             /var/lib/constructicon-m8-launch/runtime /var/lib/constructicon-m8-launch/pi-startup-runtime \
             "$RUNNER_TEMP/pi-linux-x64.tar.gz" | tee "$RUNNER_TEMP/m8-pi-startup-runtime.json"
@@ -488,12 +511,24 @@ jobs:
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_operator_store_persistence.py \
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           uv run python scripts/check_m8_n3c_mutations.py
+      - name: Read the pinned Codex archive cache identity
+        shell: bash
+        run: '"$PWD/.venv/bin/python" scripts/ci/vendor_pin_env.py >> "$GITHUB_ENV"'
+      - name: Restore pinned codex archive
+        id: codex-cache
+        continue-on-error: true
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/codex.tar.gz
+          key: release-archive-codex-${{ env.CODEX_PIN_VERSION }}-Linux-X64-${{ env.CODEX_PIN_CODEX_SHA256 }}
       - name: Acquire the pinned native investigation artifact (no account)
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location --retry 2 --output "$RUNNER_TEMP/codex.tar.gz" \
-            https://github.com/openai/codex/releases/download/rust-v0.160.1/codex-package-x86_64-unknown-linux-musl.tar.gz
+          if [ ! -f "$RUNNER_TEMP/codex.tar.gz" ]; then
+            curl --fail --location --retry 2 --output "$RUNNER_TEMP/codex.tar.gz" \
+              https://github.com/openai/codex/releases/download/rust-v0.160.1/codex-package-x86_64-unknown-linux-musl.tar.gz
+          fi
           printf '%s  %s\n' 340801565906a7028f6baaa9ab6853addaef221f0016a1417a7c1ffdd96c21f0 "$RUNNER_TEMP/codex.tar.gz" | sha256sum --check --strict
           sudo install -d -m 0755 /var/lib/constructicon-m8-launch/native-codex
           sudo tar --no-same-owner -xzf "$RUNNER_TEMP/codex.tar.gz" -C /var/lib/constructicon-m8-launch/native-codex
@@ -502,6 +537,13 @@ jobs:
             https://raw.githubusercontent.com/openai/codex/d27764b82f7118f674371e6d6e76271d9d606edb/codex-rs/models-manager/models.json
           printf '%s  %s\n' fd219bd9f061278275f528939f82f54d2eb97df4b25c23b022adbe48813d920b "$RUNNER_TEMP/codex-models.json" | sha256sum --check --strict
           sudo install -m 0444 "$RUNNER_TEMP/codex-models.json" /var/lib/constructicon-m8-launch/codex-models.json
+      - name: Save pinned codex archive
+        if: success() && steps.codex-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/codex.tar.gz
+          key: release-archive-codex-${{ env.CODEX_PIN_VERSION }}-Linux-X64-${{ env.CODEX_PIN_CODEX_SHA256 }}
       - name: Verify the pinned package's release signature and catalog commit
         if: matrix.lane == 'foundation'
         shell: bash
@@ -790,7 +832,8 @@ jobs:
             PYTEST_ADDOPTS=-pno:cacheprovider \
             "$PWD/.venv/bin/python" scripts/check_m8_duplex_mutations.py
       - name: Rehearse the generated Claude READ chain
-        if: matrix.lane == 'foundation'
+        # Its fixture owns installation/cleanup; keep it after other lane consumers.
+        if: matrix.lane == 'mediation'
         shell: bash
         run: |
           set -euo pipefail

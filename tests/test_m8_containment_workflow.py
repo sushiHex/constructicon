@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from tests import native_account
+from tests.ci_cache_policy import assert_only_archive_cache_is_advisory
 from tests.git_bash import git_bash
 from tests.substrate._evidence_secrecy import (
     BRIDGE_N4,
@@ -151,7 +152,7 @@ PROOFS = {
         "foundation", "tests/test_m8_maintenance_q12_rehearsal.py",
     ),
     "Rehearse the generated Claude READ chain": (
-        "foundation", "tests/test_claude_read_linux_rehearsal.py",
+        "mediation", "tests/test_claude_read_linux_rehearsal.py",
     ),
     "Prove the host plans the package CI installed": (
         "foundation", "tests/test_m8_host_runtime.py",
@@ -215,6 +216,22 @@ def test_every_existing_proof_runs_once_in_its_isolated_lane():
     exact_probe = ("tests/substrate/test_claude_native_startup.py::"
                    "test_pinned_credential_free_startup_has_only_a_noauth_observation")
     assert startup.index(controls) < startup.index(exact_probe)
+
+
+def test_generated_claude_rehearsal_follows_other_mediation_consumers():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    name = "Rehearse the generated Claude READ chain"
+    position = text.index("      - name: " + name + "\n")
+    for other, (lane, _) in PROOFS.items():
+        if lane == "mediation" and other != name:
+            assert text.index("      - name: " + other + "\n") < position
+    assert text.index("Provision the explicitly authorized disposable Linux host") < position
+    assert "    timeout-minutes: 30\n" in text
+    step = text[position:text.index("      - name: Preserve exact runtime", position)]
+    assert "trap cleanup EXIT" in step
+    assert "_claude_read_rehearsal_host provision" in step
+    assert "_claude_read_rehearsal_host cleanup" in step
+    assert "M8_CLAUDE_REHEARSAL_REQUIRED=1" in step
 
 
 @pytest.mark.parametrize("change", ["omitted", "duplicated", "misrouted"])
@@ -310,7 +327,8 @@ def test_gate_always_checks_the_selected_proof_set_without_bypass():
     assert 'python3 "$RUNNER_TEMP/m8-ci-scope.py" classify' in text
     assert "python3 scripts/ci/m8_ci_scope.py classify" not in text
     assert "fetch-depth: 0" in text
-    for forbidden in ("continue-on-error", "paths-ignore:", "pull_request_target", "secrets."):
+    assert_only_archive_cache_is_advisory(text)
+    for forbidden in ("paths-ignore:", "pull_request_target", "secrets."):
         assert forbidden not in text
 
 

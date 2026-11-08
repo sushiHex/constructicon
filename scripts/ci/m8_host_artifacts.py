@@ -128,8 +128,10 @@ VENDOR_STEP = """\
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location --retry 2 --output "$RUNNER_TEMP/codex.tar.gz" \\
-            {codex_url}
+          if [ ! -f "$RUNNER_TEMP/codex.tar.gz" ]; then
+            curl --fail --location --retry 2 --output "$RUNNER_TEMP/codex.tar.gz" \\
+              {codex_url}
+          fi
           printf '%s  %s\\n' {codex_sha256} "$RUNNER_TEMP/codex.tar.gz" | sha256sum --check --strict
           sudo install -d -m 0755 /var/lib/constructicon-m8-launch/native-codex
           sudo tar --no-same-owner -xzf "$RUNNER_TEMP/codex.tar.gz" -C /var/lib/constructicon-m8-launch/native-codex

@@ -19,21 +19,24 @@ def _job(name: str) -> str:
     return block[1]
 
 
-def _step() -> str:
+def _step(name: str = "Lint workflows with actionlint") -> str:
     step = re.search(
-        r"^      - name: Lint workflows with actionlint\n((?:        .*\n)+)", _job("verify"), re.M
+        rf"^      - name: {re.escape(name)}\n((?:        .*\n)+)", _job("verify"), re.M
     )
     assert step is not None, "the verify job has no actionlint step"
     return step[1]
 
 
 def test_the_linter_step_is_pinned_and_checked_before_it_runs() -> None:
-    step = _step()
-    assert re.search(r'^          ACTIONLINT_VERSION: "\d+\.\d+\.\d+"$', step, re.M)
-    assert re.search(r"^          ACTIONLINT_SHA256: [0-9a-f]{64}$", step, re.M)
-    check = step.index("sha256sum --check --strict")
-    assert check < step.index("tar -xzf"), "extract only after the checksum passes"
-    assert check < step.index('"$RUNNER_TEMP/actionlint"'), "execute only after the checksum passes"
+    step = _step("Acquire pinned actionlint archive")
+    job = _job("verify")
+    assert re.search(r'^      ACTIONLINT_VERSION: "\d+\.\d+\.\d+"$', job, re.M)
+    assert re.search(r"^      ACTIONLINT_SHA256: [0-9a-f]{64}$", job, re.M)
+    assert "sha256sum --check --strict" in step
+    job = _job("verify")
+    check = job.index("sha256sum --check --strict")
+    assert check < job.index("tar -xzf"), "extract only after the checksum passes"
+    assert check < job.index('"$RUNNER_TEMP/actionlint"'), "execute only after the checksum passes"
     assert "set -euo pipefail" in step
 
 

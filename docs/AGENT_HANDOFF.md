@@ -16,6 +16,48 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Verified CI release archives
+
+The bounded [release-availability slice](https://github.com/sushiHex/constructicon/issues/395)
+reuses raw actionlint, Pi and Codex archives under exact version/platform/digest
+keys. Cache transport is best effort; every archive still passes an unconditional
+SHA-256 check before extraction. Saves follow successful acquisition steps, so
+later unrelated job failures do not discard verified downloads. Download budgets,
+Codex signature verification and all required proof lanes remain in place.
+
+The focused tests execute the workflow shell with harmless bytes and fake
+network/consumers: valid and corrupt cache hits, valid/corrupt/failed misses,
+the actionlint official-route fallback and a version bump beside stale cached
+bytes. Review caught two introduced draft defects: cache-service failure could
+stop an otherwise usable download path, and separate actionlint filenames could
+verify a new archive then extract an older one. Only cache actions now tolerate
+transport failure; one derived actionlint archive name binds restore, download,
+checksum, save and extraction. Codex cache identity reuses its existing pin
+emitter so the pin-bump tool does not leave stale cache keys.
+
+The first delivery run at `8e66add` also exposed three introduced policy-guard
+failures: existing tests
+forbade every advisory step, including the new cache transport exception. The
+shared test guard now permits only literal step-level opt-outs on the six named,
+commit-pinned archive cache actions in their acquiring jobs, with no run body.
+Injected job, proof, aggregate, non-cache, mispinned and expression-valued
+exceptions still refuse; acquisition, integrity and required outcomes stay strict.
+
+That run exposed insufficient margin on foundation:
+GitHub [affirmatively reported the thirty-minute job limit](https://github.com/sushiHex/constructicon/actions/runs/42475032733/job/128714433888),
+leaving the final generated Claude READ rehearsal only 2m10s. The same step had
+taken 3m06s in the preceding successful run. Its two failure diagnostics coincided
+with cancellation and fixture teardown; exact signal ordering was not retained,
+so these do not independently prove a product regression. The unchanged,
+self-contained rehearsal now follows mediation's other consumers. No invocation
+or job deadline, prerequisite, proof or physical lane was removed or relaxed.
+
+This does not make cold or evicted caches network-independent, warm the default
+branch from a pull request, or cover uv binary acquisition. It performs no host
+installation or qualification. The changed retained workflow/script bytes alter
+future launch artifact identity; existing host evidence does not qualify them.
+See [the CI guide](M8_CI.md#verified-release-archive-reuse) for the cache bounds.
+
 ## Maintenance rehearsal outside pytest and its packet
 
 The [delivery record](plans/handoffs/maintenance-launcher-record.md) covers a
