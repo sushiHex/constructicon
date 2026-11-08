@@ -80,7 +80,7 @@ def test_contribution_packet_replay_and_unwritten_original(home_state):
     assert_private_safe(text, state)
     assert contribution["complete"] is True and contribution["run_id"] == first["run_id"]
     assert contribution["status"] == "succeeded"
-    assert contribution["outcome"] == "contribution-accepted"
+    assert contribution["outcome"] == "succeeded-with-acceptance-record"
     assert contribution["refusal"] is None
     result = contribution["result"]
     assert result["observation"] == "historical-acceptance-observed"
@@ -164,7 +164,7 @@ def test_process_death_after_writer_checkpoint_resumes_without_second_writer(hom
     assert resumed["this_process"] == {"turn_start": 0, "task_workers": 0}
     assert (state / "maintenance-attempt.json").read_bytes() == record
     code, final, _ = packet(state, home_state / "packet-final")
-    assert code == 0 and final["outcome"] == "contribution-accepted"
+    assert code == 0 and final["outcome"] == "succeeded-with-acceptance-record"
     assert final["leases"]["summary"] == "recorded-closed"
     epochs = {(item["node"], item["binding"]): item["acquisition_epoch"]
               for item in final["leases"]["items"]}

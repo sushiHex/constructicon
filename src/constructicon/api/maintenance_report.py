@@ -243,13 +243,16 @@ def _status(value: object) -> str:
 
 def _outcome(status: str, result: dict[str, object], nodes: dict[str, Any],
              attestation: dict[str, object]) -> tuple[str, dict[str, object] | None]:
-    """The verdict follows the validated journal, never the result file alone.
+    """A classification of observations, never re-derived application acceptance.
 
+    Application acceptance is ``derive_maintenance_result``'s whole proof
+    (exact request, candidate and subject, sole base parent, history, file
+    delta and digests; plan_manifest_application.py), and a passing gate alone
+    is not acceptance. This report re-derives none of that, and
     ``maintenance-result.json`` is a sidecar the diagnostic only shape- and
-    RunId-checks; it does not authenticate acceptance. Acceptance therefore
-    needs a succeeded run *and* this run's own positive journal attestation.
-    A stored acceptance that the journal does not confirm is named as a
-    contradiction rather than resolved either way.
+    RunId-checks. So the strongest outcome only says what was observed: a
+    succeeded run, this run's own positive attestation and an acceptance
+    record. A record the journal does not support is named as a contradiction.
     """
     refusal = None
     for name in _NODES:
@@ -264,7 +267,7 @@ def _outcome(status: str, result: dict[str, object], nodes: dict[str, Any],
                  and attestation.get("created_by_this_run") is True)
     if status == RunStatus.SUCCEEDED:
         if stored and confirmed:
-            return "contribution-accepted", refusal
+            return "succeeded-with-acceptance-record", refusal
         if stored:
             return "contradictory-evidence", refusal
         return "succeeded-without-stored-acceptance", refusal

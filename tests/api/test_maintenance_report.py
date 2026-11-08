@@ -200,7 +200,7 @@ NODES = {name: {"failures": []} for name in ("writer", "checker")}
 
 
 @pytest.mark.parametrize(("status", "result", "attestation", "expected"), [
-    ("succeeded", STORED, CONFIRMED, "contribution-accepted"),
+    ("succeeded", STORED, CONFIRMED, "succeeded-with-acceptance-record"),
     ("succeeded", STORED, MISSING, "contradictory-evidence"),
     ("succeeded", STORED, {**CONFIRMED, "ok": False}, "contradictory-evidence"),
     ("succeeded", STORED, {**CONFIRMED, "created_by_this_run": False}, "contradictory-evidence"),
@@ -214,6 +214,18 @@ NODES = {name: {"failures": []} for name in ("writer", "checker")}
 def test_outcome_follows_the_validated_journal_not_the_sidecar(status, result, attestation,
                                                                expected):
     assert packet_module._outcome(status, result, NODES, attestation)[0] == expected
+
+
+def test_no_observation_combination_claims_application_acceptance():
+    # The report never re-derives acceptance; no input yields an authoritative verdict.
+    outcomes = {packet_module._outcome(status, result, NODES, attestation)[0]
+                for status in ("succeeded", "failed", "running", "pending", "cancelled", "x")
+                for result in (STORED, MISSING)
+                for attestation in (CONFIRMED, MISSING, {"observation": "none-minted"})}
+    assert not any("accepted" in outcome for outcome in outcomes)
+    assert outcomes <= {"succeeded-with-acceptance-record", "contradictory-evidence",
+                        "succeeded-without-stored-acceptance", "refused", "incomplete",
+                        "unknown"}
 
 
 def test_packet_bound_counts_the_printed_newline_and_binds_at_the_cap(layout, capsys,

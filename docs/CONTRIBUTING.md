@@ -138,11 +138,14 @@ Windows. It writes one LF-terminated JSON record of at most 8 KiB (8192 bytes,
 newline included, as a single binary write) holding fixed identifiers, digests
 and enums, never a host path, repository path or subprocess text:
 
-- `outcome` follows the validated journal, not the result file:
-  `contribution-accepted` needs a succeeded run and this run's own positive
-  journal attestation. A stored acceptance the journal does not confirm (a
-  failed or unfinished run, or no positive attestation) is
-  `contradictory-evidence`. Otherwise `refused`, `incomplete`,
+- `outcome` classifies observations; it never re-derives or authenticates
+  application acceptance, which is `derive_maintenance_result`'s whole
+  candidate, history and digest proof. The strongest value,
+  `succeeded-with-acceptance-record`, means a succeeded run, this run's own
+  positive journal attestation and a stored acceptance record were observed;
+  the record's candidate is not re-checked against the journal. A stored record
+  the journal does not support (a failed or unfinished run, or no positive
+  attestation) is `contradictory-evidence`. Otherwise `refused`, `incomplete`,
   `succeeded-without-stored-acceptance` or `unknown`. `refusal` carries the
   diagnostic's producer-mapped `NodeFailed` cause, for example
   `{"node":"writer","cause":"capture-unchanged"}` for the no-op.

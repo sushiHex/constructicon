@@ -32,14 +32,18 @@ mutation anchors was edited.
 
 ## Labels and limits
 
-The verdict follows the validated journal. `maintenance-result.json` is a
-sidecar the diagnostic only shape- and RunId-checks, so it never decides
-acceptance by its presence: `contribution-accepted` needs a succeeded run and
-this run's own positive attestation, and a stored acceptance the journal does
-not confirm is reported as `contradictory-evidence`. The packet is one
+The outcome classifies observations and never claims application acceptance.
+That verdict is `derive_maintenance_result`'s whole proof (exact request,
+candidate and subject, sole base parent, history, file delta and digests), and
+the report re-derives none of it. `maintenance-result.json` is a sidecar the
+diagnostic only shape- and RunId-checks. The strongest outcome,
+`succeeded-with-acceptance-record`, means a succeeded run, this run's own
+positive attestation and an acceptance record were observed; the record's
+candidate is not re-checked against the journal. A stored record the journal
+does not support is `contradictory-evidence`. The packet is one
 LF-terminated record of at most 8192 bytes including that newline, emitted as a
 single binary write so Windows text-mode translation cannot exceed the bound.
-Integration review (root lane) found both gaps in the first head; focused
+Integration review (root lane) found these gaps in earlier heads; focused
 tests now bind each, including the real CLI's raw bytes at and one byte over the
 cap.
 
