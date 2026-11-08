@@ -461,6 +461,15 @@ def context(*, epoch=1, grants=GRANTS, run_id="codex-run", check_control=lambda:
 def portable_binding(tmp_path, monkeypatch):
     """Actual BindingStore parsing/checks with only its Linux syscalls substituted."""
 
+    return portable_binding_world(tmp_path, monkeypatch)
+
+
+def portable_binding_world(tmp_path, monkeypatch):
+    """The fixture body; a reopened rehearsal reuses its closure authority.
+
+    The fake store itself is in-memory and rebuilt per process (its trusted
+    directory must be absent); the closure refs are durable and kept.
+    """
     world = StoreWorld(tmp_path)
     world.install(monkeypatch)
 
@@ -470,11 +479,12 @@ def portable_binding(tmp_path, monkeypatch):
 
     monkeypatch.setattr(operator_store, "_close", close_fd)
     authority_root = tmp_path / "authority"
-    authority_root.mkdir()
-    closure = AcquisitionClosure(GitAuthority(
-        seed_authority(authority_root),
-        authority_root / "legacy",
-    ))
+    if authority_root.exists():
+        repository = authority_root / "authority.git"
+    else:
+        authority_root.mkdir()
+        repository = seed_authority(authority_root)
+    closure = AcquisitionClosure(GitAuthority(repository, authority_root / "legacy"))
     return world, world.binding(), closure
 
 

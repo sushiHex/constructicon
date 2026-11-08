@@ -133,9 +133,28 @@ def configure_executor_guard(monkeypatch):
         monkeypatch.setattr(codex, "acquisition_guard", portable_guard)
 
 
-async def exercise_task_entry(
+@dataclass(frozen=True)
+class TaskAttempt:
+    resources: object
+    scripted: ScriptedWorkerLauncher
+    executor: CodexOperatorProvider
+    authorization: MaintenanceAttemptAuthorization
+    configuration: str
+    program: str
+    blob: bytes
+    capture: list
+
+
+async def prepare_task_attempt(
     resources, process_launcher, binding, tmp_path, monkeypatch, *, change,
+    authorization=None, authorization_id="full-tree-task-witness", key="one-task",
+    attempt_record=None,
 ):
+    """Assemble the scripted native peer, companions and one exact authority.
+
+    A supplied ``authorization`` (the rehearsal's retained one) is installed
+    unchanged; otherwise a fresh one is minted exactly as the witness always has.
+    """
     blob = task_vectors()
     program = (
         "from pathlib import Path\n"
@@ -178,21 +197,23 @@ async def exercise_task_entry(
         binding_store=binding[1], closure=binding[2])
     graph = maintenance_graph(executor_id="executor", workspace_id=resources.workspace.provider_id,
         gate_id=resources.gate.provider_id, writer_grants=GRANTS)
-    authorization = MaintenanceAttemptAuthorization(
-        authorization_id="full-tree-task-witness", actor_id="operator:test",
-        idempotency_key="one-task", scope=entry.WRITER_SCOPE, binding="executor",
-        source_graph_hash=source_graph_hash_for(graph), capability_id="executor",
-        revision=executor.identity.revision,
-        operator_binding_digest=executor.identity.store.operator_binding_digest,
-        journal=str(Path(resources.journal._db_path).resolve()), max_epoch=1,
-        not_after=utc_now() + timedelta(hours=1), grants=GRANTS,
-        attempt_record=str(tmp_path / "task.attempt"), request=resources.request,
-        application_revision=entry.maintenance_application_revision(),
-        workspace=MaintenanceCapabilityPin(capability_id=resources.workspace.provider_id,
-                                          revision=resources.workspace.revision),
-        gate=MaintenanceCapabilityPin(capability_id=resources.gate.provider_id,
-                                     revision=resources.gate.revision),
-    )
+    if authorization is None:
+        authorization = MaintenanceAttemptAuthorization(
+            authorization_id=authorization_id, actor_id="operator:test",
+            idempotency_key=key, scope=entry.WRITER_SCOPE, binding="executor",
+            source_graph_hash=source_graph_hash_for(graph), capability_id="executor",
+            revision=executor.identity.revision,
+            operator_binding_digest=executor.identity.store.operator_binding_digest,
+            journal=str(Path(resources.journal._db_path).resolve()), max_epoch=1,
+            not_after=utc_now() + timedelta(hours=1), grants=GRANTS,
+            attempt_record=str(attempt_record or tmp_path / "task.attempt"),
+            request=resources.request,
+            application_revision=entry.maintenance_application_revision(),
+            workspace=MaintenanceCapabilityPin(capability_id=resources.workspace.provider_id,
+                                              revision=resources.workspace.revision),
+            gate=MaintenanceCapabilityPin(capability_id=resources.gate.provider_id,
+                                         revision=resources.gate.revision),
+        )
     executor.maintenance = authorization
     configure_executor_guard(monkeypatch)
     capture = []
@@ -204,6 +225,18 @@ async def exercise_task_entry(
         return candidate
 
     monkeypatch.setattr(resources.workspace, "capture", observe_capture)
+    return TaskAttempt(resources, scripted, executor, authorization, configuration, program,
+                       blob, capture)
+
+
+async def exercise_task_entry(
+    resources, process_launcher, binding, tmp_path, monkeypatch, *, change,
+):
+    attempt = await prepare_task_attempt(resources, process_launcher, binding, tmp_path,
+                                         monkeypatch, change=change)
+    resources, scripted, executor = attempt.resources, attempt.scripted, attempt.executor
+    authorization, configuration = attempt.authorization, attempt.configuration
+    program, blob, capture = attempt.program, attempt.blob, attempt.capture
     result = await entry.run_maintenance(resources=resources, executor=executor,
         executor_descriptor=descriptor_of(executor, "executor"), authorization=authorization)
     journal, run_id = resources.journal, authorization.run_id
