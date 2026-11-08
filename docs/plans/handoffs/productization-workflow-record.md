@@ -61,5 +61,10 @@ stop rules; those prerequisites were restored. Broad #308 completion was
 rejected as an unsupported claim: a historical source packager does not prove
 every downstream transport's output ownership.
 
+Self-review found that the forwarded report initially advertised an opaque
+second output contract. It now reuses the input's actual schema under the output
+port name; the permitting entry test validates the emitted payload against that
+published shape. This required a fresh focused run and final-head CI.
+
 No vendor binary, credential, model call, VM operation, controller installation,
 re-baseline or production deployment is part of this delivery.

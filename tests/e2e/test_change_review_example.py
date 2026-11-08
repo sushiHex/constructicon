@@ -10,11 +10,13 @@ from pathlib import Path
 
 import pytest
 from examples.change_review import (
+    ANALYSIS,
     CHANNEL_ID,
     DEMO_ADVICE,
     OPERATOR,
     SOURCE_BYTES,
     SYMBOL_LIMIT,
+    ReviewInput,
     assemble,
     checked,
     compare_sources,
@@ -84,6 +86,8 @@ def test_documented_demo_replays_the_same_run_and_retained_advice(tmp_path: Path
     assert first["result"]["outputs"]["advice"]["actor_id"] == OPERATOR.actor_id
     assert first["result"]["outputs"]["advice"]["message_id"] == first["reply"]["message_id"]
     assert first["result"]["outputs"]["analysis"]["tests_executed"] is False
+    assert ANALYSIS.json_schema == ReviewInput.model_json_schema()
+    ReviewInput.model_validate(first["result"]["outputs"]["analysis"])
     assert first["submission"]["command"]["replayed"] is False
 
     replay = output(entry(state, "demo", "--key", "walkthrough-1"))

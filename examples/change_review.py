@@ -105,7 +105,9 @@ CHANGE = Port(
     name="change", type_id="example/PythonChangeReview",
     schema_hash=str(digest("json-schema", 1, CHANGE_SCHEMA)), json_schema=CHANGE_SCHEMA,
 )
-ANALYSIS = Port(name="analysis", type_id="example/PythonChangeSummary", schema_hash="summary-1")
+# The graph forwards this same report shape; publish its real schema rather than
+# inventing an opaque second nominal contract for the output.
+ANALYSIS = CHANGE.model_copy(update={"name": "analysis"})
 
 
 def compare_sources(before_source: str, after_source: str) -> ChangeSummary:
