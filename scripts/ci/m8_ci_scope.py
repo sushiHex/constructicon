@@ -35,6 +35,7 @@ DOCS_PROSE = frozenset({
     "docs/AGENT_HANDOFF.md", "docs/ARCHITECTURE.md", "docs/CONTRIBUTING.md",
     "docs/WORK_TRACKING.md", "docs/plans/README.md", "docs/plans/MANIFEST.sha256",
     "docs/plans/handoffs/M8-implementation-record.md",
+    "docs/plans/handoffs/M9-live-selector-record.md",
 })
 JOB_RESULTS = frozenset({"success", "failure", "cancelled", "skipped"})
 

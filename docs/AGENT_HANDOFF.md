@@ -16,6 +16,27 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Repeatable software-change review
+
+The [delivery record](plans/handoffs/productization-workflow-record.md) covers a
+bounded local AST comparison of exact committed blobs, followed by an advice
+request composed with the existing human advisor and durable control plane.
+Only GitRefs and structured analysis enter graph inputs. The example retains
+requests/results across processes and uses
+ordinary command replay; it does not execute submitted source, review it with a
+model, run tests or authorize a merge. Its metering is the existing schema-3
+projection, with no native observations and independently unknown cost fields.
+Source inspection found no need for a new metering API.
+
+The supported preparation census and whole-sequence M9 fake transport proof
+cover distinct phase staging, execution/readback agreement and occupied-output
+refusal. Historical OBSERVE/recovery/standalone controller paths remain
+source-only; broader #308 is not complete. The quality-comparison packet is
+preparation, not implementation/live authorization or an improved-answer result.
+Only the reviewed living M9 evidence record joins the closed prose CI set;
+unknown paths and runnable handoffs still require full CI. Frozen artifacts and
+the private host are unchanged.
+
 ## Live M9 catalog selector
 
 The [live record](plans/handoffs/M9-live-selector-record.md) establishes one

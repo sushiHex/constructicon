@@ -159,6 +159,11 @@ acceptance or refusal, run the existing
 It uses scripted native input and disposable Git state, not a model login or
 your working repository as a merge target.
 
+For a runnable workflow that compares committed Python changes, parks for
+operator advice and completes after a process restart, follow the
+[durable change-review example](docs/CHANGE_REVIEW.md). It needs no model
+login and reports the existing metering fields without inventing usage or cost.
+
 ### Run a small workflow
 
 This example executes a deterministic Python task. It needs no model login,
