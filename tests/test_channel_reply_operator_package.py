@@ -13,6 +13,8 @@ import json
 import os
 import re
 import shlex
+import shutil
+import sqlite3
 import subprocess
 import sys
 from argparse import Namespace
@@ -33,6 +35,7 @@ from tests.test_m8_operator_commands import PYTHON_PROGRAM, _bash
 
 concrete_application = producer.concrete_application
 portable_binding = producer.portable_binding
+layout = producer.layout
 ROOT = Path(__file__).resolve().parents[1]
 DOCUMENT = ROOT / "docs/plans/handoffs/maintenance-channel-reply-session.md"
 CHANNEL = producer.CHANNEL
@@ -294,7 +297,7 @@ async def test_actual_preflight_preview_flows_through_channel_checker(
 @CHANNEL
 @pytest.mark.parametrize("change", [True, False], ids=["contribution", "successful-noop"])
 async def test_joined_entry_producer_and_real_inspector_cross_t5(
-    concrete_application, tmp_path, change,
+    concrete_application, layout, tmp_path, monkeypatch, change,
 ):
     resources, executor, _system, control, _launch = concrete_application
     await control.shutdown()
@@ -344,3 +347,87 @@ async def test_joined_entry_producer_and_real_inspector_cross_t5(
     assert (transported.returncode, transported.stdout, transported.stderr) == (
         (0, b"transport-step-checked 0\n", b"") if change
         else (1, b"transport-step-refused\n", b""))
+    # Lay out the real producer's durable data as the shipped report reads it.
+    # This copy is intentionally not its authority; the report must say unknown.
+    from tests.api.test_maintenance_report import tree
+
+    root, out = layout
+    root.mkdir(mode=0o700)
+    source = sqlite3.connect(resources.journal._db_path)
+    copy = sqlite3.connect(root / "maintenance.sqlite")
+    try:
+        source.backup(copy)
+    finally:
+        copy.close()
+        source.close()
+    if published.exists():
+        shutil.copyfile(published, root / "maintenance-result.json")
+    # The entry's normal return renderer (maintenance_entry._command) has these
+    # exact two fields. The L0 writer double emits no native attempt record.
+    (root / "application-run.json").write_bytes(json.dumps({
+        "accepted": result is not None, "run_id": str(authorization.run_id),
+    }).encode())
+    assert not Path(authorization.attempt_record).exists()
+    before = tree(root)
+    # The portable workspace remover is scoped to tmp_path; the independent
+    # report copy lives elsewhere. No producer resource remains to remove.
+    monkeypatch.setattr(shutil, "rmtree", producer._RMTREE)
+    report_program = "\n".join([
+        "import os,sys,pytest",
+        f"sys.path[:0]=[{ROOT.as_posix()!r},{(ROOT / 'src').as_posix()!r}]",
+        "sys.stdout.reconfigure(newline=chr(10))",
+        "from tests.substrate.journal.conftest import portable_capture_custody",
+        "from constructicon.substrate.journal import maintenance_diagnostic as diagnostic",
+        "patch=pytest.MonkeyPatch()",
+        "portable_capture_custody.__wrapped__(patch)",
+        "if os.name=='nt':",
+        "    identity=diagnostic._identity",
+        "    patch.setattr(diagnostic,'_identity',lambda value:(*identity(value)[:-1],0))",
+        "from constructicon.api import maintenance_report",
+        # Explicit synthetic G1 seam: this child exercises the report command,
+        # not drift, sudo, boot or the complete fifteen-stage host procedure.
+        "print('drift-checked')",
+        "raise SystemExit(maintenance_report.main(sys.argv[1:]))",
+    ])
+    report_args = [sys.executable, "-I", "-B", "-c", report_program,
+        "--root", str(root), "--out", str(out),
+        "--command-report", str(root / "application-run.json"),
+        "--run-id", str(authorization.run_id), "--authorization-id", authorization.authorization_id]
+    report_capture = tmp_path / "report-transport"
+    transported, status = _t5(report_capture, _step("cr-report").expected(), report_args)
+    assert status == {"returncode": 0}
+    assert (transported.returncode, transported.stdout, transported.stderr) == (
+        0, b"transport-step-checked 0\n", b"")
+    raw = (report_capture / "capture.stdout").read_bytes().removeprefix(b"drift-checked\n")
+    packet = json.loads(raw)
+    assert len(raw) <= 8192 and raw.endswith(b"\n")
+    assert packet["purpose"] == "channel-stored-reply" and packet["complete"] is True
+    assert packet["outcome"] == ("succeeded-with-acceptance-record" if change else "refused")
+    assert packet["leases"]["summary"] == "recorded-closed"
+    assert {(item["node"], item["binding"]) for item in packet["leases"]["items"]} == {
+        (scope[-1], binding) for scope, binding in expected_bindings}
+    assert packet["target"]["reason"] == "request-names-another-repository"
+    if change:
+        assert packet["result"]["base_sha256"] == result.base_sha256
+        assert packet["result"]["candidate_sha256"] == result.candidate_sha256
+    else:
+        assert packet["result"] == {"observation": "missing"}
+    assert tree(root) == before
+    # A different, absent RunId contradicts the retained command record. The
+    # actual report emits a named refusal, and T5 refuses the complete-packet
+    # contract rather than accepting that shorter diagnostic shape.
+    refused_args = [*report_args]
+    refused_args[refused_args.index("--out") + 1] = str(out.parent / "refused-capture")
+    absent = "run-" + "0" * 32
+    assert absent != str(authorization.run_id)
+    refused_args[refused_args.index("--run-id") + 1] = absent
+    refused_capture = tmp_path / "report-refused"
+    transported, status = _t5(refused_capture, _step("cr-report").expected(), refused_args)
+    assert status == {"returncode": 1}
+    assert (transported.returncode, transported.stdout, transported.stderr) == (
+        1, b"transport-step-refused\n", b"")
+    refusal = json.loads((refused_capture / "capture.stdout").read_bytes().removeprefix(
+        b"drift-checked\n"))
+    assert refusal["complete"] is False and refusal["stage"] == "diagnostic"
+    assert refusal["diagnostic_stage"] == "command"
+    assert tree(root) == before

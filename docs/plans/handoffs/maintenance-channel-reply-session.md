@@ -631,8 +631,8 @@ printf '%s\n' diagnosis-quiescence-checked
 
 ## Offline evidence and release limit
 
-The development producer is immutable commit
-`e7f6afea39db31be945cfb02a9a8bb91478f5d53`, explicitly unreviewed and unselected
+The selected development producer is immutable commit
+`6689885723eb5571f620358f9cdeed00a44996e3`, explicitly unreviewed and unselected
 for host use. The [focused composition tests](../../../tests/test_channel_reply_operator_package.py)
 exercise the actual compiler's template/refusal path, LF files and shell syntax;
 the real prepare producer and new source checker; the actual preflight producer
@@ -641,16 +641,20 @@ custody substituted; and an accepting/no-op real entry lifecycle with the
 portable launcher followed by the actual inspector CLI through frozen T5.
 The real withdrawal CLI also composes durable withdrawal, the inherited receipt
 consumer and joined child completion over the existing portable OS double, on
-accepting and wrong-parent cases. No credential is opened in that proof.
+accepting and wrong-parent cases. The shipped report CLI consumes the accepted
+and no-op producer journals through frozen T5 with its top-level task purpose;
+an absent-run report refuses that same complete-packet contract. No credential
+is opened in these proofs.
 
 This is not execution of all fifteen packaged steps. Drift/transfer markers in
 the source-checker fixture are explicit synthetic host seams; the new stage
 selection does not transform old N4 component proofs into current host evidence.
-The e7f6 report still assumes the old task's result/request shape; its complete
-packet composition awaits the successor's reviewed integration fix. Do not
-release `cr-report` on that development revision or relabel development proofs
-as evidence for a later revision. Recheck changed producer/fixture blobs and run
-the affected composition proofs when selecting the actual merged source.
+The earlier e7f6 report assumed the old task's result/request shape; this
+development revision adds the two-task projection and top-level `purpose`.
+Both task families now require that purpose key in a complete report packet.
+Do not relabel the earlier development proofs as evidence for this or another
+revision. Recheck changed producer/fixture blobs and run the affected composition
+proofs when selecting the actual merged source.
 
 No installation, qualification, useful live candidate or cleanup/park observation
 is established here. Source-bound original installer files, exact late pins,
@@ -865,7 +869,7 @@ parts = [
 [[steps]]
 name = "cr-report"
 stdout = ["drift-checked"]
-record = {keys = ["schema_version", "complete", "meaning", "run_id", "status", "outcome", "refusal", "diagnostic", "result", "metering", "capability_accounting", "leases", "attestation", "target"], max_bytes = 8192}
+record = {keys = ["schema_version", "complete", "meaning", "run_id", "purpose", "status", "outcome", "refusal", "diagnostic", "result", "metering", "capability_accounting", "leases", "attestation", "target"], max_bytes = 8192}
 deferred = true
 parts = [
   {source = "self", heading = "Source and private declarations", fences = [0]},

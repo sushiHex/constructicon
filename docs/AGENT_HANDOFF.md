@@ -23,6 +23,10 @@ composes the existing compiler, frozen N4 lane boundaries and T5 transport with
 the new task's source/preview checks and historical inspector. Credential-free
 producer tests cover preparation, a task-specific preview, joined accepting and
 no-op entry teardown, inherited withdrawal receipt and retained authority bytes.
+The report CLI carries either channel outcome through the transport with its
+task purpose; a mismatched RunId produces a named refusal, with source copies
+unchanged. The packet remains an observation rather than authentication of an
+unsealed result sidecar or proof of physical cleanup.
 They substitute the existing platform custody/process seams and establish no
 host qualification, physical cleanup or spending authority. Unresolved inputs
 refuse an ordinary build; template output is never a host-ready package. The
