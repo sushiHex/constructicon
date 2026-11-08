@@ -1,20 +1,28 @@
 """Use the installed selector candidate producer and the real staging argv."""
 
+import io
 import json
 import subprocess
+import sys
 import time
 from argparse import Namespace
+from contextlib import redirect_stdout
 from pathlib import Path
 
 import pytest
 from scripts.ops import m9_qualification_boundary as boundary
 from scripts.ops.claude_read_commands import sha
 from scripts.ops.claude_read_session import json_bytes
+from scripts.ops.m9_native_read import run_native_read
+from scripts.ops.m9_read_window import WindowLimits
 
 from constructicon.api import m9_trial
 from constructicon.api._m9 import proposer
+from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import json_value
 from constructicon.core.manifest import source_graph_hash_for
+from constructicon.substrate.executors import codex_host, operator_store
+from tests.operator_store_world import StoreWorld
 from tests.test_m9_read_transport import bash
 
 BOOT = "01234567-89ab-cdef-0123-456789abcdef"
@@ -316,3 +324,183 @@ def test_retired_owner_key_selection_refuses_before_process(tmp_path):
             path, sha(raw), tmp_path / "work", target=TARGET, alias=ALIAS, run=unexpected_process
         )
     assert not (tmp_path / "work").exists()
+
+
+class TerminalFailureTwin(NativeTwin):
+    """Real phase capture and locked withdrawal reader; external I/O is fake.
+
+    StoreWorld substitutes OS/descriptor primitives only. The emitted _WITHDRAWN
+    code still calls the real _open_offline/_current_withdrawal under the lock;
+    missing active.json refuses rather than proving withdrawal by absence.
+    """
+
+    def __init__(self, monkeypatch, work, *, phase="fresh-workspaces", code=1,
+                 probe_fault=None, park_fault=False):
+        super().__init__(monkeypatch, work)
+        self.phase, self.code = phase, code
+        self.probe_fault, self.park_fault = probe_fault, park_fault
+        self.probes = 0
+        self.world = StoreWorld(work / "physical", key=boundary.STORE_KEY, generation=11)
+        self.world.root = self.world.root.with_name("operator-stores")
+        self.world.root.mkdir()
+        self.world.exclusive = True
+        self.world.install(monkeypatch)
+        with operator_store.maintain_offline(self.world.root, self.world.key, wait_s=0):
+            pass
+        self.withdrawn_metadata = dict(self.world.metadata)
+        self.world.events.clear()
+        self.locked_reads = 0
+        read = operator_store._read_metadata
+        def locked_read(opened, name):
+            if name == "active.json":
+                assert self.world.holder == opened.lock_fd
+                self.locked_reads += 1
+            return read(opened, name)
+        monkeypatch.setattr(operator_store, "_read_metadata", locked_read)
+        monkeypatch.setattr(codex_host, "LAUNCH_ROOT", self.world.root.parent)
+
+    def __call__(self, argv, **kwargs):
+        assert kwargs["stdin"] == subprocess.DEVNULL and kwargs["shell"] is False
+        command = argv[-1]
+        if "/bin/bash phase.sh" in command:
+            remote = command.split('cd "$HOME/', 1)[1].split('"', 1)[0]
+            phase = self.staged[remote]
+            if phase == self.phase:
+                self.events.append(phase)
+                if self.code == "timeout":
+                    raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+                if self.code == "lost":
+                    raise OSError("fixture transport lost")
+                kwargs["stderr"].write(b"fixture synchronous guard refusal\n")
+                return subprocess.CompletedProcess(argv, self.code)
+        if "WITHDRAWAL_LOCK_UNAVAILABLE" in command:
+            self.probes += 1
+            self.events.append("withdraw-probe")
+            if self.probe_fault == "timeout":
+                raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+            if self.probe_fault == "missing":
+                self.world.metadata.pop("active.json")
+            if self.probe_fault == "locked":
+                self.world.lock_after = self.world.lock_attempts + 1
+            output = io.StringIO()
+            prior_argv, prior_path = sys.argv, sys.path[:]
+            try:
+                sys.argv = ["withdrawal-probe", str(self.work), self.world.key]
+                with redirect_stdout(output):
+                    exec(compile(boundary._WITHDRAWN, "actual-withdrawal-probe", "exec"), {})
+            except ContractViolation:
+                kwargs["stderr"].write(b"fixture withdrawal refused\n")
+                return subprocess.CompletedProcess(argv, 1)
+            finally:
+                sys.argv, sys.path[:] = prior_argv, prior_path
+            raw = output.getvalue().encode()
+            if self.probe_fault == "altered":
+                raw = json_bytes({"key": self.world.key, "generation_floor": 12})
+            kwargs["stdout"].write(raw)
+            return subprocess.CompletedProcess(argv, 0)
+        if command == boundary.m8_vm_usage.QUERY and self.park_fault:
+            kwargs["stdout"].write(json_bytes({"name": "constructicon-m8", "state": "Running",
+                "operational": ["Ok"], "uptime_seconds": 1, "checkpoints": 0, "vmconnect": 0}))
+            return subprocess.CompletedProcess(argv, 0)
+        return super().__call__(argv, **kwargs)
+
+
+def failed_window(tmp_path, monkeypatch, **options):
+    twin = TerminalFailureTwin(monkeypatch, tmp_path, **options)
+    host = make(tmp_path, twin)
+    custody = tmp_path / "custody"
+    custody.mkdir(mode=0o700)
+    limits = WindowLimits(window=100, qualify=8, placement=1, dispatch=1, proof=1,
+                          close=1, withdraw=9, park=10)
+    # No owner method may be reached: qualification fails before a pin packet.
+    result = run_native_read(custody, host, Namespace(), limits, run=twin)
+    return result, host, twin, custody
+
+
+@pytest.mark.parametrize("code", [1, 127])
+def test_completed_pre_store_failure_uses_locked_withdrawal_then_verified_off(
+    tmp_path, monkeypatch, code,
+):
+    result, host, twin, custody = failed_window(tmp_path, monkeypatch, code=code)
+    assert result.reason == "qualification-unproved" and result.cleanup == "clean"
+    assert result.dispatch == "not-issued" and result.accepted_read_sha256 is None
+    assert not result.custody_retained and not (custody / "active").exists()
+    assert host._uncertain is True and host._qualification is None
+    assert twin.probes == 1 and twin.events[-2:] == ["withdraw-probe", "park"]
+    assert boundary.CLEANUP not in twin.events and "lock" in twin.world.events
+    assert twin.locked_reads == 1
+    assert twin.world.holder is None and twin.world.metadata == twin.withdrawn_metadata
+    assert not list(result.record.glob("challenge*"))
+    status = json.loads((tmp_path / "work/captures/fresh-workspaces.status.json").read_bytes())
+    assert status == {"completed": True, "returncode": code, "timed_out": False}
+
+
+@pytest.mark.parametrize("code", ["timeout", "lost", None, True, 0, -15, 128, 255])
+def test_unclear_pre_store_exit_retains_custody_without_probe(tmp_path, monkeypatch, code):
+    result, host, twin, custody = failed_window(tmp_path, monkeypatch, code=code)
+    assert result.cleanup == "unknown" and result.custody_retained
+    assert result.dispatch == "not-issued" and result.accepted_read_sha256 is None
+    assert (custody / "active").exists() and host._uncertain is True
+    assert twin.probes == 0 and "park" not in twin.events and boundary.CLEANUP not in twin.events
+
+
+@pytest.mark.parametrize("phase", [*sorted(boundary.STORE_MUTATIONS), "trial-seed"])
+def test_completed_store_phase_failure_cannot_use_read_only_escape(tmp_path, monkeypatch, phase):
+    result, host, twin, custody = failed_window(tmp_path, monkeypatch, phase=phase)
+    assert result.cleanup == "unknown" and result.custody_retained and (custody / "active").exists()
+    assert host._mutated and host._uncertain
+    assert twin.probes == 0 and "park" not in twin.events and boundary.CLEANUP not in twin.events
+
+
+@pytest.mark.parametrize("fault", ["missing", "locked", "altered", "timeout"])
+def test_completed_failure_probe_refusal_never_parks_or_retries(tmp_path, monkeypatch, fault):
+    result, host, twin, custody = failed_window(tmp_path, monkeypatch, probe_fault=fault)
+    assert result.cleanup == "unknown" and result.custody_retained and (custody / "active").exists()
+    assert host._uncertain and twin.probes == 1 and "park" not in twin.events
+    assert host._completed_phase_exit is None
+    with pytest.raises(ValueError, match="WITHDRAW_UNSAFE"):
+        host.withdraw(None, time.monotonic() + 10)
+    with pytest.raises(ValueError, match="PARK_UNSAFE"):
+        host.park(time.monotonic() + 10)
+    assert twin.probes == 1 and boundary.CLEANUP not in twin.events
+
+
+def test_completed_failure_requires_independent_off_observation(tmp_path, monkeypatch):
+    result, host, twin, custody = failed_window(tmp_path, monkeypatch, park_fault=True)
+    assert result.reason == "park-unproved" and result.cleanup == "unknown"
+    assert result.custody_retained and (custody / "active").exists()
+    assert host._uncertain and twin.probes == 1 and twin.events[-1] == "park"
+
+
+def test_new_phase_discards_stale_exit_before_transport_loss(tmp_path, monkeypatch):
+    twin = TerminalFailureTwin(monkeypatch, tmp_path, code="lost")
+    host = make(tmp_path, twin)
+    stage = host._stage
+    def stale_after_staging(phase, cutoff):
+        argv = stage(phase, cutoff)
+        if phase == twin.phase:
+            host._completed_phase_exit = 1
+        return argv
+    monkeypatch.setattr(host, "_stage", stale_after_staging)
+    with pytest.raises(OSError, match="fixture transport lost"):
+        host.qualify(time.monotonic() + 10)
+    assert host._completed_phase_exit is None
+    with pytest.raises(ValueError, match="WITHDRAW_UNSAFE"):
+        host.withdraw(None, time.monotonic() + 10)
+    assert host._completed_phase_exit is None and twin.probes == 0
+
+
+@pytest.mark.parametrize("change", [
+    {"completed": False}, {"completed": 1}, {"timed_out": True},
+    {"returncode": 1.0}, {"extra": "not-the-capture-contract"},
+])
+def test_malformed_phase_completion_cannot_license_withdrawal(tmp_path, monkeypatch, change):
+    capture = boundary.transport.capture
+    def altered(name, *args, **kwargs):
+        status, out, err = capture(name, *args, **kwargs)
+        return ({**status, **change} if name == "fresh-workspaces" else status), out, err
+    monkeypatch.setattr(boundary.transport, "capture", altered)
+    result, host, twin, custody = failed_window(tmp_path, monkeypatch)
+    assert result.cleanup == "unknown" and result.custody_retained
+    assert host._uncertain and (custody / "active").exists()
+    assert twin.probes == 0 and "park" not in twin.events

@@ -187,3 +187,52 @@ Existing refusal cases now assert the relevant reason, with CLI and constructor
 coverage plus a value-nondisclosure assertion. The helper and refusal-name checks
 passed 17 cases locally. The declaration mutant's exact source target was updated
 for the added reason argument; it still removes the same admission requirement.
+
+
+## Producer lifecycle and completed pre-store refusal
+
+A reviewed operator assumption required a transient lane after the producing
+`codex_lane.launch` had already removed it. This was an introduced operator
+fixture/guard defect, not a demonstrated native provider failure. Accepting
+fixtures must use the actual producer through teardown with only external
+primitives substituted. The canonical delivery policy now requires that proof,
+a stated authority/integrity invariant behind layout guards, bounded operating
+scope including reviewed cleanup, and separate failure/cleanup conclusions.
+Accepted plans, installed controller bytes and frozen private packages remain
+unchanged; this policy does not waive their explicit restrictions.
+
+The operator boundary now records a typed, completed, non-timeout phase exit
+in `1..127` solely to permit one existing locked read-only withdrawal probe
+before any store phase. The transport records completion after
+`subprocess.run` returns (`scripts/ops/claude_read_session.py`);
+[OpenSSH's exit contract](https://man.openbsd.org/ssh.1#EXIT_STATUS) distinguishes
+remote exit status from transport error 255. This is not a remote worker-join
+claim. `_open_offline` must acquire the physical store lock and
+`_current_withdrawal` must read the existing withdrawal record. Absence cannot
+establish withdrawal. The exact selected generation floor and subsequent
+independent Off observation remain mandatory. No mutating cleanup runs here.
+
+The eligibility resets before each phase capture and is consumed before the
+probe. The mutation latch is set before entering store phases and never reset.
+Unknown transport outcomes, malformed completion, timeouts, exit 255,
+signal-style exits, entered store phases, failed probes and failed Off checks
+retain custody. Qualification remains failed and `_uncertain` remains true even
+when cleanup is proved; no accepted READ, approval challenge or retry is created.
+The model-dispatch uncertainty path is unchanged. Historical retained results
+and markers are not rewritten or retrospectively accepted.
+
+Focused Windows proof: 32 boundary cases and 41 adjacent native-window/transport
+cases passed. Six targeted in-memory guard mutations failed assertions: exit
+range, integer type, affirmative completion, mutation latch, single-use probe
+eligibility and stale-exit reset. They are measured proof of these cases, not a
+new inventory/framework or a claim of exhaustive interleavings. Two additional
+producer tests exercise the actual startup/lane and EgressRelay lifecycle,
+substituting socket binding/accept waiting, sealed descriptor and scripted
+backend/custody. They prove empty-lane removal, preservation of bounded residue,
+relay closure, descriptor closure and actual evidence publication without
+network, vendor binary, credential, model or VM use.
+
+The delivery PR carries independent boundary review and final-head CI. Local
+fake proofs do not qualify a host, prove an arbitrary phase cannot detach work,
+or authorize a new live window. The separately retained live marker continues
+to need its reviewed reconciliation scope.

@@ -385,9 +385,12 @@ class QualificationBoundary:
         self._live = None
         self._serial = 0
         self._d2_readback = None
+        self._completed_phase_exit = None
         self._started = self._mutated = self._uncertain = self._withdrawn = self._park = False
 
     def _call(self, name, argv, cutoff, limit=4096):
+        if name in PHASES:
+            self._completed_phase_exit = None
         seconds = cutoff - time.monotonic()
         _require(math.isfinite(seconds) and seconds > 0, "DEADLINE")
         status, out, err = transport.capture(
@@ -398,6 +401,18 @@ class QualificationBoundary:
             limit,
             run=self._run,
         )
+        if name in PHASES:
+            # capture records completion only after subprocess.run returns.
+            # ssh(1) EXIT STATUS (https://man.openbsd.org/ssh#EXIT_STATUS):
+            # 255 denotes a transport error. Signal-style exits stay unknown.
+            # This only permits a locked withdrawal read, not a worker-join claim.
+            self._completed_phase_exit = (
+                status["returncode"]
+                if type(status) is dict and status.keys() == _COMPLETE.keys()
+                and status["completed"] is True and status["timed_out"] is False
+                and type(status["returncode"]) is int and 1 <= status["returncode"] <= 127
+                else None
+            )
         _require(time.monotonic() < cutoff, "DEADLINE")
         _require(
             status == _COMPLETE and type(status["returncode"]) is int and not err,
@@ -591,11 +606,16 @@ class QualificationBoundary:
     def withdraw(self, qualified: QualifiedRead | None, cutoff: float) -> str:
         _require(
             self._boot is not None
-            and not self._uncertain
+            and (not self._uncertain or (
+                self._completed_phase_exit is not None and not self._mutated
+            ))
             and not self._withdrawn
             and (qualified is None or qualified is self._qualification),
             "WITHDRAW_UNSAFE",
         )
+        # Consume eligibility before the read-only locked probe. Failure keeps
+        # uncertainty/custody and cannot license another probe or a park.
+        self._completed_phase_exit = None
         floor = self._selected["previous_generation"]
         receipts = []
         if self._mutated:
