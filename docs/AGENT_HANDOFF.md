@@ -16,6 +16,25 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Live M9 catalog selector
+
+The [live record](plans/handoffs/M9-live-selector-record.md) establishes one
+owner-approved generation-14 READ at C490 selecting `cite-evidence`, with a
+succeeded original attempt, matching projection, closed/released lease, no next
+attempt and checked withdrawal/Off/custody release. Usage is observational;
+served model, backend request count and monetary cost remain unreported/unknown.
+The accepted evidence hash combines projection and original-invocation hashes;
+it is not the raw projection's file hash.
+
+This proves the fixed catalog selection, not improved model-answer quality or
+candidate promotion. The fixed scripted preparation then parked the exact
+candidate request and cleanly released host custody, without proof issuance or
+pointer movement. The original C490 schema-10 trial store remains in place;
+current-main migration is not part of this evidence. A local capture-directory
+omission stopped before a VM subprocess; the corrected caller scaffold, rather
+than a changed provider guard, enabled the reviewed resume. Frozen plans and
+historical unknown results were preserved.
+
 ## Producer lifecycle and completed qualification refusal
 
 The [delivery record](plans/handoffs/operator-helper-contract-record.md) covers
