@@ -65,9 +65,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
+          version: "0.13.7"
+          checksum: 0cdc5b38fe5a8168ed6a25814f5ba43c21d313dd3187314fccb37b7cec46e021
           python-version: "3.12"
+          activate-environment: true
+          prune-cache: true
       - run: uv sync --dev
       - name: Prove the Windows argument boundary with fake Hyper-V cmdlets
         env:
@@ -98,9 +102,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
+          version: "0.13.7"
+          checksum: c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83
           python-version: "3.11"
+          activate-environment: true
+          prune-cache: true
       - run: uv sync --dev
       # GitHub voids a workflow with one invalid key or expression and shows only
       # a jobless run, so lint every workflow before merge (#218). The release
@@ -198,9 +206,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
+          version: "0.13.7"
+          checksum: c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83
           python-version: "3.11"
+          activate-environment: true
+          prune-cache: true
       - run: uv sync --dev
       - run: uv run python scripts/${{ matrix.inventory }}
 
