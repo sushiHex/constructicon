@@ -109,10 +109,10 @@ def test_filled_private_copy_builds_a_complete_normal_package(tmp_path):
         "BUNDLE_SHA256": "2" * 64, "BUNDLE_SIZE": "100", "BUNDLE": "/synthetic/source.bundle",
         "W": "/synthetic/g15/session", "K": "synthetic-store",
         "W_PRIOR": "/synthetic/g14/session", "GEN": "g15", "GEN_PRIOR": "g14",
-        "GENERATION": "15", "FLOOR": "14", "S": "/synthetic/state",
-        "APP": "/synthetic/application", "A": "/synthetic/authority.json",
+        "GENERATION": "15", "FLOOR": "14", "S": "/synthetic/s1/state",
+        "APP": "/synthetic/a1/application", "A": "/synthetic/authority.json",
         "ID": "synthetic-authorization", "ACTOR": "operator:synthetic", "KEY": "synthetic-key",
-        "REPORT": "/synthetic/report", "SOURCE_UPLOAD": "/synthetic/upload.bundle",
+        "REPORT": "/synthetic/s1/state-report", "SOURCE_UPLOAD": "/synthetic/upload.bundle",
         "QUIESCENCE_CAPTURE": "/synthetic/quiescence.stdout",
         "QUIESCENCE_STDERR": "/synthetic/quiescence.stderr",
     }
@@ -183,16 +183,18 @@ def test_filled_private_copy_builds_a_complete_normal_package(tmp_path):
 
     check = [sys.executable, "-I", "-B",
              str(ROOT / "scripts/ops/check_native_state_path.py")]
-    for path in (private, out / "cr-preflight.sh"):
+    for path in (private, out / "cr-preflight.sh", out / "cr-report.sh"):
         accepted = subprocess.run([*check, str(path)], stdin=subprocess.DEVNULL,
                                   capture_output=True, text=True, check=False)
         assert (accepted.returncode, accepted.stdout, accepted.stderr) == (
-            0, "native-state-socket-checked: 87 <= 107 bytes\n", "",
+            0, "native-state-socket-checked: 90 <= 107 bytes\n"
+            "maintenance-report-path-checked\n", "",
         )
     long_state = "/synthetic/" + "a" * 54
     raw = private.read_bytes()
-    assert raw.count(b"S=/synthetic/state\n") == 1
-    private.write_bytes(raw.replace(b"S=/synthetic/state\n", f"S={long_state}\n".encode()))
+    state_line = f"S={declarations['S']}\n".encode()
+    assert raw.count(state_line) == 1
+    private.write_bytes(raw.replace(state_line, f"S={long_state}\n".encode()))
     long_package = tmp_path / "long-state-package"
     compiled = subprocess.run([*command, str(long_package), "--values", str(measured)],
                               stdin=subprocess.DEVNULL, capture_output=True, check=False)
@@ -203,6 +205,26 @@ def test_filled_private_copy_builds_a_complete_normal_package(tmp_path):
         assert (refused.returncode, refused.stdout, refused.stderr) == (
             1, "", "native-state-socket-too-long: 136 > 107 bytes\n",
         )
+    report_line = f"REPORT={declarations['REPORT']}\n".encode()
+    assert raw.count(report_line) == 1
+    for label, dest in (
+        ("in-state", "/synthetic/s1/state/report"),
+        ("over-state", "/synthetic/s1"),
+        ("in-app", "/synthetic/a1/application/report"),
+        ("over-app", "/synthetic/a1"),
+        ("equal-root", "/synthetic/a1/application"),
+    ):
+        private.write_bytes(raw.replace(report_line, f"REPORT={dest}\n".encode()))
+        overlap_package = tmp_path / label
+        compiled = subprocess.run([*command, str(overlap_package), "--values", str(measured)],
+                                  stdin=subprocess.DEVNULL, capture_output=True, check=False)
+        assert (compiled.returncode, compiled.stderr) == (0, b"")
+        for path in (private, overlap_package / "cr-report.sh"):
+            refused = subprocess.run([*check, str(path)], stdin=subprocess.DEVNULL,
+                                     capture_output=True, text=True, check=False)
+            assert (refused.returncode, refused.stdout, refused.stderr) == (
+                1, "", "maintenance-report-path-overlap\n",
+            ), label
 
 
 def test_reused_capture_and_lane_bytes_remain_exact():

@@ -96,16 +96,19 @@ Only these substitutions belong to this template's private specialization:
   The WRITE provider derives the Unix socket from
   `S/acquisitions/payloads/acq-<32 hex>/egress.sock`. A
   descriptive path can compile and pass startup qualification but exceed the
-  provider's 107-byte limit before it can produce WRITE pins. Before taking VM
-  custody, run the local check from the reviewed operator checkout:
+  provider's 107-byte limit before it can produce WRITE pins. Use the same
+  absolute path syntax for `APP` and `REPORT`. `REPORT` must be separate from
+  both `APP` and `S`, which holds `application-run.json`: the report capture
+  refuses equality or a parent/child relationship in either direction.
+  Before taking VM custody, run the local check from the reviewed operator checkout:
 
       uv run python -I -B scripts/ops/check_native_state_path.py PRIVATE_RECIPE
 
-  Require exit zero and `native-state-socket-checked`. Repeat with the actual
-  compiled `cr-preflight.sh` before uploading the package. The checker reads
-  the literal without running the recipe and uses the provider's acquisition
-  path and socket bound. Keep dependent private paths such as `REPORT` aligned.
-  Path freshness, ownership and custody are still checked on the host.
+  Require exit zero, `native-state-socket-checked` and
+  `maintenance-report-path-checked`. Repeat on the actual compiled
+  `cr-preflight.sh` and, when the report step is built, `cr-report.sh` before
+  uploading each package. The checker reads the literals without running the
+  recipe. The host still checks path freshness, ownership and custody.
 - Fill `SOURCE_UPLOAD` in **Bundle transfer**, and `QUIESCENCE_CAPTURE` and
   `QUIESCENCE_STDERR` in **Quiescence capture**, with reviewed private locators.
   Quote literal shell values; never fill a command, expansion or shell expression.
