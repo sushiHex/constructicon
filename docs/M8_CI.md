@@ -87,7 +87,10 @@ that Linux execution. No private-host procedure or dependency pin is changed.
 ## Verified release archive reuse
 
 The required workflows cache only the pinned actionlint, Pi and Codex raw
-archives, under exact version, Linux/x64 and SHA-256 keys. Cache restore/save
+archives and the pinned cosign binary, under exact version, Linux/x64 and
+SHA-256 keys. The foundation lane checks cosign against its pin after
+acquisition and again immediately before `verify-blob`. The Codex package's
+`.sigstore` bundle is not cached and is still fetched from GitHub Releases. Cache restore/save
 failures are best effort; acquisition, checksum checks and use remain required.
 Every restored archive passes its checksum before extraction, and corrupt bytes
 fail without extraction or cache publication. Saves follow successful acquisition

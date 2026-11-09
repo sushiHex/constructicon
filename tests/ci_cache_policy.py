@@ -4,8 +4,11 @@ import re
 
 CACHE_PIN = "0057852bfaa89a56745cba8c7296529d2fc39830"
 CACHE_STEPS = {
-    f"{verb} pinned {asset} archive": (job, mode)
-    for asset, job in (("actionlint", "verify"), ("pi", "proofs"), ("codex", "proofs"))
+    f"{verb} pinned {asset} {kind}": (job, mode)
+    for asset, kind, job in (
+        ("actionlint", "archive", "verify"), ("pi", "archive", "proofs"),
+        ("codex", "archive", "proofs"), ("cosign", "binary", "proofs"),
+    )
     for verb, mode in (("Restore", "restore"), ("Save", "save"))
 }
 
