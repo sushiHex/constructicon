@@ -16,6 +16,20 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Verified cosign binary reuse
+
+On the #401 head, the foundation lane twice failed its Codex signature step: the
+cosign v2.6.5 GitHub release asset returned 504 three times. The pinned binary
+now goes through the same best-effort cache as the actionlint, Pi and Codex
+archives. The key holds the exact version, Linux/x64 and its SHA-256, and no
+restore keys apply. Restore and save may fail without failing the job.
+Acquisition, the checksum and signature verification stay required. A hit or a
+download passes the pin check, and the use step checks it again immediately
+before `verify-blob`. A cold or evicted entry still needs GitHub Releases. Pull
+request caches do not warm main. The Codex `.sigstore` bundle is still fetched
+uncached from GitHub. `m8-containment.yml` is a launch blob, so future launch
+artifact identity changes again.
+
 ## Pinned, verified uv bootstrap
 
 The setup-uv v5 failures in [run 42468371511](https://github.com/sushiHex/constructicon/actions/runs/42468371511)

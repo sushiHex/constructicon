@@ -24,7 +24,15 @@ ASSETS = {
     "pi": (CONTAINMENT, "Acquire pinned Pi archive", "pi-linux-x64.tar.gz", "1.3.0"),
     "codex": (CONTAINMENT, "Acquire the pinned native investigation artifact (no account)",
               "codex.tar.gz", "0.160.1"),
+    "cosign": (CONTAINMENT, "Acquire pinned cosign binary", "cosign", "2.6.5"),
 }
+KINDS = {"cosign": "binary"}
+COSIGN_USE = "Verify the pinned package's release signature and catalog commit"
+
+
+def cache_names(name: str) -> tuple[str, str]:
+    kind = KINDS.get(name, "archive")
+    return f"Restore pinned {name} {kind}", f"Save pinned {name} {kind}"
 
 
 def step(workflow: str, name: str) -> str:
@@ -43,15 +51,15 @@ def shell(workflow: str, name: str) -> str:
 def test_cache_key_and_save_are_bound_to_the_verified_archive(name: str) -> None:
     workflow, acquire_name, archive, version = ASSETS[name]
     acquisition = step(workflow, acquire_name)
-    restore = step(workflow, f"Restore pinned {name} archive")
-    save = step(workflow, f"Save pinned {name} archive")
+    restore_name, save_name = cache_names(name)
+    restore, save = step(workflow, restore_name), step(workflow, save_name)
     digest = re.findall(r"\b[0-9a-f]{64}\b",
                         workflow if name == "actionlint" else acquisition)[0]
     key = ("release-archive-codex-${{ env.CODEX_PIN_VERSION }}-Linux-X64-"
            "${{ env.CODEX_PIN_CODEX_SHA256 }}" if name == "codex" else
            "release-archive-actionlint-${{ env.ACTIONLINT_VERSION }}-Linux-X64-"
            "${{ env.ACTIONLINT_SHA256 }}" if name == "actionlint" else
-           f"release-archive-{name}-{version}-Linux-X64-{digest}")
+           f"release-{KINDS.get(name, 'archive')}-{name}-{version}-Linux-X64-{digest}")
     cache_file = "${{ env.ACTIONLINT_ARCHIVE }}" if name == "actionlint" else archive
     for kind, cache_step in (("restore", restore), ("save", save)):
         assert f"uses: actions/cache/{kind}@{ACTION_PIN}" in cache_step
@@ -63,12 +71,14 @@ def test_cache_key_and_save_are_bound_to_the_verified_archive(name: str) -> None
     assert "continue-on-error" not in acquisition
     assert "success() && " in save
     assert "always()" not in save and "failure()" not in save
-    assert f"if: success() && steps.{name}-cache.outputs.cache-hit != 'true'" in save or (
-        name == "pi" and "if: success() && matrix.lane == 'lifecycle' && "
-        "steps.pi-cache.outputs.cache-hit != 'true'" in save
-    )
-    assert workflow.index(f"Restore pinned {name} archive") < workflow.index(acquire_name)
-    assert workflow.index(acquire_name) < workflow.index(f"Save pinned {name} archive")
+    lane = {"pi": "lifecycle", "cosign": "foundation"}.get(name)
+    guard = f"matrix.lane == '{lane}' && " if lane else ""
+    assert f"if: success() && {guard}steps.{name}-cache.outputs.cache-hit != 'true'\n" in save
+    if lane:
+        for gated in (restore, acquisition):
+            assert f"        if: matrix.lane == '{lane}'\n" in gated
+    assert workflow.index(restore_name) < workflow.index(acquire_name)
+    assert workflow.index(acquire_name) < workflow.index(save_name)
     assert "sha256sum --check --strict" in acquisition
     if name == "actionlint":
         for field in ("VERSION", "SHA256", "ASSET_ID"):
@@ -83,9 +93,18 @@ def test_cache_key_and_save_are_bound_to_the_verified_archive(name: str) -> None
     if name == "pi":
         assert f"/releases/download/v{version}/{archive}" in acquisition
         assert digest == pi_fixture.ARCHIVE_SHA
-        assert workflow.index(f"Save pinned {name} archive") < workflow.index(
+        assert workflow.index(save_name) < workflow.index(
             "Prove pinned Pi startup and its fixed local peer"
         )
+    if name == "cosign":
+        assert f"/sigstore/cosign/releases/download/v{version}/cosign-linux-amd64" in acquisition
+        assert workflow.index(save_name) < workflow.index(COSIGN_USE)
+        use = shell(workflow, COSIGN_USE)
+        # Every use re-checks the pinned bytes, whether they were restored or fetched.
+        check = f"printf '%s  %s\\n' {digest} \"$RUNNER_TEMP/cosign\" | sha256sum --check --strict"
+        assert use.count(check) == 1
+        assert use.index(check) < use.index('"$RUNNER_TEMP/cosign" verify-blob')
+        assert "cosign-linux-amd64" not in use
 
 
 def test_codex_template_still_captures_the_installed_pin_and_refuses_a_bypass() -> None:
@@ -115,7 +134,8 @@ def test_codex_template_still_captures_the_installed_pin_and_refuses_a_bypass() 
 @pytest.mark.parametrize(("name", "case"), [
     (name, case) for name in ASSETS
     for case in ["hit", "corrupt-hit", "miss", "corrupt-miss", "failed-miss"]
-] + [("actionlint", "fallback-miss"), ("actionlint", "bumped-miss")])
+] + [("actionlint", "fallback-miss"), ("actionlint", "bumped-miss"),
+      ("cosign", "replaced-hit")])
 def test_actual_acquisition_shell_checks_hits_and_misses_before_use(
     tmp_path: Path, name: str, case: str,
 ) -> None:
@@ -129,9 +149,17 @@ def test_actual_acquisition_shell_checks_hits_and_misses_before_use(
         matched = re.search(r'ACTIONLINT_VERSION: "([^"]+)"', workflow)
         assert matched is not None
         version = matched[1]
-    payload = b"harmless pinned archive fixture\n"
+    payload = (b'#!/bin/sh\nprintf "use:%s\\n" "$1" >> "$USED"\n' if name == "cosign"
+               else b"harmless pinned archive fixture\n")
     digest = hashlib.sha256(payload).hexdigest()
     body = shell(workflow, acquire_name)
+    if name == "cosign":
+        # The real use step from its pin re-check on; the vendor pin comes from env.
+        use = shell(workflow, COSIGN_USE)
+        if case == "replaced-hit":
+            body += 'printf "swapped after acquisition\\n" > "$RUNNER_TEMP/cosign"\n'
+        sourced = '. "$RUNNER_TEMP/pin.env"\n'
+        body += use[use.index(sourced) + len(sourced):]
     # Only the pin bytes change. The real shell control flow and checksum tool run.
     body = re.sub(r"\b[0-9a-f]{64}\b", digest, body)
     if name == "actionlint":
@@ -147,7 +175,8 @@ def test_actual_acquisition_shell_checks_hits_and_misses_before_use(
     if case == "bumped-miss":
         (runtime / ASSETS["actionlint"][2]).write_bytes(b"unchecked old archive")
     if case.endswith("hit"):
-        target.write_bytes(payload if case == "hit" else b"corrupt cached archive")
+        target.write_bytes(payload if case in {"hit", "replaced-hit"}
+                           else b"corrupt cached archive")
     source = tmp_path / "payload"
     source.write_bytes(b"corrupt downloaded archive" if case == "corrupt-miss" else payload)
     script = tmp_path / "acquire.sh"
@@ -187,7 +216,9 @@ shellcheck() { return 0; }
                                "first" if case == "fallback-miss" else "0"),
              "GITHUB_ENV": (tmp_path / "github-env").as_posix(),
              "ACTIONLINT_VERSION": version, "ACTIONLINT_SHA256": digest,
-             "ACTIONLINT_ASSET_ID": "fixture"},
+             "ACTIONLINT_ASSET_ID": "fixture",
+             "CODEX_PIN_CODEX_URL": "https://example.invalid/codex.tar.gz",
+             "CODEX_PIN_VERSION": "0.0.0", "CODEX_PIN_CATALOG_COMMIT": "0" * 40},
     )
     accepted = case in {"hit", "miss", "fallback-miss", "bumped-miss"}
     assert (result.returncode == 0) == accepted, result.stderr
@@ -200,8 +231,13 @@ shellcheck() { return 0; }
         assert ASSETS["actionlint"][2] not in used.read_text(encoding="utf-8")
     if case == "fallback-miss":
         assert len(archive_downloads) == 2
-    if case in {"corrupt-hit", "corrupt-miss"}:
+    if case in {"corrupt-hit", "corrupt-miss", "replaced-hit"}:
         assert f"{archive}: FAILED" in result.stdout
+    if case == "replaced-hit":
+        # The acquisition check passed; only the re-check at use refused the bytes.
+        assert f"{archive}: OK" in result.stdout
     if case in {"hit", "miss", "fallback-miss", "bumped-miss"}:
         assert f"{archive}: OK" in result.stdout
         assert target.read_bytes() == payload
+        if name == "cosign":
+            assert used.read_text(encoding="utf-8").startswith("use:verify-blob\n")
