@@ -16,6 +16,18 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Stored-reply report destination check
+
+The G16 report refused at capture. Its destination was inside the directory
+holding `application-run.json`, a layout the capture contract always refuses.
+The application command had already returned its own non-acceptance; that result
+and its cleanup evidence are separate from the report refusal. The offline
+package checker now checks the socket budget and requires a report destination
+disjoint from both source roots. Synthetic normal builds exercise both the
+filled recipe and compiled steps, including descendants, ancestors and equality.
+The check establishes literal path relationships only; the host still checks
+freshness and custody.
+
 ## Verified cosign binary reuse
 
 On the #401 head, the foundation lane twice failed its Codex signature step: the
