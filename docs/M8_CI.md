@@ -94,10 +94,24 @@ fail without extraction or cache publication. Saves follow successful acquisitio
 steps rather than waiting for the full job; existing download attempt budgets
 and the Codex signature check remain in place. Cold or evicted entries still
 need the official download route. Pull-request caches do not warm the default
-branch, which must populate its own entries. uv binary acquisition remains
-uncovered. These workflow and host-artifact script changes alter retained launch
-artifact identity: future host use needs the reviewed installation and
-qualification procedure; no existing host qualification transfers to new bytes.
+branch, which must populate its own entries. These workflow and host-artifact
+script changes alter retained launch artifact identity: future host use needs the
+reviewed installation and qualification procedure; no existing host
+qualification transfers to new bytes.
+
+## Pinned uv bootstrap
+
+Every `setup-uv` step uses the commit-pinned v10.3.3 action with uv `0.13.7`
+and that release's platform SHA-256. The archive is fetched from the Astral
+mirror, with GitHub Releases as the fallback. The action refuses bytes that do
+not match the provided checksum. `tests/test_uv_bootstrap.py` holds each step to
+the pinned action, version and runner checksum. Bumping uv means changing the
+version, both checksums and that test together. Before either archive route,
+the action fetches the versions manifest. It tries the mirror, then
+raw.githubusercontent.com, and a failure on both stops the step. The mirror is
+a Cloudflare cache in front of GitHub Releases. For an uncached object it
+therefore depends on GitHub too. There is no cross-run uv binary cache, so
+every job still downloads uv.
 
 ## PR B: the separate containment gate
 

@@ -16,6 +16,29 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Pinned, verified uv bootstrap
+
+The setup-uv v5 failures in [run 42468371511](https://github.com/sushiHex/constructicon/actions/runs/42468371511)
+were GitHub release 504s on the only route that version has. Those runs fetched
+an unpinned "latest" uv (0.13.7). The action had no known checksum for that
+version, so the bytes were never verified. Every bootstrap now uses the
+commit-pinned setup-uv v10.3.3 with explicit uv `0.13.7` and its platform
+checksum. Downloads try the Astral mirror first and fall back to GitHub
+Releases. Explicit `activate-environment: true` and `prune-cache: true` restore
+v5's created-and-activated `.venv` and pruned dependency cache. v10's other
+defaults still apply: the cache key and glob, an exported managed-Python
+directory on PATH, and `uv venv --clear`. A guard test refuses each of these
+drifts: floating or outdated pins, a missing version or checksum, a crossed
+platform, a non-allowlisted runner, an extra input, and a key after a blank line.
+Bytes from both routes matched the release's `.sha256` files.
+
+This adds no cross-run uv binary cache. An exact version still needs the
+mutable versions manifest. setup-uv fetches it from the mirror, retries, and
+falls back to raw.githubusercontent.com. If both fail, the step fails before
+any archive download. The mirror is a CDN in front of GitHub and does not
+insure an uncached object. A changed containment workflow alters
+future launch artifact identity, as in #396, and no host was touched.
+
 ## Filled stored-reply operator package
 
 The [operator recipe](plans/handoffs/maintenance-channel-reply-session.md)
