@@ -103,7 +103,8 @@ def test_cache_key_and_save_are_bound_to_the_verified_archive(name: str) -> None
         # Every use re-checks the pinned bytes, whether they were restored or fetched.
         check = f"printf '%s  %s\\n' {digest} \"$RUNNER_TEMP/cosign\" | sha256sum --check --strict"
         assert use.count(check) == 1
-        assert use.index(check) < use.index('"$RUNNER_TEMP/cosign" verify-blob')
+        # Nothing, not even the bundle download, runs between the check and use.
+        assert f'{check}\n"$RUNNER_TEMP/cosign" verify-blob ' in use
         assert "cosign-linux-amd64" not in use
 
 
@@ -135,7 +136,7 @@ def test_codex_template_still_captures_the_installed_pin_and_refuses_a_bypass() 
     (name, case) for name in ASSETS
     for case in ["hit", "corrupt-hit", "miss", "corrupt-miss", "failed-miss"]
 ] + [("actionlint", "fallback-miss"), ("actionlint", "bumped-miss"),
-      ("cosign", "replaced-hit")])
+      ("cosign", "replaced-hit"), ("cosign", "replaced-during-bundle")])
 def test_actual_acquisition_shell_checks_hits_and_misses_before_use(
     tmp_path: Path, name: str, case: str,
 ) -> None:
@@ -188,6 +189,11 @@ curl() {
     case "$1" in -o|--output) output="$2"; shift 2;; *) shift;; esac
   done
   printf '%s\n' "$output" >> "$CALLS"
+  case "$output" in
+    *.sigstore)
+      if [ "$SWAP_ON_BUNDLE" = 1 ]; then printf 'swapped\n' > "$RUNNER_TEMP/cosign"; fi
+      : > "$output"; return 0;;
+  esac
   if [ "$DOWNLOAD_FAIL" = 1 ]; then return 22; fi
   if [ "$DOWNLOAD_FAIL" = first ] && [ "$(wc -l < "$CALLS")" -eq 1 ]; then
     return 22
@@ -214,6 +220,7 @@ shellcheck() { return 0; }
              "CALLS": calls.as_posix(), "USED": used.as_posix(),
              "DOWNLOAD_FAIL": ("1" if case == "failed-miss" else
                                "first" if case == "fallback-miss" else "0"),
+             "SWAP_ON_BUNDLE": "1" if case == "replaced-during-bundle" else "0",
              "GITHUB_ENV": (tmp_path / "github-env").as_posix(),
              "ACTIONLINT_VERSION": version, "ACTIONLINT_SHA256": digest,
              "ACTIONLINT_ASSET_ID": "fixture",
@@ -231,9 +238,9 @@ shellcheck() { return 0; }
         assert ASSETS["actionlint"][2] not in used.read_text(encoding="utf-8")
     if case == "fallback-miss":
         assert len(archive_downloads) == 2
-    if case in {"corrupt-hit", "corrupt-miss", "replaced-hit"}:
+    if case in {"corrupt-hit", "corrupt-miss", "replaced-hit", "replaced-during-bundle"}:
         assert f"{archive}: FAILED" in result.stdout
-    if case == "replaced-hit":
+    if case in {"replaced-hit", "replaced-during-bundle"}:
         # The acquisition check passed; only the re-check at use refused the bytes.
         assert f"{archive}: OK" in result.stdout
     if case in {"hit", "miss", "fallback-miss", "bumped-miss"}:

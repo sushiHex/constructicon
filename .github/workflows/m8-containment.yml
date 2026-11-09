@@ -590,9 +590,9 @@ jobs:
           # again here, immediately before use.
           "$PWD/.venv/bin/python" scripts/ci/vendor_pin_env.py > "$RUNNER_TEMP/pin.env"
           . "$RUNNER_TEMP/pin.env"
-          printf '%s  %s\n' c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644 "$RUNNER_TEMP/cosign" | sha256sum --check --strict
           curl --fail --location --retry 2 --output "$RUNNER_TEMP/codex.tar.gz.sigstore" \
             "$CODEX_PIN_CODEX_URL.sigstore"
+          printf '%s  %s\n' c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644 "$RUNNER_TEMP/cosign" | sha256sum --check --strict
           "$RUNNER_TEMP/cosign" verify-blob --bundle "$RUNNER_TEMP/codex.tar.gz.sigstore" \
             --certificate-identity "https://github.com/openai/codex/.github/workflows/rust-release.yml@refs/tags/rust-v$CODEX_PIN_VERSION" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
