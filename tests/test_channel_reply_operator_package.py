@@ -181,6 +181,29 @@ def test_filled_private_copy_builds_a_complete_normal_package(tmp_path):
                                 stdin=subprocess.DEVNULL, capture_output=True, check=False)
         assert (parsed.returncode, parsed.stdout, parsed.stderr) == (0, b"", b""), step.name
 
+    check = [sys.executable, "-I", "-B",
+             str(ROOT / "scripts/ops/check_native_state_path.py")]
+    for path in (private, out / "cr-preflight.sh"):
+        accepted = subprocess.run([*check, str(path)], stdin=subprocess.DEVNULL,
+                                  capture_output=True, text=True, check=False)
+        assert (accepted.returncode, accepted.stdout, accepted.stderr) == (
+            0, "native-state-socket-checked: 87 <= 107 bytes\n", "",
+        )
+    long_state = "/synthetic/" + "a" * 54
+    raw = private.read_bytes()
+    assert raw.count(b"S=/synthetic/state\n") == 1
+    private.write_bytes(raw.replace(b"S=/synthetic/state\n", f"S={long_state}\n".encode()))
+    long_package = tmp_path / "long-state-package"
+    compiled = subprocess.run([*command, str(long_package), "--values", str(measured)],
+                              stdin=subprocess.DEVNULL, capture_output=True, check=False)
+    assert (compiled.returncode, compiled.stderr) == (0, b"")
+    for path in (private, long_package / "cr-preflight.sh"):
+        refused = subprocess.run([*check, str(path)], stdin=subprocess.DEVNULL,
+                                 capture_output=True, text=True, check=False)
+        assert (refused.returncode, refused.stdout, refused.stderr) == (
+            1, "", "native-state-socket-too-long: 136 > 107 bytes\n",
+        )
+
 
 def test_reused_capture_and_lane_bytes_remain_exact():
     old, = _fences(DOCUMENT.parent / "M8-maintenance-g11-continuation.md",

@@ -91,6 +91,21 @@ Only these substitutions belong to this template's private specialization:
   `C`, `BASE`, `TARGET_SHA256`, `BUNDLE_SHA256`, `BUNDLE_SIZE`, `BUNDLE`, `W`, `K`,
   `W_PRIOR`, `GEN`, `GEN_PRIOR`, `GENERATION`, `FLOOR`, `S`, `APP`, `A`, `ID`,
   `ACTOR`, `KEY` and `REPORT` with independently reviewed literal data.
+- Give `S` a short, fresh canonical path of its own, as an unquoted absolute
+  literal using ASCII letters, digits, slash, dot, underscore and hyphen.
+  The WRITE provider derives the Unix socket from
+  `S/acquisitions/payloads/acq-<32 hex>/egress.sock`. A
+  descriptive path can compile and pass startup qualification but exceed the
+  provider's 107-byte limit before it can produce WRITE pins. Before taking VM
+  custody, run the local check from the reviewed operator checkout:
+
+      uv run python -I -B scripts/ops/check_native_state_path.py PRIVATE_RECIPE
+
+  Require exit zero and `native-state-socket-checked`. Repeat with the actual
+  compiled `cr-preflight.sh` before uploading the package. The checker reads
+  the literal without running the recipe and uses the provider's acquisition
+  path and socket bound. Keep dependent private paths such as `REPORT` aligned.
+  Path freshness, ownership and custody are still checked on the host.
 - Fill `SOURCE_UPLOAD` in **Bundle transfer**, and `QUIESCENCE_CAPTURE` and
   `QUIESCENCE_STDERR` in **Quiescence capture**, with reviewed private locators.
   Quote literal shell values; never fill a command, expansion or shell expression.
