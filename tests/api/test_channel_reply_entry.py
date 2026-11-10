@@ -12,6 +12,7 @@ import json
 import shutil
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -35,12 +36,14 @@ from constructicon.core.maintenance import (
 from constructicon.core.manifest import source_graph_hash_for
 from constructicon.core.run import RunStatus
 from constructicon.substrate.executors.codex_host import WRITE_GRANTS
+from constructicon.substrate.git.pack import PackLimits
 from constructicon.substrate.git.process import GitProcess
 from tests.api import test_plan_manifest_application as application_tests
 from tests.api.test_maintenance_entry import change_authorization_law
 from tests.api.test_maintenance_report import layout as layout
 from tests.executorworld import launch_identity
 from tests.substrate.test_channel_reply_oracle import BASE, CANDIDATE
+from tests.substrate.test_codex_adapter import bare_launcher
 from tests.substrate.test_codex_adapter import portable_binding as portable_binding
 
 concrete_application = application_tests.concrete_application
@@ -481,6 +484,27 @@ async def test_preparation_pins_the_target_and_refuses_a_finished_extraction(
     foreign = pin.model_copy(update={"sources": {"scripts/other.py": "0" * 64}})
     with pytest.raises(ContractViolation, match="omits the ordinary consumer"):
         source_module.pinned_purpose(foreign)
+
+
+async def test_assembly_refuses_base_over_pack_budget_before_executor(tmp_path, monkeypatch):
+    from constructicon.api import _maintenance_source as source_module
+
+    bundle, base = await _bundle(tmp_path, BASE)
+    root = tmp_path / "maintenance"
+    monkeypatch.setattr(source_module, "private_root", lambda path: None)
+    await source_module.prepare_source(root, bundle,
+        bundle_sha256=hashlib.sha256(bundle.read_bytes()).hexdigest(),
+        base_commit=base, target_ref="refs/heads/maintenance", purpose="channel-stored-reply")
+    monkeypatch.setattr(entry.codex_lane, "_launcher", lambda path: bare_launcher())
+    monkeypatch.setattr(entry, "MAINTENANCE_PACK_LIMITS", PackLimits(expanded_bytes=1))
+
+    async def forbidden_source_read(*args, **kwargs):
+        raise AssertionError("an impossible capture reached gate or executor preparation")
+
+    monkeypatch.setattr(entry, "git", forbidden_source_read)
+    with pytest.raises(ContractViolation, match="expanded capture headroom"):
+        await entry.assemble_maintenance(host=SimpleNamespace(launch_root=tmp_path),
+                                         root=root, journal=None)
 
 
 @pytest.mark.parametrize("prepared", ["channel-stored-reply", "plan-manifest-maintenance"])

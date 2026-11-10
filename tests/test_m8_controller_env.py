@@ -520,18 +520,18 @@ def test_the_runbook_check_is_the_scripts_check_over_the_proof_modules() -> None
 
 def test_the_verify_lane_runs_the_controller_import_proof() -> None:
     workflow = (REPOSITORY / ".github/workflows/verify.yml").read_text(encoding="utf-8")
-    assert "runs-on: ubuntu-latest" in workflow
+    job = workflow.split("\n  verify:\n", 1)[1].split("\n  mutations:\n", 1)[0]
+    assert "    runs-on: ubuntu-24.04\n" in job
     preparation = "uv run python -m scripts.ci.acquire_m8_controller_wheels"
     step = "M8_CONTROLLER_REQUIRED=1 uv run python -m pytest "
     step += ("tests/test_m8_controller_env.py::"
              "test_the_staged_controller_imports_under_isolated_python")
     step += " -v -p no:cacheprovider\n"
     assert workflow.count(step) == 1
-    assert workflow.index("      - run: uv run verify\n") < workflow.index(step)
+    assert job.index("      - run: uv run verify\n") < job.index(step)
     assert workflow.count(preparation) == 1
-    assert workflow.index("      - run: uv run verify\n") < workflow.index(preparation)
-    assert workflow.index(preparation) < workflow.index(step)
-    assert 'M8_CONTROLLER_WHEELS: ${{ runner.temp }}/m8-controller-wheels' in workflow
+    assert job.index("      - run: uv run verify\n") < job.index(preparation) < job.index(step)
+    assert 'M8_CONTROLLER_WHEELS: ${{ runner.temp }}/m8-controller-wheels' in job
 
 
 def test_the_runbook_proves_the_script_and_the_lock_with_stock_git() -> None:

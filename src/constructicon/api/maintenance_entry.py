@@ -90,6 +90,7 @@ from constructicon.substrate.executors.qualification import MAX_AUTHORIZATION_BY
 from constructicon.substrate.gates.contained import ContainedGateRunner
 from constructicon.substrate.git.authority import GitAuthority
 from constructicon.substrate.git.capture import ContainedWriteWorkspaceProvider
+from constructicon.substrate.git.pack import PackLimits
 from constructicon.substrate.journal.sqlite import SqliteJournal
 
 EXECUTOR = "codex-operator"
@@ -98,6 +99,9 @@ GATE = "maintenance-gate"
 WRITER_SCOPE = ScopePath(segments=(GRAPH_NAME, "writer"))
 CHANNEL_WRITER_SCOPE = CHANNEL_STORED_REPLY.writer_scope
 MAX_RESULT_BYTES = 65536
+# This private authority exports full commit ancestry even for a one-file edit.
+# The wire, object-count and native parser limits are independent and unchanged.
+MAINTENANCE_PACK_LIMITS = PackLimits(expanded_bytes=192 * 1024 * 1024)
 
 
 class _PreflightStage(StrEnum):
@@ -139,7 +143,9 @@ async def assemble_maintenance(
     authority = GitAuthority(root / "authority.git", root / "authority-workspaces")
     launcher = codex_lane._launcher(host.launch_root)
     workspace = ContainedWriteWorkspaceProvider(authority, root=root / "workspace-acquisitions",
-        target_ref=pin.target_ref, provider_id=WORKSPACE, posture=Posture.WRITE, launcher=launcher)
+        target_ref=pin.target_ref, provider_id=WORKSPACE, posture=Posture.WRITE, launcher=launcher,
+        pack_limits=MAINTENANCE_PACK_LIMITS)
+    await workspace.require_capture_headroom(pin.base_commit)
     source = await git(root / "authority.git", "show", f"{pin.base_commit}:{task.target_path}")
     inventory = await git(root / "authority.git", "ls-tree", "-r", "-z", pin.base_commit)
     before = workspace.revision

@@ -12,11 +12,14 @@ import pytest
 
 from constructicon.core.address import GitSha
 from constructicon.core.errors import ContractViolation
+from constructicon.core.grants import Posture
 from constructicon.substrate.executors.linux import ProcessLimits
 from constructicon.substrate.git.authority import GitAuthority
+from constructicon.substrate.git.capture import ContainedWriteWorkspaceProvider
 from constructicon.substrate.git.pack import PackLimits, commit_oid, import_pack
 from constructicon.substrate.git.process import GitProcess
 from tests.gitworld import push_to_main, seed_authority
+from tests.substrate.test_codex_adapter import bare_launcher
 
 DEFAULT_PACK_LIMITS = PackLimits()
 
@@ -129,6 +132,36 @@ async def test_pack_resource_bounds_are_enforced_before_authority_import(handoff
         await receive(handoff, limits=selected, git=git)
     assert authority._run("cat-file", "-e", candidate, check=False).returncode != 0
     assert list(root.iterdir()) == []
+
+
+async def test_base_headroom_counts_history_and_requires_room_for_a_new_commit(handoff):
+    source, _, git, root, candidate, _ = handoff
+    parent = (await git.run("rev-parse", f"{candidate}^", cwd=source)).strip()
+    objects = await git.run("rev-list", "--objects", "--no-object-names", parent.decode(),
+                            cwd=source)
+    sizes = await git.run("cat-file", "--batch-check=%(objectsize)", cwd=source, stdin=objects)
+    count = len(objects.splitlines())
+    size = sum(int(row) for row in sizes.splitlines())
+    authority = GitAuthority(source, root / "legacy")
+    launcher = bare_launcher()
+
+    def provider(limits):
+        return ContainedWriteWorkspaceProvider(
+            authority, root=root, target_ref="refs/heads/main", provider_id="capture",
+            posture=Posture.WRITE, launcher=launcher, pack_limits=limits,
+        )
+
+    parent = GitSha(parent.decode())
+    passing = provider(PackLimits(objects=count + 1, expanded_bytes=size + 1))
+    await passing.require_capture_headroom(parent)
+    for limits, reason in (
+        (PackLimits(objects=count, expanded_bytes=size + 1), "object headroom"),
+        (PackLimits(objects=count + 1, expanded_bytes=size), "expanded capture headroom"),
+    ):
+        bounded = provider(limits)
+        assert bounded.revision != passing.revision
+        with pytest.raises(ContractViolation, match=reason):
+            await bounded.require_capture_headroom(parent)
 
 
 async def test_correctly_checksummed_broken_objects_are_rejected_by_git(handoff):

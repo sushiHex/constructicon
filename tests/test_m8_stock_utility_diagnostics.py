@@ -114,9 +114,9 @@ def test_historical_copy_test_does_not_observe_success_stderr(tmp_path, monkeypa
     result, = observed
     assert (result.returncode, result.stdout) == (
         0, MARKER.decode() + "LR2-permitted\n")
-    assert result.stderr in {
-        "synthetic utility warning\n", "synthetic utility warning\n" + WARNING.decode() * 3,
-    }
+    # The injected line proves the historical test ignored success stderr.
+    # The dedicated stock-utility lane verifies the actual cp diagnostic bytes.
+    assert result.stderr.startswith("synthetic utility warning\n")
 
 
 def require_stock_utility_lane():

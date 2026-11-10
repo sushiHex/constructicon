@@ -92,7 +92,8 @@ jobs:
   verify:
     needs: classify
     if: needs.classify.outputs.scope == 'full'
-    runs-on: ubuntu-latest
+    # The offline controller proof uses stock /usr/bin/python3.12, as D2 does.
+    runs-on: ubuntu-24.04
     env:
       ACTIONLINT_VERSION: "1.7.12"
       # Update the asset id together with the version and checksum.
