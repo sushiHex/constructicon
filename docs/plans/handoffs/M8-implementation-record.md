@@ -11442,6 +11442,25 @@ the independent wire, object-count, expanded-object and closure checks
 before authority import. Native Git process bounds, the general 128 MiB
 default and the acquisition publication fence are unchanged.
 
+Producer grounding (upstream Git v2.43.0, the version used for the Ubuntu
+replay): the revision walk visits commits and queues their trees in
+[`list-objects.c:353–395`](https://github.com/git/git/blob/v2.43.0/list-objects.c#L353-L395).
+The same file skips already-seen
+[`blobs:46–82`](https://github.com/git/git/blob/v2.43.0/list-objects.c#L46-L82)
+and [`trees:136–195`](https://github.com/git/git/blob/v2.43.0/list-objects.c#L136-L195).
+`rev-list` emits one line per
+[`commit`](https://github.com/git/git/blob/v2.43.0/builtin/rev-list.c#L171-L203)
+and, with names disabled, one bare OID per
+[`other object`](https://github.com/git/git/blob/v2.43.0/builtin/rev-list.c#L267-L295).
+For the expanded sum, [`builtin/cat-file.c:798–814`](https://github.com/git/git/blob/v2.43.0/builtin/cat-file.c#L798-L814)
+handles each input row; [`builtin/cat-file.c:303–312`](https://github.com/git/git/blob/v2.43.0/builtin/cat-file.c#L303-L312)
+formats `%(objectsize)` from the object-info size, separate from on-disk size.
+[`packfile.c:1450–1477`](https://github.com/git/git/blob/v2.43.0/packfile.c#L1450-L1477)
+uses the delta result size for packed deltas. Missing objects produce a
+nonnumeric row and successful formatted results get a delimiter
+([`builtin/cat-file.c:434–473`](https://github.com/git/git/blob/v2.43.0/builtin/cat-file.c#L434-L473));
+the shared inventory check rejects missing, extra or nonnumeric rows.
+
 An offline, oracle-approved one-file child of C95 contained 6,016 objects
 and 151,905,761 expanded bytes. The same self-contained pack refused at
 128 MiB and imported at 192 MiB on Windows and Ubuntu 24.04. Ubuntu exercised
