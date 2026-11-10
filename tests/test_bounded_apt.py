@@ -89,11 +89,49 @@ esac
     return result, time.monotonic() - started
 
 
-def method_alive(tmp_path: Path) -> bool:
-    pid = (tmp_path / "method.pid").read_text(encoding="utf-8")
+def process_running(pid: int) -> bool:
+    """Whether a process exists and has not terminated.
+
+    `kill -0` also succeeds for a zombie: a stopped method whose orphan was not
+    yet reaped, as under a container PID 1 that reaps slowly. On Linux the
+    kernel state decides, so zombie (Z) and dead (X) are terminated. Elsewhere
+    the fakes run under Git Bash, whose process ids only its own `kill` knows.
+    """
+    if sys.platform.startswith("linux"):
+        try:
+            state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+        except (FileNotFoundError, ProcessLookupError):
+            return False
+        return state not in {"Z", "X"}
     probe = subprocess.run([git_bash(), "-c", f"kill -0 {pid}"], stdin=subprocess.DEVNULL,
                            capture_output=True, check=False)
     return probe.returncode == 0
+
+
+def method_alive(tmp_path: Path) -> bool:
+    return process_running(int((tmp_path / "method.pid").read_text(encoding="utf-8")))
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="kernel process state")
+def test_the_liveness_probe_counts_a_running_method_and_not_a_zombie() -> None:
+    running = subprocess.Popen(["sleep", "300"], stdin=subprocess.DEVNULL)
+    exited = subprocess.Popen(["true"], stdin=subprocess.DEVNULL)
+    try:
+        # The running method still blocks success.
+        assert process_running(running.pid)
+        deadline = time.monotonic() + 10
+        stat = Path(f"/proc/{exited.pid}/stat")
+        # Unreaped until poll(): the exited child stays a zombie that kill -0 accepts.
+        while stat.read_text().rsplit(")", 1)[1].split()[0] != "Z":
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert subprocess.run(["kill", "-0", str(exited.pid)], check=False).returncode == 0
+        assert not process_running(exited.pid)
+    finally:
+        running.kill()
+        running.wait()
+        exited.wait()
+    assert not process_running(running.pid)
 
 
 @pytest.mark.parametrize("arguments", [
