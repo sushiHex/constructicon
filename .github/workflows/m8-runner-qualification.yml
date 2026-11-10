@@ -26,8 +26,8 @@ jobs:
           set -euo pipefail
           test "$RUNNER_ENVIRONMENT" = github-hosted
           test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
-          sudo apt-get -q update
-          sudo apt-get -q -y install --no-install-recommends bubblewrap=0.9.0-1ubuntu0.3
+          sudo bash scripts/ci/bounded_apt.sh 120 -q update --error-on=any
+          sudo bash scripts/ci/bounded_apt.sh 120 -q -y install --no-install-recommends bubblewrap=0.9.0-1ubuntu0.3
           sudo useradd --create-home --shell /bin/sh m8-probe
           test ! -e /opt/constructicon-m8-qualification
           test ! -L /opt/constructicon-m8-qualification

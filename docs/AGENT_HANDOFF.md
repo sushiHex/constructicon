@@ -16,6 +16,21 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Bounded APT provisioning
+
+In #291, `apt-get update` fell back from the Azure mirror and then printed
+nothing until the 30-minute containment job budget expired, so apt's
+per-connection timeouts did not bound the command. Every workflow apt command
+now runs through `scripts/ci/bounded_apt.sh` with a 120-second wall-clock bound
+and `--error-on=any` on update. 72 successful hosted jobs took at most 26
+seconds to update and 5.6 seconds to install. A stall or unobtainable index now
+refuses with a named diagnostic before runtime creation. Nothing is retried,
+and the bubblewrap pin and every job budget are unchanged. Hosted Linux runs
+real apt against a local stalled index and a refused one. The bound converts a
+hang into a prompt failure; it does not make an unavailable mirror succeed.
+`m8-containment.yml` is a launch blob, so future launch artifact identity
+changes.
+
 ## Maintenance capture budget includes base history
 
 The sealed C95/G16 writer failure was an expanded Git pack refusal. The

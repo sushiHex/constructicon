@@ -102,6 +102,28 @@ script changes alter retained launch artifact identity: future host use needs th
 reviewed installation and qualification procedure; no existing host
 qualification transfers to new bytes.
 
+## Bounded APT provisioning
+
+The containment, runner qualification and Pi local-read workflows run
+`apt-get -q update --error-on=any` and the pinned bubblewrap install through
+`scripts/ci/bounded_apt.sh`. Each command has a 120-second wall-clock bound,
+with TERM at the bound and KILL 10 seconds later. The bound reaches apt's
+download methods too. A refusal names the command and either the expired
+bound or apt's exit status, and exits before runtime creation. Without
+`--error-on=any`, an index that cannot be fetched is only a warning.
+
+The bound comes from 72 successful hosted jobs: `apt-get update` took at most
+26 seconds (median 5) and the install at most 5.6 seconds. In the #291
+failure, apt stalled silently after a mirror fallback until the 30-minute job
+budget expired. Nothing is retried. Job and physical-invocation budgets and the
+package pin are unchanged.
+
+`tests/test_bounded_apt.py` holds every workflow's apt use to the bounded
+pinned pair. It also checks the refusal, status and process-group stop against
+a fake apt. On hosted Linux, real apt is required to run against a local index
+that accepts and never answers, and against a refused port. The bound cannot
+make an unavailable mirror succeed.
+
 ## Pinned uv bootstrap
 
 Every `setup-uv` step uses the commit-pinned v10.3.3 action with uv `0.13.7`

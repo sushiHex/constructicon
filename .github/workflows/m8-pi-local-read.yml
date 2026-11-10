@@ -37,8 +37,8 @@ jobs:
           test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
           test "$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)" -ge 4194304
           test "$(df -Pk "$RUNNER_TEMP" | awk 'NR==2 {print $4}')" -ge 4194304
-          sudo apt-get -q update
-          sudo apt-get -q -y install --no-install-recommends bubblewrap=0.9.0-1ubuntu0.3
+          sudo bash scripts/ci/bounded_apt.sh 120 -q update --error-on=any
+          sudo bash scripts/ci/bounded_apt.sh 120 -q -y install --no-install-recommends bubblewrap=0.9.0-1ubuntu0.3
           sudo useradd --create-home --shell /bin/sh m8-service
           test ! -e /var/lib/constructicon-m8-launch
           sudo install -d -m 0755 /var/lib/constructicon-m8-launch
