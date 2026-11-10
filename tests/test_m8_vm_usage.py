@@ -374,7 +374,25 @@ def test_isolated_script_rejects_arguments_without_loading_repo() -> None:
     )
     assert completed.returncode == 2
     assert completed.stderr == b""
-    assert json.loads(completed.stdout) == {
-        "schema_version": 1, "vm": "constructicon-m8", "verdict": "unknown",
-        "reason": "unexpected_arguments",
-    }
+    # Exact bytes: LF alone on every platform (Windows text mode once added a CR, #397).
+    assert completed.stdout == (
+        b'{"schema_version":1,"vm":"constructicon-m8","verdict":"unknown",'
+        b'"reason":"unexpected_arguments"}\n'
+    )
+    assert usage.read_report(completed.stdout)["reason"] == "unexpected_arguments"
+
+
+@pytest.mark.parametrize("raw", [
+    b'{"verdict":"unknown"}\r\n',
+    b'{"verdict":"unknown"}',
+    b'{"verdict":"unknown"}\n\n',
+    b'{"verdict":"unknown"}\n{"verdict":"unknown"}\n',
+    b'{"verdict":"unknown","verdict":"idle-observed"}\n',
+    b'{"verdict":"maybe"}\n',
+    b'["unknown"]\n',
+    b"\n",
+    b'{"verdict":"unknown","pad":"' + b"x" * 300 + b'"}\n',
+])
+def test_report_reader_refuses_any_other_framing(raw: bytes) -> None:
+    with pytest.raises(ValueError):
+        usage.read_report(raw)

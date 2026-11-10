@@ -146,13 +146,50 @@ def observe() -> dict[str, object]:
     return _parse(completed.stdout)
 
 
+def emit(rendered: str) -> None:
+    """Write one ASCII line ending in LF alone, on every platform.
+
+    ``print`` in Windows text mode ends the line with CRLF, and a strict consumer
+    refused that framing (#397). The bytes are now the same everywhere.
+    """
+    sys.stdout.flush()
+    sys.stdout.buffer.write(rendered.encode("ascii") + b"\n")
+    sys.stdout.buffer.flush()
+
+
+def _unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    keys = [key for key, _ in pairs]
+    if len(keys) != len(set(keys)):
+        raise ValueError("duplicate usage report key")
+    return dict(pairs)
+
+
+def read_report(raw: bytes) -> dict[str, object]:
+    """The exact framing ``main`` writes: one ASCII JSON object ending in LF, with no CR.
+
+    Consumers should parse the script's stdout with this, not their own reader.
+    """
+    if not (
+        0 < len(raw) <= MAX_REPORT_BYTES
+        and raw.endswith(b"\n")
+        and raw.count(b"\n") == 1
+        and b"\r" not in raw
+    ):
+        raise ValueError("usage report framing")
+    report = json.loads(raw[:-1].decode("ascii"), object_pairs_hook=_unique)
+    verdicts = ("idle-observed", "in-use", "unknown")
+    if type(report) is not dict or report.get("verdict") not in verdicts:
+        raise ValueError("usage report shape")
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if argv is None else argv
     report = _unknown("unexpected_arguments") if arguments else observe()
     rendered = json.dumps(report, separators=(",", ":"), ensure_ascii=True)
     # Every public field is fixed vocabulary, a validated state word or a bounded integer.
     assert len(rendered.encode("ascii")) + 1 <= MAX_REPORT_BYTES
-    print(rendered)
+    emit(rendered)
     verdict = report["verdict"]
     return 0 if verdict == "idle-observed" else 1 if verdict == "in-use" else 2
 
