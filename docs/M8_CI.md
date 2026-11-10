@@ -141,8 +141,8 @@ fixtures:
   and refuse at its own bound;
 - a refused port, which must be named in the refusal.
 
-These run in `verify` on `ubuntu-latest`. The provisioning lanes themselves
-exercise real apt on `ubuntu-24.04`. A descendant that leaves the process group
+These run in `verify` on `ubuntu-24.04`, the image the provisioning lanes use
+for their own real apt. A descendant that leaves the process group
 is outside the bound. The bound cannot make an unavailable mirror succeed.
 
 ## Pinned uv bootstrap
