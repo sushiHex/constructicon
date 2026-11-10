@@ -164,29 +164,44 @@ def _unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return dict(pairs)
 
 
-def read_report(raw: bytes) -> dict[str, object]:
-    """The exact framing ``main`` writes: one ASCII JSON object ending in LF, with no CR.
+def render(report: dict[str, object]) -> str:
+    return json.dumps(report, separators=(",", ":"), ensure_ascii=True)
 
-    Consumers should parse the script's stdout with this, not their own reader.
+
+def _constant(value: str) -> object:
+    raise ValueError("non-JSON constant in usage report")
+
+
+def read_report(raw: bytes) -> dict[str, object]:
+    """Accept only bytes ``main`` itself would write: its own rendering plus one LF.
+
+    The parsed report must re-render to exactly the input, so padding, CR, a
+    missing or extra line, duplicate keys, floats and non-JSON constants are refused.
+    The report must name schema 1, this VM and a known verdict. This checks the
+    framing and identity only; field semantics stay with ``observe``.
     """
-    if not (
-        0 < len(raw) <= MAX_REPORT_BYTES
-        and raw.endswith(b"\n")
-        and raw.count(b"\n") == 1
-        and b"\r" not in raw
-    ):
+    if not 0 < len(raw) <= MAX_REPORT_BYTES or not raw.endswith(b"\n"):
         raise ValueError("usage report framing")
-    report = json.loads(raw[:-1].decode("ascii"), object_pairs_hook=_unique)
-    verdicts = ("idle-observed", "in-use", "unknown")
-    if type(report) is not dict or report.get("verdict") not in verdicts:
+    # The producer writes only integers, so any float or non-JSON constant is foreign.
+    report = json.loads(raw[:-1].decode("ascii"), object_pairs_hook=_unique,
+                        parse_constant=_constant, parse_float=_constant)
+    if (
+        type(report) is not dict
+        or type(report.get("schema_version")) is not int
+        or report["schema_version"] != 1
+        or report.get("vm") != VM_NAME
+        or report.get("verdict") not in ("idle-observed", "in-use", "unknown")
+    ):
         raise ValueError("usage report shape")
+    if (render(report) + "\n").encode("ascii") != raw:
+        raise ValueError("usage report is not the producer's rendering")
     return report
 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if argv is None else argv
     report = _unknown("unexpected_arguments") if arguments else observe()
-    rendered = json.dumps(report, separators=(",", ":"), ensure_ascii=True)
+    rendered = render(report)
     # Every public field is fixed vocabulary, a validated state word or a bounded integer.
     assert len(rendered.encode("ascii")) + 1 <= MAX_REPORT_BYTES
     emit(rendered)

@@ -382,17 +382,36 @@ def test_isolated_script_rejects_arguments_without_loading_repo() -> None:
     assert usage.read_report(completed.stdout)["reason"] == "unexpected_arguments"
 
 
+_IDLE = (b'{"schema_version":1,"vm":"constructicon-m8","verdict":"idle-observed",'
+         b'"state":"Off","operational":["Ok"],"uptime_seconds":0,"checkpoints":0,"vmconnect":0}')
+
+
+def test_report_reader_accepts_the_producers_idle_rendering() -> None:
+    report = usage.read_report(_IDLE + b"\n")
+    assert report["verdict"] == "idle-observed"
+    assert (usage.render(report) + "\n").encode() == _IDLE + b"\n"
+
+
 @pytest.mark.parametrize("raw", [
-    b'{"verdict":"unknown"}\r\n',
-    b'{"verdict":"unknown"}',
-    b'{"verdict":"unknown"}\n\n',
-    b'{"verdict":"unknown"}\n{"verdict":"unknown"}\n',
-    b'{"verdict":"unknown","verdict":"idle-observed"}\n',
-    b'{"verdict":"maybe"}\n',
+    _IDLE + b"\r\n",
+    _IDLE,
+    _IDLE + b"\n\n",
+    _IDLE + b"\n" + _IDLE + b"\n",
+    b" " + _IDLE + b"\n",
+    _IDLE.replace(b",", b", ", 1) + b"\n",
+    _IDLE.replace(b'"verdict":"idle-observed"',
+                  b'"verdict":"idle-observed","verdict":"in-use"') + b"\n",
+    _IDLE.replace(b"idle-observed", b"maybe") + b"\n",
+    _IDLE.replace(b'"schema_version":1', b'"schema_version":true') + b"\n",
+    _IDLE.replace(b'"schema_version":1', b'"schema_version":2') + b"\n",
+    _IDLE.replace(b"constructicon-m8", b"other-vm") + b"\n",
+    _IDLE.replace(b'"uptime_seconds":0', b'"uptime_seconds":NaN') + b"\n",
+    _IDLE.replace(b'"uptime_seconds":0', b'"uptime_seconds":0.0') + b"\n",
+    b'{"verdict":"idle-observed"}\n',
     b'["unknown"]\n',
     b"\n",
-    b'{"verdict":"unknown","pad":"' + b"x" * 300 + b'"}\n',
+    _IDLE[:-1] + b',"pad":"' + b"x" * 300 + b'"}\n',
 ])
-def test_report_reader_refuses_any_other_framing(raw: bytes) -> None:
+def test_report_reader_refuses_anything_but_the_producers_rendering(raw: bytes) -> None:
     with pytest.raises(ValueError):
         usage.read_report(raw)
