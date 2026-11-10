@@ -80,8 +80,15 @@ MUTANTS = (
     ),
     (
         "expanded objects are unbounded", PACK,
-        "if sum(int(row) for row in rows) > limits.expanded_bytes:", "if False:",
+        "if expanded_size(sizes, count) > limits.expanded_bytes:", "if False:",
         HANDOFF + "test_pack_resource_bounds_are_enforced_before_authority_import[expanded]",
+    ),
+    (
+        "maintenance prepares an executor despite an impossible base",
+        "constructicon.api.maintenance_entry:assemble_maintenance",
+        "await workspace.require_capture_headroom(pin.base_commit)", "pass",
+        "tests/api/test_channel_reply_entry.py::"
+        "test_assembly_refuses_base_over_pack_budget_before_executor",
     ),
     (
         "Git parser loses its native resource limits", PROCESS,

@@ -40,6 +40,13 @@ def commit_oid(raw: bytes, algorithm: str) -> GitSha:
     return GitSha(raw.decode("ascii").removesuffix("\n"))
 
 
+def expanded_size(inventory: bytes, count: int) -> int:
+    rows = inventory.splitlines()
+    if len(rows) != count or any(not row.isdigit() for row in rows):
+        raise ContractViolation("Git pack object inventory contradicts its framing")
+    return sum(int(row) for row in rows)
+
+
 async def import_pack(
     authority: GitAuthority, git: GitProcess, *, acquisition_root: Path,
     candidate: GitSha, pack: bytes, limits: PackLimits, guard: int | None,
@@ -87,10 +94,7 @@ async def import_pack(
             "cat-file", "--batch-all-objects", "--batch-check=%(objectsize)",
             cwd=quarantine, guard=guard,
         )
-        rows = sizes.splitlines()
-        if len(rows) != count or any(not row.isdigit() for row in rows):
-            raise ContractViolation("Git pack object inventory contradicts its framing")
-        if sum(int(row) for row in rows) > limits.expanded_bytes:
+        if expanded_size(sizes, count) > limits.expanded_bytes:
             raise ContractViolation("Git pack exceeds the expanded-object bound")
         await git.run(
             "index-pack", "--stdin", "--strict", "--threads=1",

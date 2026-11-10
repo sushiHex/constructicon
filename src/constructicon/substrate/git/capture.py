@@ -21,11 +21,12 @@ from constructicon.core.identity import digest
 from constructicon.core.workspace import Disposition, LeaseContext
 from constructicon.substrate import _lifetime
 from constructicon.substrate._lifetime import finish_owned
+from constructicon.substrate.executors.linux import LinuxLauncher
 from constructicon.substrate.git import acquisition, authority, contained, pack, process
 from constructicon.substrate.git.acquisition import AcquisitionPaths, dispose_acquisition
-from constructicon.substrate.git.authority import _PINNED_ENV, candidate_ref_for
+from constructicon.substrate.git.authority import _PINNED_ENV, GitAuthority, candidate_ref_for
 from constructicon.substrate.git.contained import ContainedWorkspace, ContainedWorkspaceProvider
-from constructicon.substrate.git.pack import PackLimits, commit_oid, import_pack
+from constructicon.substrate.git.pack import PackLimits, commit_oid, expanded_size, import_pack
 from constructicon.substrate.git.process import GitProcess
 
 _GIT_ENV = {**_PINNED_ENV, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_TERMINAL_PROMPT": "0"}
@@ -71,7 +72,25 @@ class ContainedWriteWorkspaceProvider(ContainedWorkspaceProvider):
     """A separate capability kind and call convention, not a relabeled legacy view."""
 
     kind = "workspace.contained"
-    pack_limits = PackLimits()
+    def __init__(
+        self, authority: GitAuthority, *, root: Path, target_ref: str,
+        provider_id: str, posture: Posture, launcher: LinuxLauncher,
+        pack_limits: PackLimits | None = None,
+    ) -> None:
+        super().__init__(authority, root=root, target_ref=target_ref, provider_id=provider_id,
+                         posture=posture, launcher=launcher)
+        self.pack_limits = PackLimits() if pack_limits is None else pack_limits
+
+    async def require_capture_headroom(self, base: GitSha) -> None:
+        """Refuse when a new descendant cannot fit even before its own objects."""
+        oid = commit_oid(str(base).encode(), self.authority.environment.object_format)
+        objects = await self._export("rev-list", "--objects", "--no-object-names", oid)
+        count = len(objects.splitlines())
+        if not 0 < count < self.pack_limits.objects:
+            raise ContractViolation("Git base leaves no capture object headroom")
+        sizes = await self._export("cat-file", "--batch-check=%(objectsize)", stdin=objects)
+        if expanded_size(sizes, count) >= self.pack_limits.expanded_bytes:
+            raise ContractViolation("Git base leaves no expanded capture headroom")
 
     @property
     def revision(self) -> str:

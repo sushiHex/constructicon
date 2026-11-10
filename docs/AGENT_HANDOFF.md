@@ -16,6 +16,17 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Maintenance capture budget includes base history
+
+The sealed C95/G16 writer failure was an expanded Git pack refusal. The
+worker succeeded, but the exact base already contained 151,904,164 expanded
+bytes, over the 128 MiB capture limit. A normal descendant could not fit.
+Maintenance WRITE now uses a revision-bound 192 MiB expanded-object limit
+and refuses an already oversized base during assembly, before executor setup.
+The ordinary 128 MiB default, wire and object-count bounds, self-contained
+pack, fresh quarantine and publication fence still apply as before. Base fit
+does not guarantee candidate fit or authorize a retry.
+
 ## Stored-reply report destination check
 
 The G16 report refused at capture. Its destination was inside the directory
