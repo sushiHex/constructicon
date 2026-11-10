@@ -21,13 +21,16 @@ a second PR just to record the merge. Nothing here authorizes work.
 In #291, `apt-get update` fell back from the Azure mirror and then printed
 nothing until the 30-minute containment job budget expired, so apt's
 per-connection timeouts did not bound the command. Every workflow apt command
-now runs through `scripts/ci/bounded_apt.sh` with a 120-second wall-clock bound
-and `--error-on=any` on update. 72 successful hosted jobs took at most 26
-seconds to update and 5.6 seconds to install. A stall or unobtainable index now
-refuses with a named diagnostic before runtime creation. Nothing is retried,
+now runs through `scripts/ci/bounded_apt.sh` with a 120-second wall-clock bound.
+KILL follows 10 seconds after TERM, and update adds `--error-on=any`. The bound
+is a margin over 72 successful hosted jobs (update at most 26 seconds, install
+at most 5.6), not a proven minimum. A stall now refuses as a timeout and an
+unobtainable index as apt's failure. A kill is named without asserting its
+cause. Each refusal comes before runtime creation. The wrapper adds no retries,
 and the bubblewrap pin and every job budget are unchanged. Hosted Linux runs
-real apt against a local stalled index and a refused one. The bound converts a
-hang into a prompt failure; it does not make an unavailable mirror succeed.
+real apt, with host configuration isolated, against a valid local index, a
+stalled one and a refused one. The bound converts a hang into a prompt failure;
+it does not make an unavailable mirror succeed.
 `m8-containment.yml` is a launch blob, so future launch artifact identity
 changes.
 

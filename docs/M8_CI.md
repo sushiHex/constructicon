@@ -108,21 +108,41 @@ The containment, runner qualification and Pi local-read workflows run
 `apt-get -q update --error-on=any` and the pinned bubblewrap install through
 `scripts/ci/bounded_apt.sh`. Each command has a 120-second wall-clock bound,
 with TERM at the bound and KILL 10 seconds later. The bound reaches apt's
-download methods too. A refusal names the command and either the expired
-bound or apt's exit status, and exits before runtime creation. Without
-`--error-on=any`, an index that cannot be fetched is only a warning.
+download methods too. A refusal names the command and one of three reasons:
+an expired bound (exit 124), a kill whose cause is not established (exit 137),
+or apt's own exit status. It exits before runtime creation. A bound must be
+written without leading zeros, because `timeout 0` means no bound. Without
+`--error-on=any`, a transient fetch failure, such as a refused connection, is
+only a warning. The flag also tightens admission: an unavailable unrelated
+index, such as packages.microsoft.com, now fails provisioning.
 
-The bound comes from 72 successful hosted jobs: `apt-get update` took at most
-26 seconds (median 5) and the install at most 5.6 seconds. In the #291
-failure, apt stalled silently after a mirror fallback until the 30-minute job
-budget expired. Nothing is retried. Job and physical-invocation budgets and the
-package pin are unchanged.
+The bound is a margin over 72 successful hosted jobs, not a proven minimum.
+`apt-get update` took at most 26 seconds (median 5) and the install at most 5.6
+seconds. In the #291 failure, apt stalled silently after a mirror fallback
+until the 30-minute job budget expired. One stalled command now ends by 130
+seconds, and a slow update followed by a stalled install by about 260. The
+wrapper adds no retries; apt's own configured acquisition retries still apply.
+Job and physical-invocation budgets and the package pin are unchanged.
 
-`tests/test_bounded_apt.py` holds every workflow's apt use to the bounded
-pinned pair. It also checks the refusal, status and process-group stop against
-a fake apt. On hosted Linux, real apt is required to run against a local index
-that accepts and never answers, and against a refused port. The bound cannot
-make an unavailable mirror succeed.
+`tests/test_bounded_apt.py` admits apt only as the bounded pinned pair in the
+three provisioning workflows, and no `apt`, `apt-get` or `aptitude` use
+elsewhere. Against a fake apt it checks:
+- the refusals and kept statuses;
+- a kill before the bound, never reported as a timeout;
+- the process-group stop.
+
+On hosted Linux, real apt with the workflow's update arguments is required. It
+runs with host configuration and proxies isolated, against three local
+fixtures:
+- a valid local index, which must succeed;
+- an index that accepts the connection and never answers, which must reach it
+  and refuse at its own bound;
+- a refused port, which must be named in the refusal.
+
+These run in `verify` on `ubuntu-latest`. The provisioning lanes themselves
+exercise real apt on `ubuntu-24.04`. If a descendant ignores TERM after its
+parent exits, it can outlive the command. The bound cannot make an unavailable
+mirror succeed.
 
 ## Pinned uv bootstrap
 
