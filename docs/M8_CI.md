@@ -107,8 +107,10 @@ qualification transfers to new bytes.
 The containment, runner qualification and Pi local-read workflows run
 `apt-get -q update --error-on=any` and the pinned bubblewrap install through
 `scripts/ci/bounded_apt.sh`. Each command has a 120-second wall-clock bound,
-with TERM at the bound and KILL 10 seconds later. The bound reaches apt's
-download methods too. A refusal names the command and one of three reasons:
+with TERM to the command's process group at the bound and KILL to apt-get 10
+seconds later. coreutils' KILL reaches only apt-get, so after a bound or kill
+the wrapper kills the whole group. A download method that ignored TERM cannot
+hold the step open. A refusal names the command and one of three reasons:
 an expired bound (exit 124), a kill whose cause is not established (exit 137),
 or apt's own exit status. It exits before runtime creation. A bound must be
 written without leading zeros, because `timeout 0` means no bound. Without
@@ -140,9 +142,8 @@ fixtures:
 - a refused port, which must be named in the refusal.
 
 These run in `verify` on `ubuntu-latest`. The provisioning lanes themselves
-exercise real apt on `ubuntu-24.04`. If a descendant ignores TERM after its
-parent exits, it can outlive the command. The bound cannot make an unavailable
-mirror succeed.
+exercise real apt on `ubuntu-24.04`. A descendant that leaves the process group
+is outside the bound. The bound cannot make an unavailable mirror succeed.
 
 ## Pinned uv bootstrap
 

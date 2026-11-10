@@ -25,9 +25,16 @@ case "$bound" in
 esac
 
 status=0
-# Without --foreground, timeout signals apt-get's whole process group, so the
-# download methods it started stop too. A command that ignores TERM is killed.
-timeout --kill-after=10 "$bound" apt-get "$@" || status=$?
+# Without --foreground, timeout leads its own process group and sends TERM to
+# the whole group, so the download methods apt-get started stop too. Its later
+# KILL reaches only apt-get, so after any bound or kill the group is killed
+# here as well: a descendant that ignored TERM must not hold the step open.
+timeout --kill-after=10 "$bound" apt-get "$@" &
+group=$!
+wait "$group" || status=$?
+if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+  kill -KILL -- "-$group" 2> /dev/null || true
+fi
 case "$status" in
   0)
     exit 0

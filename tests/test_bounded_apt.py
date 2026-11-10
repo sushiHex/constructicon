@@ -74,6 +74,7 @@ case "$FAKE_APT" in
   stall) sleep 300 & printf '%s' "$!" > "$METHOD_PID"; wait;;
   stubborn) trap '' TERM; sleep 300 & printf '%s' "$!" > "$METHOD_PID"; wait;;
   killed) kill -KILL "$$";;
+  orphan) (trap '' TERM; exec sleep 300) & printf '%s' "$!" > "$METHOD_PID"; wait;;
 esac
 """, encoding="utf-8", newline="\n")
         (fake / "apt-get").chmod(0o755)
@@ -125,9 +126,14 @@ def test_success_and_apt_failure_keep_apt_status(tmp_path: Path) -> None:
     assert failed.stderr.endswith("apt-provisioning-failed: apt-get -q update exited 100\n")
 
 
-def test_a_stalled_command_and_its_methods_stop_at_the_bound(tmp_path: Path) -> None:
+@pytest.mark.parametrize("behavior", ["stall", "orphan"])
+def test_a_stalled_command_and_its_methods_stop_at_the_bound(
+    tmp_path: Path, behavior: str,
+) -> None:
+    # "orphan": apt-get exits on TERM while its method ignores TERM; the group
+    # KILL after the bound still stops it, so it cannot hold the step open.
     bound = 2
-    result, elapsed = run(tmp_path, bound, "-q", "update", behavior="stall")
+    result, elapsed = run(tmp_path, bound, "-q", "update", behavior=behavior)
     assert (result.returncode, result.stdout, result.stderr) == (
         124,
         f"::error title=APT provisioning bound::apt-get -q update did not finish within {bound}s\n",
@@ -291,7 +297,10 @@ def test_real_apt_accepts_an_available_local_index_with_the_workflow_arguments(
         repository.close()
     assert result.returncode == 0, (result.stdout, result.stderr)
     assert "::error" not in result.stdout and "apt-provisioning-" not in result.stderr
-    assert "/Release" in repository.requests and "/Packages" in repository.requests
+    # A flat source is requested under "./"; its empty index is listed with size 0,
+    # so apt needs no Packages download once it holds the Release file.
+    assert "/./Release" in repository.requests
+    assert any(path.name.endswith("_Release") for path in (tmp_path / "lists").iterdir())
     assert elapsed < 60
 
 
