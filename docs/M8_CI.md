@@ -102,6 +102,49 @@ script changes alter retained launch artifact identity: future host use needs th
 reviewed installation and qualification procedure; no existing host
 qualification transfers to new bytes.
 
+## Bounded APT provisioning
+
+The containment, runner qualification and Pi local-read workflows run
+`apt-get -q update --error-on=any` and the pinned bubblewrap install through
+`scripts/ci/bounded_apt.sh`. Each command has a 120-second wall-clock bound,
+with TERM to the command's process group at the bound and KILL to apt-get 10
+seconds later. coreutils' KILL reaches only apt-get, so after a bound or kill
+the wrapper kills the whole group. A download method that ignored TERM cannot
+hold the step open. A refusal names the command and one of three reasons:
+an expired bound (exit 124), a kill whose cause is not established (exit 137),
+or apt's own exit status. It exits before runtime creation. A bound must be
+written without leading zeros, because `timeout 0` means no bound. Without
+`--error-on=any`, a transient fetch failure, such as a refused connection, is
+only a warning. The flag also tightens admission: an unavailable unrelated
+index, such as packages.microsoft.com, now fails provisioning.
+
+The bound is a margin over 72 successful hosted jobs, not a proven minimum.
+`apt-get update` took at most 26 seconds (median 5) and the install at most 5.6
+seconds. In the #291 failure, apt stalled silently after a mirror fallback
+until the 30-minute job budget expired. One stalled command now ends by 130
+seconds, and a slow update followed by a stalled install by about 260. The
+wrapper adds no retries; apt's own configured acquisition retries still apply.
+Job and physical-invocation budgets and the package pin are unchanged.
+
+`tests/test_bounded_apt.py` admits apt only as the bounded pinned pair in the
+three provisioning workflows, and no `apt`, `apt-get` or `aptitude` use
+elsewhere. Against a fake apt it checks:
+- the refusals and kept statuses;
+- a kill before the bound, never reported as a timeout;
+- the process-group stop.
+
+On hosted Linux, real apt with the workflow's update arguments is required. It
+runs with host configuration and proxies isolated, against three local
+fixtures:
+- a valid local index, which must succeed;
+- an index that accepts the connection and never answers, which must reach it
+  and refuse at its own bound;
+- a refused port, which must be named in the refusal.
+
+These run in `verify` on `ubuntu-24.04`, the image the provisioning lanes use
+for their own real apt. A descendant that leaves the process group
+is outside the bound. The bound cannot make an unavailable mirror succeed.
+
 ## Pinned uv bootstrap
 
 Every `setup-uv` step uses the commit-pinned v10.3.3 action with uv `0.13.7`
