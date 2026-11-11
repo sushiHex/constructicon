@@ -64,7 +64,20 @@ from constructicon.substrate.git.process import GitProcess
 from constructicon.substrate.journal.sqlite import SqliteJournal
 
 GRAPH_NAME = "constructicon-plan-manifest-maintenance"
-WRITE_INSTRUCTION = (
+# The vendor thread is told its own sandbox is read-only and runs from /tmp, and
+# the tool is described only as a contained worker. A live attempt (#407) read once
+# and stopped without writing, so every WRITE instruction names the one tool, where
+# it runs and that its writes are what is captured. The worker runs from the bound
+# repository root (substrate/executors/linux.py, --chdir /workspace).
+TOOL_PREFIX = (
+    "Make every file change by calling the contained_python tool: it runs Python "
+    "with the repository root as its working directory, and the files it writes there "
+    "are exactly what is captured as your result. Any note that your own sandbox is "
+    "read-only does not apply to contained_python. Use relative paths, read the file "
+    "before editing it, write the edited file back, and do not finish until the write "
+    "has succeeded.\n\n"
+)
+WRITE_INSTRUCTION = TOOL_PREFIX + (
     "Create only tests/vectors/plan_manifest.json as a regular nonexecutable UTF-8 file. "
     "It must be a JSON object with exactly version:1 and cases (1 to 64 items). "
     "Each case has exactly kind:'plan_path' and path (at most 256 ASCII characters), "
@@ -76,7 +89,7 @@ WRITE_INSTRUCTION = (
 )
 CHANNEL_GRAPH_NAME = "constructicon-channel-stored-reply"
 # Fixed position and annotations: the trusted oracle's exact helper, spelled once.
-CHANNEL_INSTRUCTION = (
+CHANNEL_INSTRUCTION = TOOL_PREFIX + (
     f"Modify only {CHANNEL_TARGET_PATH} in place; keep it a regular nonexecutable "
     "UTF-8 file. In class InProcessChannel, add exactly one private method, placed "
     "immediately after _complete_message as the last method of the class, with exactly "

@@ -912,3 +912,28 @@ async def test_application_refuses_history_despite_passing_generic_tree_gate(
         assert "sole parent" in str(error)
         rejected = True
     assert rejected, "passing the generic tree gate must not accept intermediate worker code"
+
+
+def test_every_write_instruction_names_its_one_tool_where_it_runs_and_what_is_captured():
+    # #407: a live attempt made one callback and left the capture unchanged. The
+    # vendor thread is told its own sandbox is read-only from /tmp, so the
+    # instruction itself names the one granted tool, its working directory and
+    # that its writes are the result. The cause is not proven; this removes one.
+    from constructicon.api.plan_manifest_application import (
+        CHANNEL_INSTRUCTION,
+        TASKS,
+        TOOL_PREFIX,
+    )
+
+    assert {task.instruction for task in TASKS} == {WRITE_INSTRUCTION, CHANNEL_INSTRUCTION}
+    for task in TASKS:
+        assert task.instruction.startswith(TOOL_PREFIX)
+        assert task.instruction.count("contained_python") == TOOL_PREFIX.count("contained_python")
+    for phrase in ("calling the contained_python tool", "repository root as its working directory",
+                   "exactly what is captured", "read-only does not apply to contained_python",
+                   "relative paths", "do not finish until the write has succeeded"):
+        assert phrase in TOOL_PREFIX
+    # The bounded WRITE grant admits exactly this one tool.
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "src/constructicon/core/maintenance.py").read_text(encoding="utf-8")
+    assert 'grants.allowed_tools != ("contained_python",)' in source
