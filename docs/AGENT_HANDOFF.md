@@ -16,6 +16,14 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Usage report framing is LF on every platform
+
+`scripts/m8_vm_usage.py` printed its one-line report with `print`. In Windows text mode that ends the line with CRLF, and a #397 operator package's strict LF-only reader refused a correct Off/Ok observation before start (#77 comment 6778313531). The script now writes ASCII bytes ending in a lone LF on every platform. `read_report()` accepts only bytes the producer itself would write: the parsed report must re-render to exactly the input, and it must name schema 1, this VM and a known verdict. It checks framing and identity only; field semantics stay with `observe`. Nothing in the repo parses this script's stdout today. The reader is offered for operator packages, but nothing enforces that they use it. The isolated-script test now asserts exact bytes; against the old `print` it fails on Windows.
+
+What this does not establish:
+- `scripts/m8_vm_address.py` still uses `print`. The reviewed discovery procedure pins its bytes, and its consumers parse it with `json.loads`, which tolerates CRLF.
+- Operator packages built before this commit carry their own `source/` copy and read CRLF exactly. A package built from this commit receives LF and should read it with `read_report()`.
+
 ## Bounded APT provisioning
 
 In #291, `apt-get update` fell back from the Azure mirror and then printed
