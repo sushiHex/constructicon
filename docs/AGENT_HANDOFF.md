@@ -16,6 +16,27 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## WRITE instructions name their one tool, its working directory and the capture
+
+The #397 generation-18 attempt (#77 comment 6785983613) completed normally and was refused at the writer as `capture-unchanged`. The retained typed report shows:
+- one successful `contained_python` callback;
+- 210 output tokens in total;
+- a committed tree equal to the base.
+
+The model was not told where its edits should go:
+- `CHANNEL_INSTRUCTION` never named the tool. It never said that the tool runs from the repository root, or that its writes are what is captured.
+- The vendor thread is started with `sandbox: read-only` and cwd `/tmp`.
+- The tool description reads only "Run Python in the invocation's isolated contained worker."
+
+The only proven live Codex write (g8) began "Use contained_python to …". Both maintenance instructions now start with `TOOL_PREFIX`, which states all three facts. The worker does run from the bound root (`linux.py`, `--chdir /workspace`), and capture commits that same tree.
+
+What this does not establish:
+- **Why the model did not write.** The callback program and the final reply are not retained, so the cause is inferred. A compact read-and-edit program, or a no-op one, could also fit in 210 tokens.
+- **Claude lists the tool under a namespaced name.** It appears as `mcp__constructicon_write__contained_python`, so the prefix says "the one tool whose name ends in contained_python".
+- **Whether the change works.** It removes one plausible cause; it is not proven to help. Only the model-visible first request (#407) and a live attempt can show that.
+- **The vendor sandbox text and the tool description are unchanged.** Both are inside the frozen protocol revision.
+- **The application revision changes.** A package built for an earlier revision cannot run this one.
+
 ## Usage report framing is LF on every platform
 
 `scripts/m8_vm_usage.py` printed its one-line report with `print`. In Windows text mode that ends the line with CRLF, and a #397 operator package's strict LF-only reader refused a correct Off/Ok observation before start (#77 comment 6778313531). The script now writes ASCII bytes ending in a lone LF on every platform. `read_report()` accepts only bytes the producer itself would write: the parsed report must re-render to exactly the input, and it must name schema 1, this VM and a known verdict. It checks framing and identity only; field semantics stay with `observe`. Nothing in the repo parses this script's stdout today. The reader is offered for operator packages, but nothing enforces that they use it. The isolated-script test now asserts exact bytes; against the old `print` it fails on Windows.
