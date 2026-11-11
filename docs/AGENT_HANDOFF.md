@@ -28,10 +28,11 @@ The model was not told where its edits should go:
 - The vendor thread is started with `sandbox: read-only` and cwd `/tmp`.
 - The tool description reads only "Run Python in the invocation's isolated contained worker."
 
-The only proven live write (g8) began "Use contained_python to …". Both maintenance instructions now start with `TOOL_PREFIX`, which states all three facts. The worker does run from the bound root (`linux.py`, `--chdir /workspace`), and capture commits that same tree.
+The only proven live Codex write (g8) began "Use contained_python to …". Both maintenance instructions now start with `TOOL_PREFIX`, which states all three facts. The worker does run from the bound root (`linux.py`, `--chdir /workspace`), and capture commits that same tree.
 
 What this does not establish:
 - **Why the model did not write.** The callback program and the final reply are not retained, so the cause is inferred. A compact read-and-edit program, or a no-op one, could also fit in 210 tokens.
+- **Claude lists the tool under a namespaced name.** It appears as `mcp__constructicon_write__contained_python`, so the prefix says "the one tool whose name ends in contained_python".
 - **Whether the change works.** It removes one plausible cause; it is not proven to help. Only the model-visible first request (#407) and a live attempt can show that.
 - **The vendor sandbox text and the tool description are unchanged.** Both are inside the frozen protocol revision.
 - **The application revision changes.** A package built for an earlier revision cannot run this one.

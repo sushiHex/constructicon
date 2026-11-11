@@ -929,10 +929,13 @@ def test_every_write_instruction_names_its_one_tool_where_it_runs_and_what_is_ca
     for task in TASKS:
         assert task.instruction.startswith(TOOL_PREFIX)
         assert task.instruction.count("contained_python") == TOOL_PREFIX.count("contained_python")
-    for phrase in ("calling the contained_python tool", "repository root as its working directory",
-                   "exactly what is captured", "read-only does not apply to contained_python",
-                   "relative paths", "do not finish until the write has succeeded"):
-        assert phrase in TOOL_PREFIX
+    for phrase in ("calling the contained_python tool", "name ends in contained_python",
+                   "repository root as its working directory", "exactly what is captured",
+                   "read-only does not apply to contained_python", "Use relative paths.",
+                   "Read an existing file before editing it and write the edited file back",
+                   "for a file you create, check first that it does not exist",
+                   "Do not finish until the write has succeeded."):
+        assert phrase in TOOL_PREFIX, phrase
     # The bounded WRITE grant admits exactly this one tool.
     root = Path(__file__).resolve().parents[2]
     source = (root / "src/constructicon/core/maintenance.py").read_text(encoding="utf-8")

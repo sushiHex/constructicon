@@ -65,17 +65,20 @@ from constructicon.substrate.journal.sqlite import SqliteJournal
 
 GRAPH_NAME = "constructicon-plan-manifest-maintenance"
 # The vendor thread is told its own sandbox is read-only and runs from /tmp, and
-# the tool is described only as a contained worker. A live attempt (#407) read once
-# and stopped without writing, so every WRITE instruction names the one tool, where
-# it runs and that its writes are what is captured. The worker runs from the bound
-# repository root (substrate/executors/linux.py, --chdir /workspace).
+# the tool is described only as a contained worker. A live attempt (#407) made one
+# successful callback and left the capture unchanged; why is not retained. So every
+# WRITE instruction names the one tool, where it runs and that its writes are what
+# is captured. The worker runs from the bound repository root
+# (substrate/executors/linux.py, --chdir /workspace). Claude lists the same tool
+# under a namespaced name (claude_native.py), hence "whose name ends in".
 TOOL_PREFIX = (
-    "Make every file change by calling the contained_python tool: it runs Python "
-    "with the repository root as its working directory, and the files it writes there "
-    "are exactly what is captured as your result. Any note that your own sandbox is "
-    "read-only does not apply to contained_python. Use relative paths, read the file "
-    "before editing it, write the edited file back, and do not finish until the write "
-    "has succeeded.\n\n"
+    "Make every file change by calling the contained_python tool (the one tool whose "
+    "name ends in contained_python): it runs Python with the repository root as its "
+    "working directory, and the files it writes there are exactly what is captured as "
+    "your result. Any note that your own sandbox is read-only does not apply to "
+    "contained_python. Use relative paths. Read an existing file before editing it and "
+    "write the edited file back; for a file you create, check first that it does not "
+    "exist. Do not finish until the write has succeeded.\n\n"
 )
 WRITE_INSTRUCTION = TOOL_PREFIX + (
     "Create only tests/vectors/plan_manifest.json as a regular nonexecutable UTF-8 file. "
