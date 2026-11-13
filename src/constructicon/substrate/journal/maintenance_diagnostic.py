@@ -28,7 +28,7 @@ from constructicon.core.maintenance import (
     PlanManifestRequest,
     PlanManifestResult,
 )
-from constructicon.core.qualification_write import CallbackObservation
+from constructicon.core.qualification_write import CallbackObservation, ContentDigests
 from constructicon.core.workspace import acquisition_id_for, lease_id_for
 from constructicon.substrate.journal._sqlite_attestations import attestation_for_id
 from constructicon.substrate.journal._sqlite_base import (
@@ -180,7 +180,9 @@ def _attempt(path: Path, run_id: RunId, authorization_id: str,
         _require(dispatch != "completed" or status == "success")
         _require(callbacks is None or not (dispatch == "completed" or status == "success")
                  or callbacks.responses_complete)
-        report.update(dispatch=dispatch, executor_status=status, failure_kind="unknown")
+        report.update(dispatch=dispatch, executor_status=status, failure_kind="unknown",
+                      content_digests=_content_digests(facts.get("content_digests", "unrecorded"),
+                                                       callbacks))
         refusal = facts.get("refusal")
         if isinstance(refusal, str) and status == "failure":
             for kind in ("spawn", "timeout", "exit", "unavailable"):
@@ -194,6 +196,21 @@ def _attempt(path: Path, run_id: RunId, authorization_id: str,
             report["process"] = {"timed_out": process["timed_out"],
                                  "bound_exceeded": process["bound_exceeded"]}
     return report
+
+
+def _content_digests(value: object, callbacks: CallbackObservation | None) -> object:
+    """Digests and lengths only (codex.py ``_content_digests``); text never crosses.
+
+    A named absence passes through; a block must describe exactly the admitted
+    prefix it sits beside, or the attempt is refused.
+    """
+    if value in ("unrecorded", "unrecordable"):
+        return value
+    _require(isinstance(value, dict) and callbacks is not None)
+    content = ContentDigests.model_validate(value)
+    assert callbacks is not None
+    _require(not content.contradicts(callbacks))
+    return content.model_dump(mode="json")
 
 
 def _command(path: Path, run_id: RunId) -> str:

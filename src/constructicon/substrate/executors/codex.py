@@ -57,6 +57,7 @@ request exists satisfies an id check, which is why arrival order is checked too.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import math
 import os
@@ -89,6 +90,7 @@ from constructicon.core.native_operator import (
 )
 from constructicon.core.process import ProcessIO
 from constructicon.core.qualification import QualificationAuthorization
+from constructicon.core.qualification_write import CallbackContent, ContentDigest, ContentDigests
 from constructicon.core.run import OwnershipLost
 from constructicon.core.workspace import (
     AcquiredCapability,
@@ -238,6 +240,10 @@ class _LocalClose(asyncio.CancelledError):
 
 
 PROTOCOL_REVISION = digest("codex-operator-protocol", 1, inspect.getsource(codex_protocol))
+
+
+def _content_digest(raw: bytes) -> ContentDigest:
+    return ContentDigest(sha256=hashlib.sha256(raw).hexdigest(), bytes=len(raw))
 
 
 def configuration_digest(configuration: str) -> Digest:
@@ -1562,6 +1568,10 @@ class CodexOperatorHandle:
         self.relay_destinations: dict[str, int] = {}
         # The launched process's result, once the exchange returned one.
         self.process: ProcessResult | None = None
+        # Admitted callbacks' content by digest, keyed by admitted index; never text.
+        self._program_digests: dict[int, ContentDigest] = {}
+        self._output_digests: dict[int, ContentDigest] = {}
+        self._content_unrecordable = False
 
     @property
     def profile(self) -> NativeOperatorExecutorProfileV3:
@@ -1815,7 +1825,7 @@ class CodexOperatorHandle:
         )
         process = self.process
         identity = self.provider.identity
-        return {
+        facts: dict[str, Any] = {
             "status": None if outcome is None else outcome.status,
             "refusal": (
                 f"{outcome.error.kind}: {outcome.error.detail}"
@@ -1847,6 +1857,60 @@ class CodexOperatorHandle:
                 "qualification": str(identity.store.subscription_mode_adapter_revision),
             },
         }
+        # Maintenance only: the READ and WRITE qualification readers pin these
+        # facts' exact key set (m9_read_closure.py, _qualification_write_report.py).
+        if self.provider.maintenance is not None:
+            facts["content_digests"] = self._content_digests(outcome)
+        return facts
+
+    def _content_digests(self, outcome: ExecutorOutcome | None) -> object:
+        """Digests and lengths of callback content and the final reply; never text.
+
+        ``"unrecordable"`` names a block that could not be stated exactly, so an
+        absent or partial block is never published as a complete one.
+        """
+        callbacks = None if self.attempt is None else self.attempt.callbacks
+        if callbacks is None:
+            return "unrecorded"
+        if self._content_unrecordable:
+            return "unrecordable"
+        output = None if outcome is None else outcome.output
+        try:
+            reply = None if not isinstance(output, str) else _content_digest(
+                output.encode("utf-8"))
+            content = ContentDigests(schema_version=1, reply=reply, callbacks=tuple(
+                CallbackContent(program=self._program_digests.get(index),
+                                output=self._output_digests.get(index))
+                for index in range(callbacks.admitted_started)
+            ))
+            if content.contradicts(callbacks):
+                return "unrecordable"
+            return content.model_dump(mode="json")
+        except Exception:
+            # Settlement runs in a finally: a diagnostic must never replace the
+            # outcome it describes, so every failure here is the named absence.
+            return "unrecordable"
+
+    def _retain_content(self, store: dict[int, ContentDigest], raw: bytes) -> None:
+        """Keep one admitted callback's digest at its index, or mark the block."""
+        callbacks = None if self.attempt is None else self.attempt.callbacks
+        if callbacks is None:
+            return
+        index = callbacks.admitted_started - 1
+        if index < 0 or index in store:
+            self._content_unrecordable = True
+            return
+        try:
+            store[index] = _content_digest(raw)
+        except Exception:
+            # Retention never fails the callback it describes.
+            self._content_unrecordable = True
+
+    def _program_stdin(self, program: str) -> bytes:
+        """The exact stdin handed to the worker launcher, retained by digest."""
+        stdin = program.encode("utf-8")
+        self._retain_content(self._program_digests, stdin)
+        return stdin
 
     def _validated_workspace(
         self, workspace: ContainedWriteWorkspace, grants: EffectiveGrants,
@@ -2055,7 +2119,7 @@ class CodexOperatorHandle:
             task = asyncio.create_task(self.provider.launcher.run(
                 WORKER_ARGUMENTS,
                 workspace=Path(validated.path), posture=Posture.WRITE,
-                guard_fds=(guard,), stdin=program.encode("utf-8"), input_kind="task",
+                guard_fds=(guard,), stdin=self._program_stdin(program), input_kind="task",
                 timeout_s=remaining,
             ))
             self.worker_active = task
@@ -2170,6 +2234,8 @@ class CodexOperatorHandle:
             admitted_completed=previous.admitted_completed,
             worker_results=(*previous.worker_results[:-1], category),
         ))
+        # After the category is retained, so a digest never outlives its category.
+        self._retain_content(self._output_digests, result.stdout)
 
     async def cleanup(self, disposition: Disposition) -> None:
         if self._close_disposition is None:

@@ -128,7 +128,8 @@ def test_selected_failure_facts_and_attempt_are_private_and_originals_unchanged(
         "checks": []}
     assert report["attempt"] == {"observation": "identity-matched", "phase": "outcome",
         "dispatch": "not dispatched", "callbacks": "unrecorded", "executor_status": "failure",
-        "failure_kind": "unavailable", "process": {"timed_out": False, "bound_exceeded": True}}
+        "failure_kind": "unavailable", "process": {"timed_out": False, "bound_exceeded": True},
+        "content_digests": "unrecorded"}
     assert PRIVATE not in json.dumps(report)
     assert len(json.dumps(report).encode()) <= diagnostic.MAX_REPORT_BYTES
     assert _bytes(source) == original
@@ -558,3 +559,127 @@ def test_invalid_run_identity_refuses_before_claiming_capture_destination(
             "--authorization-id", AUTH]) == 1
         assert not destination.exists()
     assert PRIVATE not in capsys.readouterr().out
+
+
+def _content(count: int = 8, *, size: int = 32 * 1024 * 1024) -> dict[str, object]:
+    def entry(seed: str, length: int) -> dict[str, object]:
+        return {"sha256": hashlib.sha256(seed.encode()).hexdigest(), "bytes": length}
+    return {"schema_version": 1, "reply": entry("reply", size), "callbacks": [
+        {"program": entry(f"program-{index}", 128 * 1024), "output": entry(f"out-{index}", size)}
+        for index in range(count)]}
+
+
+def _content_record(source: Path, content: object, *, callbacks: bool = True) -> Path:
+    source.mkdir()
+    _attempt(source, dispatch="completed", status="success")
+    path = source / "maintenance-attempt.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    if callbacks:
+        record["callbacks"] = {"schema_version": 1, "admitted_started": 8,
+                               "admitted_completed": 8, "worker_results": ["success"] * 8}
+    record["facts"]["content_digests"] = content
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return path
+
+
+def test_content_digests_at_their_bounds_are_projected_exactly_and_without_text(
+    tmp_path: Path,
+) -> None:
+    content = _content()
+    _content_record(tmp_path / "source", content)
+    report = diagnostic.analyze_snapshot(_snapshot(tmp_path / "source", tmp_path / "capture"),
+                                         RUN, AUTH)
+    assert report["complete"] is True, report
+    attempt = report["attempt"]
+    assert isinstance(attempt, dict)
+    assert attempt["content_digests"] == content
+    assert PRIVATE not in json.dumps(report)
+    assert len(json.dumps(report).encode()) <= diagnostic.MAX_REPORT_BYTES
+
+
+def test_a_callback_that_never_reached_the_launcher_has_null_content(tmp_path: Path) -> None:
+    content = _content()
+    callbacks = content["callbacks"]
+    assert isinstance(callbacks, list)
+    callbacks[7] = {"program": None, "output": None}
+    content["reply"] = None
+    path = _content_record(tmp_path / "source", content)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["dispatch"], record["facts"]["status"] = "possibly dispatched", "failure"
+    record["callbacks"].update(admitted_completed=7, worker_results=["success"] * 7 + [None])
+    path.write_text(json.dumps(record), encoding="utf-8")
+    report = diagnostic.analyze_snapshot(_snapshot(tmp_path / "source", tmp_path / "capture"),
+                                         RUN, AUTH)
+    assert report["complete"] is True, report
+    attempt = report["attempt"]
+    assert isinstance(attempt, dict) and attempt["content_digests"] == content
+
+
+@pytest.mark.parametrize("named", ["unrecorded", "unrecordable"])
+def test_named_content_absence_passes_through_and_is_never_a_block(
+    tmp_path: Path, named: str,
+) -> None:
+    _content_record(tmp_path / "source", named, callbacks=False)
+    report = diagnostic.analyze_snapshot(_snapshot(tmp_path / "source", tmp_path / "capture"),
+                                         RUN, AUTH)
+    assert report["complete"] is True
+    attempt = report["attempt"]
+    assert isinstance(attempt, dict) and attempt["content_digests"] == named
+
+
+def _damaged(name: str) -> tuple[object, bool]:
+    content = _content()
+    callbacks = content["callbacks"]
+    reply = content["reply"]
+    assert isinstance(callbacks, list) and isinstance(reply, dict)
+    if name == "text":
+        return PRIVATE, True
+    if name == "no-callbacks":
+        return content, False
+    if name == "short":
+        return _content(7), True
+    if name == "ninth":
+        return _content(9), True
+    if name == "output-without-result":
+        content["callbacks"] = callbacks
+        return content, True  # paired with a null worker result below
+    if name == "extra":
+        reply["text"] = PRIVATE
+    elif name == "schema":
+        content["schema_version"] = 2
+    elif name == "schema-bool":
+        content["schema_version"] = True
+    elif name == "upper":
+        reply["sha256"] = reply["sha256"].upper()
+    elif name == "short-sha":
+        reply["sha256"] = reply["sha256"][:63]
+    elif name == "bytes-bool":
+        reply["bytes"] = True
+    elif name == "bytes-over":
+        reply["bytes"] = 32 * 1024 * 1024 + 1
+    elif name == "negative":
+        reply["bytes"] = -1
+    elif name == "program-over":
+        callbacks[0]["program"]["bytes"] = 128 * 1024 + 1
+    elif name == "missing-reply":
+        del content["reply"]
+    return content, True
+
+
+@pytest.mark.parametrize("name", [
+    "text", "no-callbacks", "short", "ninth", "output-without-result", "extra", "schema",
+    "schema-bool", "upper", "short-sha", "bytes-bool", "bytes-over", "negative",
+    "program-over", "missing-reply",
+])
+def test_malformed_content_digests_refuse_the_attempt_closed(tmp_path: Path, name: str) -> None:
+    content, callbacks = _damaged(name)
+    path = _content_record(tmp_path / "source", content, callbacks=callbacks)
+    if name == "output-without-result":
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record["dispatch"], record["facts"]["status"] = "possibly dispatched", "failure"
+        record["callbacks"].update(admitted_completed=7, worker_results=["success"] * 7 + [None])
+        path.write_text(json.dumps(record), encoding="utf-8")
+    report = diagnostic.analyze_snapshot(_snapshot(tmp_path / "source", tmp_path / "capture"),
+                                         RUN, AUTH)
+    assert report == {"schema_version": 1, "complete": False, "stage": "attempt",
+                      "error": "diagnostic refused or incomplete"}

@@ -16,6 +16,19 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## A maintenance attempt retains digests and lengths of its callback content and reply
+
+The #397 generation-18 refusal (`capture-unchanged`) could not be classified, because nothing retained what the model's one callback program was, what it printed, or what the model finally said (#407 item 2). A maintenance attempt's outcome facts now carry `content_digests`, and the installed diagnostic and the maintenance report packet project it at `diagnostic.attempt.content_digests`:
+- one entry per admitted callback, in admitted order: the sha256 and byte length of the program handed to the worker as stdin, and of the worker's retained stdout;
+- the sha256 and byte length of the outcome's output text. That is the terminal answer on success, the last completed message otherwise, and null when the outcome carries none.
+
+What it does not establish:
+- **Content.** Only digests and lengths are kept; no program, output or reply text is. A length separates a short read from an edit, and a digest confirms a guess. It is a fingerprint, not a confidentiality boundary.
+- **Anything about READ or WRITE qualification attempts.** Their readers pin the facts' exact key set, so the block is emitted only when the provider carries a maintenance authorization. Claude's executor has no maintenance path and emits nothing.
+- **Older records.** A record without the block reads as `"unrecorded"`. A block the producer could not state exactly reads as `"unrecordable"`; a block that disagrees with the admitted callbacks beside it refuses the attempt stage.
+- **A worst-case packet bound.** The capture-unchanged packet with eight maximal entries measured 3,737 of 8,192 bytes; the largest possible packet of every other shape was not measured.
+- **An unchanged adapter.** `codex.py` changed, so `ADAPTER_REVISION` changes and anything bound to it needs regenerating. `codex_protocol.py` and the maintenance application sources did not change, so `PROTOCOL_REVISION` and the application revision hold.
+
 ## WRITE instructions state the callback guards that end an attempt
 
 A refused callback gets no reply, so the model cannot learn a guard by tripping it. `TOOL_PREFIX` now states the ones that apply to both executors:
@@ -39,6 +52,7 @@ What this does not establish:
 - **Other terminal causes are not listed.** Invalid UTF-8 output, the per-attempt timeout and the 128 KiB program bound also end an attempt; the prefix stays short and omits them.
 - **The application revision changes again.** A package built for an earlier revision cannot run this one.
 - **No guard, oracle or checker changed.**
+
 
 ## Model-shaped replies to the stored-reply task are pinned to their refusals
 

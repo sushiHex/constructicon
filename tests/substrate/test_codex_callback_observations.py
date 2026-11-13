@@ -1,8 +1,9 @@
 """Durable admitted-callback snapshots; no programs, outputs or credentials."""
 
 import asyncio
+import hashlib
 import json
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from types import SimpleNamespace
 
 import pytest
@@ -10,14 +11,15 @@ from pydantic import ValidationError
 
 from constructicon.core import qualification_write as contracts
 from constructicon.core.errors import ContractViolation
-from constructicon.core.executor import TaskSpec
+from constructicon.core.executor import ExecutorError, ExecutorFailure, ExecutorSuccess, TaskSpec
 from constructicon.substrate.executors.attempt_record import AttemptRecord
 from constructicon.substrate.executors.codex import CodexConversation, CodexOperatorHandle
 from constructicon.substrate.executors.codex_protocol import (
     CONTAINED_PYTHON_CATALOG,
     MAX_TOOL_CALLS,
+    TOOL_PROGRAM_BYTES,
 )
-from constructicon.substrate.executors.linux import ProcessResult
+from constructicon.substrate.executors.linux import ProcessLimits, ProcessResult
 from tests.substrate.test_codex_adapter import EXPECTED
 from tests.substrate.test_codex_write import WRITE_GRANTS, WriteNative
 
@@ -121,6 +123,8 @@ def handle(tmp_path, monkeypatch, result, *, cancel_result=False, later_validati
     owner = object.__new__(CodexOperatorHandle)
     owner.attempt = record
     owner.worker_active = None
+    owner._program_digests, owner._output_digests = {}, {}
+    owner._content_unrecordable = False
     entered = asyncio.Event()
     @asynccontextmanager
     async def use():
@@ -317,3 +321,95 @@ def test_retained_callback_facts_cannot_be_retracted(tmp_path, kind):
     with pytest.raises(ContractViolation, match="cannot retract"):
         record.observe_callbacks(following)
     assert record.path.read_bytes() == before
+
+
+def by_digest(raw):
+    return {"sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+
+
+def test_content_bounds_restate_their_producers_and_bind_exactly():
+    assert contracts.CALLBACK_PROGRAM_BYTES == TOOL_PROGRAM_BYTES
+    assert ProcessLimits().stdout_bytes == contracts.CONTENT_DIGEST_BYTES
+    sha = "0" * 64
+    def digests(count, *, program=1, size=1):
+        return {"schema_version": 1, "reply": {"sha256": sha, "bytes": size}, "callbacks": [
+            {"program": {"sha256": sha, "bytes": program}, "output": None}] * count}
+    accepted = digests(MAX_TOOL_CALLS, program=TOOL_PROGRAM_BYTES,
+                       size=contracts.CONTENT_DIGEST_BYTES)
+    assert contracts.ContentDigests.model_validate(accepted).model_dump(mode="json") == accepted
+    for refused in (digests(MAX_TOOL_CALLS + 1), digests(1, program=TOOL_PROGRAM_BYTES + 1),
+                    digests(1, size=contracts.CONTENT_DIGEST_BYTES + 1)):
+        with pytest.raises(ValidationError):
+            contracts.ContentDigests.model_validate(refused)
+
+
+@pytest.mark.parametrize("result", [
+    ProcessResult(0, b"secret-output", b"", 0, payload_returncode=0),
+    ProcessResult(1, b"secret-partial", b"secret-error", 0, payload_returncode=1),
+    ProcessResult(1, b"secret-bounded", b"", 0, bound_exceeded="stdout_bytes"),
+    ProcessResult(0, b"\xff", b"", 0, payload_returncode=0),
+], ids=["success", "nonzero", "bound", "utf8"])
+async def test_each_admitted_callback_keeps_program_and_output_digests_not_text(
+    tmp_path, monkeypatch, result,
+):
+    owner, record, _, worker = handle(tmp_path, monkeypatch, result, later_validation=True)
+    owner._observe_callbacks(1, 0)
+    with pytest.raises(ContractViolation):
+        await worker("secret-program")
+    owner._observe_callbacks(2, 0)
+    with suppress(ContractViolation):  # only the first call meets the later rejection
+        await worker("secret-second")
+    content = owner._content_digests(ExecutorFailure(
+        output="secret-reply", error=ExecutorError(kind="exit", detail="x")))
+    assert content == {"schema_version": 1, "reply": by_digest(b"secret-reply"), "callbacks": [
+        {"program": by_digest(b"secret-program"), "output": by_digest(result.stdout)},
+        {"program": by_digest(b"secret-second"), "output": by_digest(result.stdout)},
+    ]}
+    assert "secret" not in json.dumps(content)
+    assert "sha256" not in record.path.read_text()  # retained in memory until the outcome
+
+
+def test_content_without_callbacks_or_reply_is_named_not_invented(tmp_path, monkeypatch):
+    owner, _, _, _ = handle(tmp_path, monkeypatch, None)
+    assert owner._content_digests(None) == {"schema_version": 1, "reply": None, "callbacks": []}
+    assert owner._content_digests(ExecutorSuccess(output=None))["reply"] is None
+    owner.attempt = None
+    assert owner._content_digests(ExecutorSuccess(output="done")) == "unrecorded"
+
+
+@pytest.mark.parametrize("damage", ["repeat", "unadmitted", "orphan-output"])
+def test_content_that_cannot_be_stated_exactly_is_unrecordable(tmp_path, monkeypatch, damage):
+    owner, _, _, _ = handle(tmp_path, monkeypatch, None)
+    if damage == "unadmitted":
+        owner._program_stdin("secret-program")  # no admitted callback at all
+    else:
+        owner._observe_callbacks(1, 0)
+        owner._program_stdin("secret-program")
+        if damage == "repeat":
+            owner._program_stdin("secret-other")
+        else:
+            owner._output_digests[0] = owner._program_digests[0]  # without its category
+    assert owner._content_digests(ExecutorSuccess(output="done")) == "unrecordable"
+
+
+@pytest.mark.parametrize("stage", ["retain", "settle"])
+def test_a_failing_digest_never_fails_the_callback_or_the_settlement(
+    tmp_path, monkeypatch, stage,
+):
+    """Settlement runs in a finally; any digest failure is the named absence."""
+    from constructicon.substrate.executors import codex
+
+    owner, _, _, _ = handle(tmp_path, monkeypatch, None)
+    owner._observe_callbacks(1, 0)
+
+    def broken(raw):
+        raise RuntimeError("secret-failure")
+
+    if stage == "retain":
+        with monkeypatch.context() as patch:
+            patch.setattr(codex, "_content_digest", broken)
+            assert owner._program_stdin("secret-program") == b"secret-program"
+    else:
+        owner._program_stdin("secret-program")
+        monkeypatch.setattr(codex, "_content_digest", broken)
+    assert owner._content_digests(ExecutorSuccess(output="done")) == "unrecordable"

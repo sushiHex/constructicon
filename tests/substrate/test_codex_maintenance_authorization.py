@@ -1,5 +1,6 @@
 """Credential-free accepting and refusing proofs for the separate maintenance attempt."""
 
+import hashlib
 import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -16,6 +17,7 @@ from constructicon.core.identity import digest
 from constructicon.core.maintenance import MaintenanceAttemptAuthorization
 from constructicon.core.manifest import CapabilityBinding, CapabilityLease
 from constructicon.core.qualification import QualificationAuthorization
+from constructicon.core.qualification_write import CallbackObservation
 from constructicon.core.run import RunLease
 from constructicon.core.workspace import LeaseContext, StaleAcquisition
 from constructicon.substrate.executors import codex
@@ -31,6 +33,7 @@ from constructicon.substrate.executors.linux import ProcessResult
 from constructicon.substrate.git import acquisition, contained
 from constructicon.substrate.git.authority import GitAuthority
 from constructicon.substrate.git.capture import ContainedWriteWorkspaceProvider
+from constructicon.substrate.journal import maintenance_diagnostic as diagnostic
 from tests.core.test_maintenance_authorization import GRANTS, SCOPE, authorization
 from tests.gitworld import seed_authority
 from tests.native_operator_world import native_egress
@@ -156,6 +159,24 @@ async def test_one_maintenance_turn_records_purpose_and_completed_dispatch(
             "plan-manifest-maintenance", "outcome", "completed",
         )
         assert "stage" not in record and "done" not in Path(granted.attempt_record).read_text()
+        # Content by digest and length, from the producer's own bytes, never text.
+        stdin = executor.launcher.worker_calls[0]["stdin"]
+        assert stdin == b"print('one call')"
+
+        def by_digest(raw):
+            return {"sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+
+        expected = {"schema_version": 1, "reply": by_digest(b"done"), "callbacks": [
+            {"program": by_digest(stdin), "output": by_digest(b"worker-output")}]}
+        assert record["facts"]["content_digests"] == expected
+        text = Path(granted.attempt_record).read_text()
+        assert "one call" not in text and "worker-output" not in text
+        # The diagnostic's projection accepts the real producer's block as written
+        # (this fixture's scope is not the diagnostic's graph, so not via _attempt).
+        assert diagnostic._content_digests(
+            record["facts"]["content_digests"],
+            CallbackObservation.model_validate(record["callbacks"]),
+        ) == expected
         with pytest.raises(ContractViolation, match="executes one task only"):
             await acquired.resource.execute(TaskSpec(instruction="again"),
                                             workspace=work.resource, grants=GRANTS)
