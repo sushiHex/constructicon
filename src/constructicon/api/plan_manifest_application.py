@@ -97,11 +97,15 @@ def pinned_instruction(
     """The instruction, only if it is the text the approved request pins."""
     if request.instruction_sha256 is None:
         raise ContractViolation("maintenance request carries no instruction digest")
-    if not isinstance(instruction, str) or hashlib.sha256(
-        instruction.encode("utf-8", errors="replace"),
-    ).hexdigest() != request.instruction_sha256:
+    text = instruction if isinstance(instruction, str) else ""
+    try:
+        raw = text.encode("utf-8")
+    except UnicodeEncodeError:  # A lone surrogate is no committed text; never replaced.
+        raw = b""
+    # Empty is never an instruction (base_instruction refuses it), so it marks refusal.
+    if not raw or hashlib.sha256(raw).hexdigest() != request.instruction_sha256:
         raise ContractViolation("maintenance instruction differs from its pinned digest")
-    return instruction
+    return text
 
 
 async def maintenance_writer(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[str, Any]:

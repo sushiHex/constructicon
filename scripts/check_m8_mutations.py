@@ -1029,7 +1029,7 @@ MUTANTS = (
     (
         "maintenance instruction is compared by digest",
         "constructicon.api.plan_manifest_application:pinned_instruction",
-        ").hexdigest() != request.instruction_sha256:", ").hexdigest() == '':",
+        "hashlib.sha256(raw).hexdigest() != request.instruction_sha256", "False",
         "tests/api/test_instruction_binding.py::"
         "test_only_the_text_the_request_pins_is_the_instruction",
     ),

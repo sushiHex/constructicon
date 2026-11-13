@@ -100,9 +100,14 @@ diagnostic and report decode recorded requests through these models
 
 So each request model stays one class with two eras: `schema_version` 1 has
 no `instruction_sha256` and serializes exactly as before; `schema_version` 2
-requires it. Era 1 is history only. Assembly builds era 2, and both the
-whole-request equality and the writer refuse a request without a digest, so
-no era-1 authorization can be admitted. No digest is invented for old bytes.
+requires it. Era 1 is history only. Assembly builds era 2, and the resources
+check, the pre-startup attempt check and the writer each refuse a request
+without a digest, so the maintenance entry admits no era-1 authorization. No
+digest is invented for old bytes.
+
+That refusal lives in the maintenance entry and its writer, not in generic
+graph admission, which validates port names and contracts and not request
+values. A second entry point to these graphs would have to keep it.
 
 ### Removed
 
@@ -277,3 +282,17 @@ One `gpt-6-astra` pass on the first draft, premises checked at source.
 | "Exactly what the model was asked" overclaims | note | Reworded to input evidence |
 | Preparation is not transactional | note | Stated |
 | Worker networkless, executor egress allowed | note | Stated separately |
+
+One `gpt-6.1-sol` pass on the implementation.
+
+| Finding | Class | Disposition |
+| --- | --- | --- |
+| The digest guard encoded with replacement, so a lone surrogate could match a request pinning `sha256(b"?")` | introduced | Fixed: strict encoding, and empty text is never an instruction; both cases tested |
+| Generic admission accepts an era-1 request; the refusal is the entry's and the writer's | design choice | Stated under "Eras" |
+| Helper containment proves inclusion, not meaning | design choice | Unchanged; the oracle decides acceptance |
+| The q12 and q13 frozen cause lists also reject the new cause | design choice | No test compares them with the installed set; recorded for the next package |
+
+It confirmed the era-1 wire in every dump path, both inputs reaching the
+writer by nominal binding, the instruction files as the removed constants plus
+one line feed, and every mutation needle matching once. It did not run the
+Linux lanes.

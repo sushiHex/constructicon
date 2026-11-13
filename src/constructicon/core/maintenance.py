@@ -54,8 +54,8 @@ class _Request(BaseModel):
 
     Era 2 pins the instruction by digest, as ``target_sha256`` pins the target.
     Era-1 bytes decode and serialize exactly as they always did; assembly builds
-    era 2 and the writer refuses a request without a digest, so no era-1
-    authorization is admitted.
+    era 2, and the maintenance entry and its writer refuse a request without a
+    digest, so that entry admits no era-1 authorization.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)

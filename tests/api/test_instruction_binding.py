@@ -169,6 +169,14 @@ def test_only_the_text_the_request_pins_is_the_instruction():
         (REQUEST, WRITE_INSTRUCTION.encode(), DIFFERS),
         (REQUEST, None, DIFFERS),
         (REQUEST, "\ud800", DIFFERS),
+        # A surrogate is refused outright: it is never replaced and then matched.
+        (REQUEST.model_copy(update={"instruction_sha256": hashlib.sha256(b"?").hexdigest()}),
+         "\ud800", DIFFERS),
+        # Nor can a request pin the empty text and so admit a missing instruction.
+        (REQUEST.model_copy(update={"instruction_sha256": hashlib.sha256(b"").hexdigest()}),
+         None, DIFFERS),
+        (REQUEST.model_copy(update={"instruction_sha256": hashlib.sha256(b"").hexdigest()}),
+         "", DIFFERS),
     ):
         with pytest.raises(ContractViolation) as refused:
             pinned_instruction(request, text)
