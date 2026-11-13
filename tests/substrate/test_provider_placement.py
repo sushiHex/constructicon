@@ -439,6 +439,12 @@ async def test_a_maintenance_write_turn_shows_the_model_its_instruction_and_one_
     # No working directory is shown: the thread's cwd (NATIVE_CWD) never reaches
     # the model, so only the prefix says where contained_python runs.
     assert "<cwd>" not in json.dumps(request)
+    # The advisory replay admits exactly this capture and sends its messages unchanged.
+    from tests.advisory_replay import first_request, public_body
+
+    body = public_body(first_request(json.dumps(request).encode(), instruction=instruction))
+    assert [message_texts(body, role) for role in ("developer", "user")] == [
+        message_texts(request, role) for role in ("developer", "user")]
 
 
 @pytest.mark.parametrize("without", [
