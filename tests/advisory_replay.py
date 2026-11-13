@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import threading
 import urllib.error
 import urllib.parse
@@ -62,6 +63,7 @@ CAPTURE_KEYS = frozenset({
     "reasoning", "store", "stream", "text", "tool_choice",
 })
 USAGE_KEYS = ("input_tokens", "output_tokens", "total_tokens")
+_WORD = re.compile(r"[a-z][a-z0-9_.]{0,39}")
 
 LIMITS = (
     "The request is translated: the vendor's additional_tools item becomes a public "
@@ -192,6 +194,25 @@ def public_body(captured: Mapping[str, Any], *, model: str | None = None) -> dic
     return body
 
 
+def _word(value: Any) -> str | None:
+    """A short identifier as the producer spelled it, or None; never free text."""
+    return value if isinstance(value, str) and _WORD.fullmatch(value) else None
+
+
+def _shape(response: Any) -> dict[str, Any]:
+    """What a response looked like, in field names and closed words only."""
+    if not isinstance(response, dict):
+        return {"type": type(response).__name__}
+    output = response.get("output")
+    return {
+        "keys": sorted(key for key in response if _word(key))[:32],
+        "status": _word(response.get("status")),
+        "error": response.get("error") is not None,
+        "output": [_word(item.get("type")) if isinstance(item, dict) else None
+                   for item in output][:32] if isinstance(output, list) else None,
+    }
+
+
 class Conversation:
     """One advisory turn with the endpoint; every later request extends the first."""
 
@@ -206,6 +227,8 @@ class Conversation:
         self.refusal: str | None = None
         # Once closed, nothing an outstanding request returns is used.
         self.closed = False
+        # The last response's field names, status and item types; never its text.
+        self.shape: dict[str, Any] | None = None
 
     def step(self, seen: tuple[str, ...]) -> str | Reply:
         try:
@@ -247,6 +270,17 @@ class Conversation:
         response = self._ask({**self.body, "input": [*self.body["input"], *self.items]})
         if self.closed:
             raise _refuse("advisory-answer-after-the-run-ended")
+        # Producer: whatever endpoint the operator names. None is pinned and none
+        # was ever called from here, so every check from here to the end of this
+        # method is an ASSUMPTION about a public Responses-style reply (a
+        # ``status`` of "completed", a null ``error``, an ``output`` list whose
+        # ``function_call`` items carry ``name``, ``arguments`` and ``call_id``
+        # and whose ``message`` items carry ``output_text`` parts), not a fact
+        # verified at a producer. They fail closed: a wrong assumption costs a refused advisory
+        # run with a name, never a result. ``shape`` keeps what the producer
+        # really sent, as field names only, so the assumption can be corrected
+        # against its bytes instead of loosened by guess.
+        self.shape = _shape(response)
         if not isinstance(response, dict) or response.get("error") is not None:
             raise _refuse("advisory-response-error")
         if response.get("status") != "completed":

@@ -366,6 +366,15 @@ async def test_what_the_loop_cannot_carry_ends_the_turn_with_a_name(
                                    monkeypatch, endpoint)
     # The turn ended after the read; the edit never reached the worker.
     assert seat.conversation.refusal == refusal
+    # What the endpoint really sent is kept as field names and closed words, so a
+    # refusal can be checked against the producer and not against this loop's guess.
+    shape = seat.conversation.shape
+    if isinstance(second, dict):
+        assert shape == {
+            "keys": sorted(second), "status": second.get("status"),
+            "error": second.get("error") is not None,
+            "output": ["message"] * len(second["output"])}
+        assert "overloaded" not in json.dumps(shape) and "I was cut" not in json.dumps(shape)
     assert observed == SHARED["read-then-end"][1] and seat.sent == [READ]
     assert seat.recording() == Turn(RECORDED["read-then-end"].calls, True, None)
 
@@ -418,6 +427,9 @@ def write_outcome(out: Path, seat, observed: dict | None) -> dict:
         "advisory": True, "meaning": "not acceptance and not evidence for a live attempt",
         "model": seat.conversation.body["model"], "observed": observed,
         "refusal": seat.conversation.refusal, "requests": seat.conversation.requests,
+        # Field names and closed words of the last response: what to hold this
+        # loop's assumptions about the endpoint against when it refuses.
+        "last_response_shape": seat.conversation.shape,
         "usage": seat.conversation.usage, "calls": len(recorded.calls),
         "completed": recorded.completed, "replied": recorded.reply is not None,
         "instruction": commitment(CHANNEL_INSTRUCTION), "turn": commitment(turn),
