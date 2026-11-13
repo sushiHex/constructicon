@@ -49,6 +49,7 @@ from constructicon.core.maintenance import (
     ChannelReplyRequest,
     ChannelReplyResult,
 )
+from constructicon.core.qualification_write import CallbackObservation
 from constructicon.substrate.executors.codex_protocol import MAX_TOOL_CALLS, TOOL_OUTPUT_BYTES
 from constructicon.substrate.executors.linux import LinuxLauncher
 from constructicon.substrate.gates.channel_reply import (
@@ -57,6 +58,7 @@ from constructicon.substrate.gates.channel_reply import (
     check_extraction,
 )
 from constructicon.substrate.git.capture import ContainedWriteWorkspaceProvider
+from constructicon.substrate.journal import maintenance_diagnostic
 from constructicon.substrate.journal.maintenance_diagnostic import _FAILURES
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.api import test_plan_manifest_application as application_tests
@@ -298,11 +300,30 @@ async def attempt(resources, launch, binding, tmp_path, monkeypatch, programs):
         assert response["result"]["success"] is True
         item, = response["result"]["contentItems"]
         seen.append(item["text"])
+    # The retained fingerprints are of exactly these bytes: each program as the
+    # worker received it, and each output the peer was handed. They are what
+    # tells a read and nothing more from a rewrite of the same bytes, which end
+    # in the same refusal. No text is retained beside them.
+    content = record["facts"]["content_digests"]
+    assert maintenance_diagnostic._content_digests(
+        record["facts"], CallbackObservation.model_validate(callbacks)) == content
+    assert [item["program"] for item in content["callbacks"]] == [
+        by_digest(kwargs["stdin"]) for kwargs in workers]
+    for index, text in enumerate(seen):
+        assert content["callbacks"][index]["output"] == by_digest(text.encode())
+    assert [item["output"] is None for item in content["callbacks"]] == [
+        category is None for category in callbacks["worker_results"]]
+    text = Path(authorization.attempt_record).read_text(encoding="utf-8")
+    assert not any(program.strip() and program in text for program in programs)
     return {
         "outcome": outcome, "node": node, "started": callbacks["admitted_started"],
         "completed": callbacks["admitted_completed"],
         "workers": callbacks["worker_results"], "seen": len(seen),
-    }, seen
+    }, seen, content
+
+
+def by_digest(raw: bytes) -> dict[str, object]:
+    return {"sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
 
 
 def retain(tier, name, observed, seen, **extra):
@@ -353,9 +374,9 @@ async def test_a_model_shaped_reply_ends_where_the_packet_says(
     await control.shutdown()
     assert type(launch) is PortableProcessLauncher
     programs, expected = SHARED[name]
-    observed, seen = await attempt(resources, launch, portable_binding, tmp_path, monkeypatch,
-                                   programs)
-    retain("portable", name, observed, seen)
+    observed, seen, content = await attempt(resources, launch, portable_binding, tmp_path,
+                                            monkeypatch, programs)
+    retain("portable", name, observed, seen, content_digests=content)
     assert observed == expected, observed
     if name == "read-then-end":
         # The peer was handed the whole target, as a model's first step expects.
@@ -394,11 +415,11 @@ async def test_a_model_shaped_reply_through_the_contained_worker_capture_and_gat
 ):
     resources, physical = await contained_world(launcher, tmp_path)
     programs, expected = CONTAINED[name]
-    observed, seen = await attempt(resources, physical, portable_binding, tmp_path, monkeypatch,
-                                   programs)
+    observed, seen, content = await attempt(resources, physical, portable_binding, tmp_path,
+                                            monkeypatch, programs)
     # Every recorded call really launched through the provisioned boundary.
     assert type(physical) is MaintenanceNativeLauncher and isinstance(physical, LinuxLauncher)
-    retain("contained", name, observed, seen,
+    retain("contained", name, observed, seen, content_digests=content,
            **({"worker_reports": seen[0].splitlines()} if name == "where-am-i" else {}))
     assert observed == expected, observed
     if name == "read-then-end":

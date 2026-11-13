@@ -193,6 +193,31 @@ def test_stored_acceptance_beside_a_failed_journal_is_a_named_contradiction(layo
     assert tree(root) == before
 
 
+def test_capture_unchanged_packet_carries_maximal_content_digests_within_the_cap(
+    layout, capsys,
+):
+    """The #407 case: executor success, callbacks complete, capture unchanged."""
+    from tests.substrate.journal.test_maintenance_diagnostic import _content
+
+    root, out = layout
+    failed_world(root)
+    path = root / "maintenance-attempt.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    content = _content()
+    record.update(dispatch="completed", callbacks={
+        "schema_version": 1, "admitted_started": 8, "admitted_completed": 8,
+        "worker_results": ["success"] * 8})
+    record["facts"].update(status="success", content_digests=content,
+                           answer_bytes=content["reply"]["bytes"])
+    path.write_text(json.dumps(record), encoding="utf-8")
+    code, packet, text = run_main(root, out, capsys)
+    assert code == 0 and packet["complete"] is True, packet
+    assert packet["refusal"]["cause"] == "capture-unchanged"
+    assert packet["diagnostic"]["attempt"]["content_digests"] == content
+    assert len(text.encode()) <= packet_module.MAX_PACKET_BYTES
+    assert "PRIVATE" not in text
+
+
 STORED = {"observation": "historical-acceptance-observed"}
 MISSING = {"observation": "missing"}
 CONFIRMED = {"observation": "recorded", "ok": True, "created_by_this_run": True}
