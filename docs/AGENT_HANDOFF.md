@@ -16,6 +16,20 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## The api import contracts cover every api module, and metering names its routes once
+
+Two import-linter contracts enumerate children of `constructicon.api` by hand, because import-linter has no "every child except" form. Both had gaps. `tests/test_layer_contracts.py` now derives the children from the package directory, so a new api module fails that test until a contract names it:
+- **"Only the MCP adapter imports mcp"** now names every api child except `mcp`. It was missing `_claude_read_fixture`, `_metered_native`, `claude_qualification`, `claude_write_qualification` and `maintenance_report`.
+- **"The MCP adapter never reaches the qualification entry"** now forbids every api child outside the control surface (`control`, `system` and what those two import: `_control_commands`, `_control_queries`, `_metered_native`, `cursor`, `detail`, `introspection`, `run_host`). It was missing `_claude_read_fixture`, `claude_qualification`, `claude_write_qualification`, `maintenance_report` and `plan_manifest_application`. A new module is forbidden by default; the control-surface list in the test is the one place that admits one.
+
+A reported gap that was wrong: `_metered_native` cannot join the second contract. `api.system` imports it and the adapter imports `api.system`, so listing it breaks the contract on a legitimate chain (checked with a scratch copy of the configuration).
+
+`api/_metered_native.py` now holds one table of admitted native routes, keyed by exact provider class: each row gives the route's handle class, its `MeteringSource` and how its fixed model is read. `api/system.py` asks `is_metered_route` and no longer names a vendor class. Refusals are unchanged except one that is stricter: a route's meter is installed only on that route's own handle class, where either vendor's handle was accepted before.
+
+What this does not do:
+- **No L0 protocol for metering.** A structural contract needs `metering_source` and a model attribute on both providers. Adding them edits `substrate/executors/codex.py` and `substrate/executors/claude_provider.py`, and each module's `ADAPTER_REVISION` is a digest of its own whole source (`codex.py`, the `claude-read-owned-adapter` module set). That half waits for a planned requalification.
+- **No source-derived revision moves.** The changed source files, `api/_metered_native.py` and `api/system.py`, are in no `inspect.getsource` or file-hash pin. They are part of the installed controller tree, as every file under `src/constructicon` is.
+
 ## The WRITE recovery proof's successor no longer runs on a 0.4 s lease
 
 `test_controller_death_retains_the_worker_guard_until_successor_recovery` failed once in `proof (foundation)` (#417). The retained journal events show the successor reclaiming its own run:

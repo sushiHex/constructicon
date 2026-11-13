@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any, TypeGuard, cast
 
 from constructicon.core.errors import ContractViolation
 from constructicon.core.metering import MeteringSource
@@ -23,6 +26,46 @@ from constructicon.substrate.executors.codex import CodexOperatorHandle, CodexOp
 from constructicon.substrate.journal.sqlite import SqliteJournal
 
 
+def _codex_model(provider: CodexOperatorProvider) -> str:
+    return provider.configured_model
+
+
+def _claude_model(provider: ClaudeOperatorProvider) -> str:
+    vendor = provider.launcher.claude
+    if vendor is None:
+        raise ContractViolation("the assembled Claude operator has no fixed model")
+    return vendor.model
+
+
+@dataclass(frozen=True)
+class _MeteredRoute:
+    """One admitted native route: its handle class, its source and its fixed model."""
+
+    handle: type
+    source: MeteringSource
+    model: Callable[[Any], str]
+
+
+_ROUTES: Mapping[type, _MeteredRoute] = MappingProxyType({
+    CodexOperatorProvider: _MeteredRoute(
+        CodexOperatorHandle, "codex_fresh_thread_total_v1", _codex_model),
+    ClaudeOperatorProvider: _MeteredRoute(
+        ClaudeOperatorHandle, "claude_main_loop_v1", _claude_model),
+})
+"""The admitted native routes, keyed by exact provider class.
+
+Lookup is by ``type(provider)``, so a subclass or a double is not admitted. A
+third route is one row here; nothing else in api names a vendor class.
+"""
+
+
+def is_metered_route(
+    resource: object,
+) -> TypeGuard[CodexOperatorProvider | ClaudeOperatorProvider]:
+    """Whether ``resource`` is exactly one of the admitted native providers."""
+    return type(resource) in _ROUTES
+
+
 @dataclass(frozen=True)
 class MeteredNativeOperator:
     """Only the exact native routes can write actual metering observations."""
@@ -39,28 +82,20 @@ class MeteredNativeOperator:
         return self.provider.unavailable_reasons
 
     async def acquire(self, context: LeaseContext) -> AcquiredCapability:
-        source: MeteringSource
-        if type(self.provider) is CodexOperatorProvider:
-            source = "codex_fresh_thread_total_v1"
-            model = self.provider.configured_model
-        elif type(self.provider) is ClaudeOperatorProvider:
-            source = "claude_main_loop_v1"
-            vendor = self.provider.launcher.claude
-            if vendor is None:
-                raise ContractViolation("the assembled Claude operator has no fixed model")
-            model = vendor.model
-        else:
+        route = _ROUTES.get(type(self.provider))
+        if route is None:
             raise ContractViolation("executor metering requires an exact supported native adapter")
         meter = self.journal.executor_meter(
-            context, revision=self.identity.revision, source=source, configured_model=model,
+            context, revision=self.identity.revision, source=route.source,
+            configured_model=route.model(self.provider),
         )
         acquisition = await self.provider.acquire(context)
         handle = acquisition.resource
-        if type(handle) is CodexOperatorHandle or type(handle) is ClaudeOperatorHandle:
-            handle.install_meter(meter)
-        else:
+        # The route's own handle class: one vendor's provider never meters another's handle.
+        if type(handle) is not route.handle:
             await self.provider.relinquish(acquisition)
             raise ContractViolation("executor metering requires an exact supported native handle")
+        cast("CodexOperatorHandle | ClaudeOperatorHandle", handle).install_meter(meter)
         return acquisition
 
     async def close(
