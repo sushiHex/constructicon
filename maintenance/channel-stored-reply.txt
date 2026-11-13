@@ -1,0 +1,18 @@
+Make every file change by calling the contained_python tool (the one tool whose name ends in contained_python): it runs Python with the repository root as its working directory, and the files it writes there are exactly what is captured as your result. Any note that your own sandbox is read-only does not apply to contained_python. Use relative paths. Read an existing file before editing it and write the edited file back; for a file you create, check first that it does not exist. You have at most 8 calls and see only what each call prints. A ninth call, a call that exits non-zero (as an uncaught exception or a failed assert does) or one that prints more than 32768 bytes ends the whole attempt with nothing captured, even after an earlier call wrote correctly, so catch exceptions and print them as errors, check by printing rather than asserting, and print only what you need. Use only the Python standard library; do not import this project, run its tests or run git: your files are committed for you. In the call that writes, re-read the file afterwards and print a one-line confirmation only if it holds your edit. Do not finish until the write has succeeded.
+
+Modify only src/constructicon/substrate/channels/in_process.py in place; keep it a regular nonexecutable UTF-8 file. In class InProcessChannel, add exactly one private method, placed immediately after _complete_message as the last method of the class, with exactly this signature and body and no docstring:
+
+    def _stored_reply(
+        self,
+        request: ChannelMessage,
+        request_id: Digest,
+    ) -> ChannelMessage | None:
+        if request.reply_port is None:
+            raise JournalDamaged(f"channel request {request_id} pins no reply port")
+        reply_id = reply_message_id(
+            request_id=request.message_id,
+            reply_port=request.reply_port,
+        )
+        return self._by_id.get(str(reply_id))
+
+In reply_for, replace the reply-port guard, the reply_id assignment and the stored lookup with `stored = self._stored_reply(request, request_id)`. In acknowledge, replace the same three statements with `reply = self._stored_reply(request, message_id)`. The separate method named reply (not reply_for) has similar statements and must stay unchanged. Change nothing else: keep every lock scope, validation order, missing-request handling, _complete_reply call, detach, return, import and other statement exactly as it is. Do not add, remove, rename or change the mode of any other file. The trusted harness compares the whole module's syntax tree with this one exact extraction.

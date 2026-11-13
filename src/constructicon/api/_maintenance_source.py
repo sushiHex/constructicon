@@ -6,6 +6,7 @@ import hashlib
 import os
 import shutil
 import stat
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,7 +14,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from constructicon.core.address import GitSha
 from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import parse_json_value
-from constructicon.core.maintenance import CHANNEL_TARGET_PATH, TARGET_PATH, VECTOR_PATH
+from constructicon.core.maintenance import (
+    CHANNEL_TARGET_PATH,
+    INSTRUCTION_BYTES,
+    TARGET_PATH,
+    VECTOR_PATH,
+    instruction_path,
+)
 from constructicon.substrate.executors.linux import ProcessLimits
 from constructicon.substrate.gates import channel_reply
 from constructicon.substrate.git.process import GitProcess
@@ -35,6 +42,33 @@ CONFIG = (
     b"\tsharedRepository = 0600\n"
 )
 MAX_BUNDLE_BYTES = 64 * 1024 * 1024
+# The oracle's helper as the class method the channel instruction must quote.
+CHANNEL_HELPER = "".join("    " + line if line.strip() else line
+                         for line in channel_reply.HELPER_SOURCE.splitlines(True))
+
+
+async def base_instruction(
+    show: Callable[..., Awaitable[bytes]], base_commit: str, purpose: str,
+) -> str:
+    """One fixed task's instruction, exactly as the pinned base commit holds it.
+
+    ``show`` runs Git in the private authority. The bytes are used as committed:
+    the request pins their digest and the writer refuses any other text.
+    """
+    path = instruction_path(purpose)
+    entry = await show("ls-tree", base_commit, "--", path)
+    if not entry.startswith(b"100644 blob ") or entry.count(b"\n") != 1:
+        raise ContractViolation("maintenance base lacks its task instruction")
+    raw = await show("show", f"{base_commit}:{path}")
+    try:
+        text = raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        text = ""
+    if not text or len(raw) > INSTRUCTION_BYTES:
+        raise ContractViolation("maintenance instruction is not bounded UTF-8 text")
+    if purpose == CHANNEL_PURPOSE and CHANNEL_HELPER not in text:
+        raise ContractViolation("maintenance instruction omits the installed helper")
+    return text
 
 
 class SourcePin(BaseModel):
@@ -170,6 +204,9 @@ async def prepare_source(
         sources[CHANNEL_TARGET_PATH] = hashlib.sha256(source).hexdigest()
     elif await git(root / "authority.git", "ls-tree", str(base_commit), "--", VECTOR_PATH):
         raise ContractViolation("maintenance base already has a vector contribution")
+    # Refused here, before any session exists, rather than at assembly.
+    await base_instruction(lambda *args: git(root / "authority.git", *args),
+                           str(base_commit), purpose)
     pin = SourcePin(bundle_sha256=bundle_sha256, base_commit=base_commit, target_ref=target_ref,
         config_sha256=hashlib.sha256((root / "authority.git/config").read_bytes()).hexdigest(),
         sources=sources)

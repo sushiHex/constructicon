@@ -7,7 +7,13 @@ acceptance additionally requires derive_maintenance_result's history proof.
 
 Two closed tasks share these mechanics through a fixed two-row table selected
 by the exact request type: the plan-manifest data file and the channel
-stored-reply extraction. Neither task's instruction or exam is caller-selected.
+stored-reply extraction.
+
+The exam is never caller-selected: it is installed code, pinned by the check
+set. The instruction is the reviewed base commit's file at a path fixed by the
+task's purpose. Its SHA-256 is in the request the owner approves, and the
+writer refuses any other bytes. Nothing at run time selects it (owner decision
+2026-11-12, docs/designs/INSTRUCTION_BINDING.md).
 """
 
 from __future__ import annotations
@@ -23,6 +29,7 @@ from typing import Any, cast
 from pydantic import BaseModel
 
 from constructicon.api._maintenance_identity import maintenance_application_revision
+from constructicon.api._maintenance_source import base_instruction
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId, ScopePath
 from constructicon.core.component import CapabilityRequirement, ComponentDef, PythonRef
@@ -64,66 +71,7 @@ from constructicon.substrate.git.process import GitProcess
 from constructicon.substrate.journal.sqlite import SqliteJournal
 
 GRAPH_NAME = "constructicon-plan-manifest-maintenance"
-# The vendor thread is told its own sandbox is read-only and runs from /tmp, and
-# the tool is described only as a contained worker. A live attempt (#407) made one
-# successful callback and left the capture unchanged; why is not retained. So every
-# WRITE instruction names the one tool, where it runs and that its writes are what
-# is captured. The worker runs from the bound repository root
-# (substrate/executors/linux.py, --chdir /workspace). Claude lists the same tool
-# under a namespaced name (claude_native.py), hence "whose name ends in".
-# The prefix also states the mediation guards the model cannot otherwise see, for
-# both executors: eight calls (codex_protocol.MAX_TOOL_CALLS, the Claude WRITE
-# recipe's call_limit), only stdout returned, and a non-zero worker or more than
-# TOOL_OUTPUT_BYTES of output refused with no reply to the model (codex.py
-# _await_callback, claude_read_worker.py), which fails the writer before capture.
-# The numbers are literals here; the test holds them equal to those constants.
-TOOL_PREFIX = (
-    "Make every file change by calling the contained_python tool (the one tool whose "
-    "name ends in contained_python): it runs Python with the repository root as its "
-    "working directory, and the files it writes there are exactly what is captured as "
-    "your result. Any note that your own sandbox is read-only does not apply to "
-    "contained_python. Use relative paths. Read an existing file before editing it and "
-    "write the edited file back; for a file you create, check first that it does not "
-    "exist. You have at most 8 calls and see only what each call prints. A ninth call, a "
-    "call that exits non-zero (as an uncaught exception or a failed assert does) or one "
-    "that prints more than 32768 bytes ends the whole attempt with nothing captured, even "
-    "after an earlier call wrote correctly, so catch exceptions and print them as errors, "
-    "check by printing rather than asserting, and print only what you need. Use only the "
-    "Python standard library; do not import this project, run its tests or run git: your "
-    "files are committed for you. In the call that writes, re-read the file "
-    "afterwards and print a one-line confirmation only if it holds your edit. Do not "
-    "finish until the write has succeeded.\n\n"
-)
-WRITE_INSTRUCTION = TOOL_PREFIX + (
-    "Create only tests/vectors/plan_manifest.json as a regular nonexecutable UTF-8 file. "
-    "It must be a JSON object with exactly version:1 and cases (1 to 64 items). "
-    "Each case has exactly kind:'plan_path' and path (at most 256 ASCII characters), "
-    "or kind:'entries' and blob_hex (canonical lowercase hexadecimal for at most "
-    "1024 bytes of ASCII text or invalid UTF-8). The entire file is at most 32768 "
-    "bytes. Propose regression cases for plan_path and entries in "
-    "scripts/regen_plan_manifest.py. Do not add expected answers, executable code, "
-    "or change any other file. The trusted harness supplies all expected answers."
-)
 CHANNEL_GRAPH_NAME = "constructicon-channel-stored-reply"
-# Fixed position and annotations: the trusted oracle's exact helper, spelled once.
-CHANNEL_INSTRUCTION = TOOL_PREFIX + (
-    f"Modify only {CHANNEL_TARGET_PATH} in place; keep it a regular nonexecutable "
-    "UTF-8 file. In class InProcessChannel, add exactly one private method, placed "
-    "immediately after _complete_message as the last method of the class, with exactly "
-    "this signature and body and no docstring:\n\n"
-    + "".join("    " + line if line.strip() else line
-              for line in channel_reply.HELPER_SOURCE.splitlines(True))
-    + "\nIn reply_for, replace the reply-port guard, the reply_id assignment and the "
-    "stored lookup with `stored = self._stored_reply(request, request_id)`. In "
-    "acknowledge, replace the same three statements with "
-    "`reply = self._stored_reply(request, message_id)`. The separate method named reply "
-    "(not reply_for) has similar statements and must stay unchanged. Change nothing "
-    "else: keep every "
-    "lock scope, validation order, missing-request handling, _complete_reply call, "
-    "detach, return, import and other statement exactly as it is. Do not add, remove, "
-    "rename or change the mode of any other file. The trusted harness compares the "
-    "whole module's syntax tree with this one exact extraction."
-)
 
 
 def _port(name: str, model: type[BaseModel]) -> Port:
@@ -136,6 +84,24 @@ REQUEST = _port("request", PlanManifestRequest)
 CHANNEL_REQUEST = _port("request", ChannelReplyRequest)
 CANDIDATE = _port("candidate", GitRef)
 EVALUATION = _port("evaluation", MergeEvaluation)
+_TEXT = {"type": "string"}
+# The base commit's instruction text, as a run input beside the request that
+# pins its digest (docs/designs/INSTRUCTION_BINDING.md).
+INSTRUCTION = Port(name="instruction", type_id="constructicon.maintenance/Instruction",
+                   schema_hash=str(digest("json-schema", 1, _TEXT)), json_schema=_TEXT)
+
+
+def pinned_instruction(
+    request: PlanManifestRequest | ChannelReplyRequest, instruction: object,
+) -> str:
+    """The instruction, only if it is the text the approved request pins."""
+    if request.instruction_sha256 is None:
+        raise ContractViolation("maintenance request carries no instruction digest")
+    if not isinstance(instruction, str) or hashlib.sha256(
+        instruction.encode("utf-8", errors="replace"),
+    ).hexdigest() != request.instruction_sha256:
+        raise ContractViolation("maintenance instruction differs from its pinned digest")
+    return instruction
 
 
 async def maintenance_writer(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -156,9 +122,10 @@ async def _write_candidate(
     initial = workspace.git_ref()
     if initial.repository != request.repository or initial.commit != request.base_commit:
         raise ContractViolation("maintenance workspace differs from the pinned base")
+    instruction = pinned_instruction(request, inputs.get("instruction"))
     executor = cast(Executor, ctx.capability("executor"))
     outcome = await executor.execute(
-        TaskSpec(instruction=task.instruction), workspace=workspace, grants=ctx.grants,
+        TaskSpec(instruction=instruction), workspace=workspace, grants=ctx.grants,
     )
     if not isinstance(outcome, ExecutorSuccess):
         raise ContractViolation("maintenance writer did not positively succeed")
@@ -221,7 +188,6 @@ class MaintenanceTask:
         type[MaintenanceAttemptAuthorization] | type[ChannelReplyAttemptAuthorization]
     )
     request_port: Port
-    instruction: str
     capture_message: str
     writer_name: str
     checker_name: str
@@ -238,7 +204,7 @@ class MaintenanceTask:
 PLAN_MANIFEST = MaintenanceTask(
     purpose="plan-manifest-maintenance", graph_name=GRAPH_NAME,
     request_model=PlanManifestRequest, authorization_model=MaintenanceAttemptAuthorization,
-    request_port=REQUEST, instruction=WRITE_INSTRUCTION,
+    request_port=REQUEST,
     capture_message="constructicon plan-manifest regression vectors",
     writer_name="constructicon.maintenance/plan-manifest-writer",
     checker_name="constructicon.maintenance/plan-manifest-checker",
@@ -248,7 +214,7 @@ PLAN_MANIFEST = MaintenanceTask(
 CHANNEL_STORED_REPLY = MaintenanceTask(
     purpose="channel-stored-reply", graph_name=CHANNEL_GRAPH_NAME,
     request_model=ChannelReplyRequest, authorization_model=ChannelReplyAttemptAuthorization,
-    request_port=CHANNEL_REQUEST, instruction=CHANNEL_INSTRUCTION,
+    request_port=CHANNEL_REQUEST,
     capture_message="constructicon channel stored-reply extraction",
     writer_name="constructicon.maintenance/channel-stored-reply-writer",
     checker_name="constructicon.maintenance/channel-stored-reply-checker",
@@ -279,7 +245,7 @@ def maintenance_definitions(
     revision = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     bundles = []
     for name, body, inputs, outputs, requirements in (
-        (task.writer_name, task.writer, (task.request_port,),
+        (task.writer_name, task.writer, (task.request_port, INSTRUCTION),
          (CANDIDATE,), (CapabilityRequirement(alias="workspace", kind="workspace.contained"),
                         CapabilityRequirement(alias="executor", kind="executor"))),
         (task.checker_name, task.checker,
@@ -314,7 +280,8 @@ def maintenance_graph(
         timeout_s=writer_grants.timeout_s,
     )
     return Graph(
-        name=task.graph_name, inputs=(task.request_port,), outputs=(CANDIDATE, EVALUATION),
+        name=task.graph_name, inputs=(task.request_port, INSTRUCTION),
+        outputs=(CANDIDATE, EVALUATION),
         nodes=(
             GraphNode(id="writer", body=Ref(component=writer.definition.name,
                 version=str(writer.definition.content_hash()),
@@ -336,6 +303,13 @@ class MaintenanceResources:
     gate: ContainedGateRunner
     request: PlanManifestRequest | ChannelReplyRequest
     target_source: bytes
+    instruction: str
+
+    @property
+    def inputs(self) -> dict[str, object]:
+        """The run's two inputs: the approved request and the text it pins."""
+        return {"request": self.request.model_dump(mode="json"),
+                "instruction": self.instruction}
 
 
 async def _git(authority: GitAuthority, *args: str) -> bytes:
@@ -526,8 +500,11 @@ async def require_maintenance_resources(resources: MaintenanceResources) -> None
         raise ContractViolation("maintenance resources differ from the concrete trusted assembly")
     if hashlib.sha256(resources.target_source).hexdigest() != request.target_sha256:
         raise ContractViolation("maintenance trusted target digest differs")
+    pinned_instruction(request, resources.instruction)
     actual_base = (await _git(authority, "rev-parse", "--verify", request.target_ref)).strip()
     source = await _git(authority, "show", f"{request.base_commit}:{task.target_path}")
+    instruction = await base_instruction(lambda *args: _git(authority, *args),
+                                         str(request.base_commit), task.purpose)
     # The extraction's precondition (no helper yet) is the oracle's, below.
     existing = (await _git(authority, "ls-tree", request.base_commit, "--", VECTOR_PATH)
                 if task is PLAN_MANIFEST else b"")
@@ -540,6 +517,8 @@ async def require_maintenance_resources(resources: MaintenanceResources) -> None
     )))
     if actual_base.decode("ascii") != request.base_commit or source != resources.target_source:
         raise ContractViolation("maintenance base or target source drifted")
+    if instruction != resources.instruction:
+        raise ContractViolation("maintenance instruction differs from its pinned digest")
     if existing or revision != request.check_set_hash or gate.checks != expected_checks:
         raise ContractViolation("maintenance vector already exists or gate recipe drifted")
 
@@ -648,9 +627,7 @@ async def derive_maintenance_result(
         or bindings[gate_key].revision != resources.gate.revision
     ):
         raise ContractViolation("maintenance manifest differs from the fixed admitted Graph")
-    if canonical_json(system.inputs_for_run(run_id)) != canonical_json(
-        {"request": request.model_dump(mode="json")}
-    ):
+    if canonical_json(system.inputs_for_run(run_id)) != canonical_json(resources.inputs):
         raise ContractViolation("maintenance run recorded another request")
     outputs = system.materialize_run(run_id)
     candidate = GitRef.model_validate(outputs["candidate"])

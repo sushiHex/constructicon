@@ -31,6 +31,7 @@ from constructicon.substrate.executors.linux import ProcessLimits
 from constructicon.substrate.git.process import GitProcess
 from tests.api import test_plan_manifest_application as application_tests
 from tests.executorworld import launch_identity
+from tests.maintenance_instructions import PLAN_PURPOSE, fast_import_entry
 from tests.substrate.test_codex_adapter import portable_binding as portable_binding
 
 concrete_application = application_tests.concrete_application
@@ -399,7 +400,7 @@ async def test_prepare_accepts_only_new_reviewed_bundle_and_affirms_consumer(tmp
     for name in source_module.SOURCE_FILES:
         blob = await source_module.git(repository, "show", "HEAD:" + name)
         commit += f"M 100644 inline {name}\ndata {len(blob)}\n".encode() + blob + b"\n"
-    commit += b"\ndone\n"
+    commit += fast_import_entry(PLAN_PURPOSE) + b"\ndone\n"
     await GitProcess(str(Path(shutil.which("git")).resolve()), ProcessLimits()).run(
         "fast-import", "--quiet", cwd=seed, stdin=commit,
     )

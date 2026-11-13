@@ -16,6 +16,31 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## The maintenance instruction is pinned as the target is
+
+The instruction is no longer installed code. It is the reviewed base commit's file at `maintenance/<purpose>.txt`, and its SHA-256 is `instruction_sha256` in the request the owner approves ([design](designs/INSTRUCTION_BINDING.md)). A wording edit now needs a commit, a new bundle and one approval. It no longer needs a controller install.
+
+**Owner decision, 2026-11-12.** This changes who selects the instruction, and the owner accepted that. The guarantee is now: the exam is never caller-selected; the instruction is the base commit's file at a path fixed by the task's purpose, named by digest in the approved request, and the writer refuses any other bytes. The frozen records `maintenance-channel-reply-task.md` and `maintenance-channel-reply-delivery.md` describe the earlier guarantee ("a fixed constant") and are left as written.
+
+What the code does:
+- **Assembly** reads the text from the pinned base in the private authority, next to the target, and puts its digest in the request (`api/maintenance_entry.py`, `assemble_maintenance`).
+- **The run has two inputs**, `request` and `instruction`. The writer refuses before dispatch unless the text's digest is the request's (`plan_manifest_application.pinned_instruction`). The journal now retains the instruction supplied to each run. That is input evidence, not dispatch evidence.
+- **The resources check** rereads the base blob and holds the assembled text to it, so text and digest that agree with each other but not with the base are refused.
+- **Preparation refuses first**: a base without the file, a file that is not a `100644` blob, text that is empty, over 8192 bytes or not UTF-8, and a channel instruction that does not quote the installed oracle's helper byte for byte (`_maintenance_source.base_instruction`).
+- **Two eras, one model.** A version-1 request has no digest and keeps its exact wire, so retained evidence still decodes. Assembly builds version 2, and a request without a digest is refused by name, so no version-1 authorization is admitted.
+- **One new diagnostic cause**, `writer-instruction`, for the writer's two refusals.
+
+Removed: `TOOL_PREFIX`, `WRITE_INSTRUCTION`, `CHANNEL_INSTRUCTION` and `MaintenanceTask.instruction`. The wording, including the guards described in the entry below, is in the two files. The instruction test reads them, and `tests/maintenance_instructions.py` is where tests get the text.
+
+What a later package must do:
+- **Show the digest.** The preview is the whole authorization, so approving its hash binds the digest. The operator's abbreviated review record selects its own keys and does not include it. A package built from the frozen channel-reply session document would let the owner approve an instruction they cannot see. The record and the posted scope must carry `instruction_sha256`.
+- **Accept the new cause.** Frozen packages enumerate the diagnostic's causes; `writer-instruction` is not in g11's list.
+
+What this does not establish:
+- **That a model heeds any instruction.** No real model has run either file.
+- **The Linux lanes locally.** The contained and real-binary cases ran only in CI.
+- **A narrower application revision.** The whole-file hashes stay. They stop covering the wording because the wording left the file, not because the pin got smaller.
+- **A specific cause at preflight.** Preparation and preflight still report a coarse stage; only the writer's refusals reach the diagnostic by name.
 ## The model has one seat, and a recorded turn replays through the real path
 
 `tests/model_seat.py` names the seam the maintenance worlds already had: the scripted native peer is the model's seat, and an occupant is only where its programs come from. `scripted_task_executor` takes the seat (it took a program or a `native=` peer), and the launcher it returns carries a `Realness` manifest that tests compare whole, where they used to check launcher types by hand. It holds the model occupant, the worker launcher's class, whether that class is the Linux boundary, the class of the world under the operator store, and the identity kind. The occupant is the seat's own label and the identity kind is a constant; the two classes and the boundary flag are read from the objects in use.

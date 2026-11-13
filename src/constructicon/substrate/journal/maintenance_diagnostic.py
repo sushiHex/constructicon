@@ -68,6 +68,8 @@ MAX_REPORT_BYTES = 8192
 _FAILURES = {
     "maintenance requires an asynchronous WRITE workspace": "writer-workspace",
     "maintenance workspace differs from the pinned base": "writer-base",
+    "maintenance request carries no instruction digest": "writer-instruction",
+    "maintenance instruction differs from its pinned digest": "writer-instruction",
     "maintenance writer did not positively succeed": "writer-not-positive",
     "maintenance capture differs from the requested candidate": "capture-mismatch",
     "maintenance captured candidate differs from capture return": "capture-return",

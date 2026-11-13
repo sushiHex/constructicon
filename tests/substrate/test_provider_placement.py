@@ -413,9 +413,10 @@ async def test_a_maintenance_write_turn_shows_the_model_its_instruction_and_one_
     what the model is shown; whether a model then writes is not measured here.
     """
 
-    from constructicon.api.plan_manifest_application import TOOL_PREFIX, task_for_purpose
+    from tests.maintenance_instructions import TOOL_PREFIX
+    from tests.maintenance_instructions import instruction as committed
 
-    instruction = task_for_purpose(purpose).instruction
+    instruction = committed(purpose)
     assert instruction.startswith(TOOL_PREFIX) and len(instruction) > len(TOOL_PREFIX)
     requests, callbacks = await inventory_turn(
         placement_image, tmp_path, write=True, prompt=instruction,

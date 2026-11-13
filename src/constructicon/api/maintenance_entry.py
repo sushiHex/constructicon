@@ -25,6 +25,7 @@ from constructicon.api._maintenance_identity import (
     maintenance_application_revision as maintenance_application_revision,
 )
 from constructicon.api._maintenance_source import (
+    base_instruction,
     git,
     inspect_source,
     pinned_purpose,
@@ -148,6 +149,8 @@ async def assemble_maintenance(
     await workspace.require_capture_headroom(pin.base_commit)
     source = await git(root / "authority.git", "show", f"{pin.base_commit}:{task.target_path}")
     inventory = await git(root / "authority.git", "ls-tree", "-r", "-z", pin.base_commit)
+    instruction = await base_instruction(lambda *args: git(root / "authority.git", *args),
+                                         str(pin.base_commit), task.purpose)
     before = workspace.revision
     checks = maintenance_checks if task is PLAN_MANIFEST else channel_reply_checks
     gate = await ContainedGateRunner.create(journal=journal, authority=authority,
@@ -156,8 +159,10 @@ async def assemble_maintenance(
             inventory, authority.environment.object_format))
     request = task.request_model(repository=authority.repository_id, target_ref=pin.target_ref,
         base_commit=pin.base_commit, target_sha256=hashlib.sha256(source).hexdigest(),
-        check_set_hash=gate.check_set_hash)
-    resources = MaintenanceResources(journal, authority, workspace, gate, request, source)
+        check_set_hash=gate.check_set_hash, schema_version=2,
+        instruction_sha256=hashlib.sha256(instruction.encode("utf-8")).hexdigest())
+    resources = MaintenanceResources(journal, authority, workspace, gate, request, source,
+                                     instruction)
     executor = (write_operator_provider(host, workspace) if authorization is None
                 else maintenance_operator_provider(host, workspace, authorization))
     descriptor = CapabilityDescriptor(capability_id=EXECUTOR, kind="executor", leased=True,
@@ -225,7 +230,7 @@ async def require_maintenance_attempt(
             raise ContractViolation("maintenance journal holds another run")
         retained_hash = journal.run_manifest_hash(record.run_id)
         raw = None if retained_hash is None else journal.load_manifest_json(retained_hash)
-        inputs = {"request": resources.request.model_dump(mode="json")}
+        inputs = resources.inputs
         if raw is None or (
             canonical_json(journal.run_inputs(record.run_id)) != canonical_json(inputs)
         ):
@@ -322,7 +327,7 @@ async def run_maintenance(
         submitted = await control.runs_start(actor, proposal=maintenance_graph(
             executor_id=authorization.capability_id, workspace_id=resources.workspace.provider_id,
             gate_id=resources.gate.provider_id, writer_grants=authorization.grants, task=task),
-            inputs={"request": resources.request.model_dump(mode="json")},
+            inputs=resources.inputs,
             idempotency_key=authorization.idempotency_key)
         if not isinstance(submitted, RunSubmission) or submitted.run_id != authorization.run_id:
             raise ContractViolation("maintenance exact run was not admitted")

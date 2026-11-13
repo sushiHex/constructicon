@@ -25,6 +25,7 @@ from constructicon.substrate.gates.contained import ContainedGateRunner
 from constructicon.substrate.gates.runner import CheckSpec
 from constructicon.substrate.git.authority import GitAuthority
 from tests.gitworld import push_to_main, seed_authority
+from tests.maintenance_instructions import PLAN_PURPOSE, WRITE_INSTRUCTION, pinned
 from tests.substrate.test_codex_adapter import portable_binding as portable_binding
 from tests.substrate.test_contained_workspace import context, stale_row
 from tests.substrate.test_linux_containment import launcher as launcher
@@ -330,7 +331,13 @@ def maintenance_commits(runner, target_source, vectors, *, extra=False):
     old = authority.resolve_ref(runner.target_ref)
     original = authority._run("ls-tree", old).stdout
     scripts = tree(f"100644 blob {blob(target_source)}\tregen_plan_manifest.py\n")
-    baseline_entries = original + f"040000 tree {scripts}\tscripts\n"
+    # A base commit holds the instruction its request pins.
+    from tests.maintenance_instructions import instruction_bytes
+
+    instruction = tree(f"100644 blob {blob(instruction_bytes(PLAN_PURPOSE))}"
+                       f"\t{PLAN_PURPOSE}.txt\n")
+    baseline_entries = (original + f"040000 tree {instruction}\tmaintenance\n"
+                        + f"040000 tree {scripts}\tscripts\n")
     baseline_tree = tree(baseline_entries)
     base = GitSha(authority._run("commit-tree", baseline_tree, "-p", old,
                                  input_text="maintenance base\n").stdout.strip())
@@ -844,7 +851,6 @@ class MaintenanceNativeWriter:
         return self.profile.grant_faults(grants)
 
     async def execute(self, task, *, workspace, grants):
-        from constructicon.api.plan_manifest_application import WRITE_INSTRUCTION
         from constructicon.core.executor import ExecutorSuccess
 
         assert task.instruction == WRITE_INSTRUCTION and task.context == ()
@@ -938,8 +944,10 @@ async def test_native_maintenance_operational_entry_captures_checks_closes_and_r
     request = PlanManifestRequest(
         repository=runner.authority.repository_id, target_ref=runner.target_ref,
         base_commit=base, target_sha256=pin, check_set_hash=gate.check_set_hash,
+        **pinned(PLAN_PURPOSE),
     )
-    resources = MaintenanceResources(journal, runner.authority, workspace, gate, request, SOURCE)
+    resources = MaintenanceResources(journal, runner.authority, workspace, gate, request, SOURCE,
+                                     WRITE_INSTRUCTION)
     executor = FakeExecutorProvider()
     executor.executor = MaintenanceNativeWriter(physical, vectors, extra=case == "extra")
     executor._identity = launch_identity(executor.executor.profile)
@@ -980,7 +988,8 @@ async def test_native_maintenance_operational_entry_captures_checks_closes_and_r
     manifest = parse_manifest_json(journal.load_manifest_json(journal.run_manifest_hash(run_id)))
     assert manifest.source_graph == graph
     assert manifest.source_graph_hash == authorization.source_graph_hash
-    assert journal.run_inputs(run_id) == {"request": request.model_dump(mode="json")}
+    assert journal.run_inputs(run_id) == resources.inputs == {
+        "request": request.model_dump(mode="json"), "instruction": WRITE_INSTRUCTION}
     assert {row.component for row in manifest.resolved_components} == {
         "constructicon.maintenance/plan-manifest-writer",
         "constructicon.maintenance/plan-manifest-checker",
@@ -1120,8 +1129,10 @@ async def test_native_full_tree_entry_mediates_real_worker_capture_and_consumer(
         provider_id="maintenance-workspace", posture=Posture.WRITE, launcher=physical,
     )
     request = PlanManifestRequest(repository=git.repository_id, target_ref=runner.target_ref,
-        base_commit=base, target_sha256=target_sha256, check_set_hash=gate.check_set_hash)
-    resources = MaintenanceResources(journal, git, workspace, gate, request, source)
+        base_commit=base, target_sha256=target_sha256, check_set_hash=gate.check_set_hash,
+        **pinned(PLAN_PURPOSE))
+    resources = MaintenanceResources(journal, git, workspace, gate, request, source,
+                                     WRITE_INSTRUCTION)
     await exercise_task_entry(resources, physical, portable_binding, tmp_path, monkeypatch,
                               change=change)
     # The peer and credential store are doubles. The callback payload, capture

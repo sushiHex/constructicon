@@ -42,6 +42,7 @@ from tests.api import test_plan_manifest_application as application_tests
 from tests.api.test_maintenance_entry import change_authorization_law
 from tests.api.test_maintenance_report import layout as layout
 from tests.executorworld import launch_identity
+from tests.maintenance_instructions import CHANNEL_PURPOSE, fast_import_entry
 from tests.substrate.test_channel_reply_oracle import BASE, CANDIDATE
 from tests.substrate.test_codex_adapter import bare_launcher
 from tests.substrate.test_codex_adapter import portable_binding as portable_binding
@@ -437,7 +438,7 @@ async def _bundle(tmp_path, target: bytes):
     commit = (b"commit refs/heads/reviewed\n"
               b"committer test <test@example.invalid> 1767225600 +0000\ndata 1\nx\n"
               + f"M 100644 inline {CHANNEL_TARGET_PATH}\ndata {len(target)}\n".encode()
-              + target + b"\n\ndone\n")
+              + target + b"\n" + fast_import_entry(CHANNEL_PURPOSE) + b"\ndone\n")
     await GitProcess(str(Path(shutil.which("git")).resolve()), ProcessLimits()).run(
         "fast-import", "--quiet", cwd=seed, stdin=commit)
     bundle = tmp_path / "reviewed.bundle"
