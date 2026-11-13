@@ -126,6 +126,7 @@ def handle(tmp_path, monkeypatch, result, *, cancel_result=False, later_validati
     owner.worker_active = None
     owner._program_digests, owner._output_digests = {}, {}
     owner._content_unrecordable = False
+    owner._turn = None  # a qualification attempt keeps no turn text
     entered = asyncio.Event()
     @asynccontextmanager
     async def use():

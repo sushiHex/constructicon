@@ -16,6 +16,36 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## A maintenance attempt keeps the model's programs and reply as text on the private host
+
+Owner decision, 2026-11-12: a live attempt retains the model's callback programs and final reply as bytes on the private host, never in public reports, so a failed attempt can be replayed offline (#407). The digests of #410 (its entry is further down) classify a failure; they cannot replay it.
+
+A Codex maintenance attempt now writes one file beside its attempt record, `<attempt record stem>.turn.json` (`substrate/executors/attempt_turn.py`). For the maintenance entry that is `maintenance-attempt.turn.json`. Its content is the replay record's own format, version 1 (`tests/model_seat.py`, `Turn`), in that record's canonical bytes:
+- `calls`, in order: each program handed to the worker launcher, and `seen`, the sha256 and length of the output the model was handed for it, or null when nothing came back. Only the last call can lack one.
+- `completed`: whether the turn's terminal record arrived.
+- `reply`: a completed turn's output text, or null. A turn that never completed has none.
+
+How it is kept:
+- **Step by step.** The file is placed at acquisition, then replaced when a program is handed to the launcher (before the worker runs), when its response has reached the model, and when the outcome settles. Each copy is written whole to a `.next` sibling (exclusive create, mode 0600, fsynced) and then put in place in one step: a hard link for the first, which refuses an existing file, and a rename for the rest. The path therefore only ever names a complete document, and a hard kill leaves the exact ordered prefix that was exchanged. That closes, for programs and for outputs the model saw, the limit the #410 entry records: digests held in memory until the outcome.
+- **Aligned with the digest block.** A program's text and its digest are retained in the same step (`codex.py`, `_program_stdin`), and `seen` is the block's output digest for that call. The file and the block name the same programs.
+- **Exact or stopped.** A write failure, an existing file, a program over `TOOL_PROGRAM_BYTES`, a ninth program, a reply over `RECORD_BYTES`, or a step out of order clears the record's `intact` flag. It then writes nothing more and truncates nothing, and the attempt's `content_digests` reads `"unrecordable"`. Retention never refuses a callback or changes an outcome.
+- **Private by structure.** The text goes to that file, and to its `.next` sibling while a copy is being placed, and nowhere else. The attempt record, the journal, the diagnostic and the report are unchanged: the evidence capture copies fixed names (`maintenance_evidence.FILES`), neither name is one of them, and the diagnostic reads only that copy. The hostile-reply cases assert that no other file in the private root holds a program or the reply.
+- **The seat's record, by test.** In every hostile and replay case the kept file parses as a `Turn`, re-serialises to its own bytes, and equals what the seat sent and saw, less any call that never reached the launcher. For the three recorded turns it equals the record the replay tests seat, and a replayed attempt keeps that same turn again.
+
+What it does not establish:
+- **One test that reads a kept file back and replays it.** The kept file and the replayed record are shown equal in separate runs. A single test with an attempt in one world and its replay in another hung locally and was not kept.
+- **Confidentiality beyond custody.** The text is model-authored and may quote anything the worker could read in the workspace, which is the reviewed repository tree. Nothing is redacted. Its protection is the private maintenance root and mode 0600, the same custody as the attempt record.
+- **Output text.** Only the digest and length of each output are kept. A replay regenerates the output and compares.
+- **Calls that never reached the launcher.** A ninth call, a repeated id or an unparseable call is refused before admission, and an admitted call can still be refused before launch (the deadline, the workspace check). None of these is in the file. A replay of a nine-call turn from this file sends eight.
+- **Partial text of an unfinished turn.** A message the model completed before a turn that never completed is fingerprinted by the digest block's `reply` and is not kept as text, because the replay record gives an unfinished turn no reply.
+- **A terminal record's status.** `completed` is true for any terminal record of the turn, including one whose status is not `completed`; a replay then sends an ordinary completion.
+- **A leftover sibling.** A death while a copy is being placed, or a failed removal, can leave the `.next` file. It holds the same text under the same custody, and nothing reads it.
+- **That retention is free.** Each step is a synchronous whole-file write with an fsync on the event loop, at most 8 programs, 8 outputs and one completion. The one at launch comes after the deadline check, so it cannot refuse a callback, and its duration is not taken from the worker's timeout. JSON escaping can expand a program up to six times; a worst-case turn rewrites tens of megabytes. None of these writes is in the pre-dispatch stretch (`_before_task_write`).
+- **Anything for Claude or for qualification attempts.** Only a Codex provider carrying a maintenance authorization writes the file.
+- **Retrieval.** No operator package copies this file off the guest. The next package must capture it privately, publish at most a digest commitment, and keep it out of every uploaded or posted artifact.
+- **An unchanged adapter.** `codex.py` changed again, so `ADAPTER_REVISION` changes. `attempt_turn.py` is a new module outside every source-derived revision, as `attempt_record.py` is for Codex. `attempt_record.py` (in Claude's adapter revision), `codex_protocol.py`, `core/attempt_content.py`, `core/qualification_write.py`, the maintenance application sources and the installed diagnostic are byte-identical to main.
+- **A reply bound of its own.** `RECORD_BYTES` is the inbound framer's ceiling (`codex_protocol.py`, `RecordStream.feed`), and the reply is one JSON string in one such record (`_message_text`, read by `observe_turn`), so no decoded reply reaches it. The check can only catch a caller's error.
+
 ## The maintenance instruction is pinned as the target is
 
 The instruction is no longer installed code. It is the reviewed base commit's file at `maintenance/<purpose>.txt`, and its SHA-256 is `instruction_sha256` in the request the owner approves ([design](designs/INSTRUCTION_BINDING.md)). A wording edit now needs a commit, a new bundle and one approval. It no longer needs a controller install.

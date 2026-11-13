@@ -106,6 +106,7 @@ from constructicon.core.workspace import (
 from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.executors import codex_protocol
 from constructicon.substrate.executors.attempt_record import AttemptRecord, Dispatch
+from constructicon.substrate.executors.attempt_turn import TurnRecord, turn_path
 from constructicon.substrate.executors.codex_protocol import (
     ACCOUNT_NOTICE_FAULT,
     ACCOUNT_UPDATED,
@@ -1572,6 +1573,11 @@ class CodexOperatorHandle:
         self._program_digests: dict[int, ContentDigest] = {}
         self._output_digests: dict[int, ContentDigest] = {}
         self._content_unrecordable = False
+        # Maintenance only: the turn's text, in a private file beside the record.
+        self._turn = (
+            TurnRecord.reserve(turn_path(attempt.path))
+            if attempt is not None and provider.maintenance is not None else None
+        )
 
     @property
     def profile(self) -> NativeOperatorExecutorProfileV3:
@@ -1805,6 +1811,9 @@ class CodexOperatorHandle:
             else "completed" if isinstance(outcome, ExecutorSuccess)
             else "possibly dispatched"
         )
+        observed = None if self._conversation is None else self._conversation.observation
+        if self._turn is not None and observed is not None and observed.terminal:
+            self._turn.complete(observed.output if isinstance(observed.output, str) else None)
         with suppress(OSError):
             # A record left at its intent already reads as possibly dispatched.
             self.attempt.complete(dispatch, self._attempt_facts(outcome))
@@ -1872,7 +1881,8 @@ class CodexOperatorHandle:
         callbacks = None if self.attempt is None else self.attempt.callbacks
         if callbacks is None:
             return "unrecorded"
-        if self._content_unrecordable:
+        # A block never stands beside a turn file that could not be kept exactly.
+        if self._content_unrecordable or (self._turn is not None and not self._turn.intact):
             return "unrecordable"
         output = None if outcome is None else outcome.output
         try:
@@ -1907,9 +1917,17 @@ class CodexOperatorHandle:
             self._content_unrecordable = True
 
     def _program_stdin(self, program: str) -> bytes:
-        """The exact stdin handed to the worker launcher, retained by digest."""
+        """The exact stdin handed to the worker launcher, retained by digest.
+
+        A maintenance turn keeps the text too, at this same step, so its file
+        and the digest block name the same programs. The write is synchronous
+        and comes after the deadline check: it can never refuse a callback, and
+        its duration is not taken from the worker's timeout.
+        """
         stdin = program.encode("utf-8")
         self._retain_content(self._program_digests, stdin)
+        if self._turn is not None:
+            self._turn.program(program)
         return stdin
 
     def _validated_workspace(
@@ -2196,6 +2214,9 @@ class CodexOperatorHandle:
         previous = self.attempt.callbacks
         from constructicon.core.qualification_write import CallbackObservation
 
+        if self._turn is not None and completed > previous.admitted_completed:
+            # The response reached the model: its text is that worker's stdout.
+            self._turn.seen(completed - 1, self._output_digests.get(completed - 1))
         self.attempt.observe_callbacks(CallbackObservation(
             schema_version=1,
             admitted_started=started, admitted_completed=completed,

@@ -34,6 +34,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
 from dataclasses import fields, replace
@@ -54,6 +55,7 @@ from constructicon.core.maintenance import (
     ChannelReplyResult,
 )
 from constructicon.core.qualification_write import CallbackObservation
+from constructicon.substrate.executors.attempt_turn import turn_path
 from constructicon.substrate.executors.codex_protocol import MAX_TOOL_CALLS, TOOL_OUTPUT_BYTES
 from constructicon.substrate.executors.linux import LinuxLauncher
 from constructicon.substrate.gates.channel_reply import (
@@ -62,7 +64,7 @@ from constructicon.substrate.gates.channel_reply import (
     check_extraction,
 )
 from constructicon.substrate.git.capture import ContainedWriteWorkspaceProvider
-from constructicon.substrate.journal import maintenance_diagnostic
+from constructicon.substrate.journal import maintenance_diagnostic, maintenance_evidence
 from constructicon.substrate.journal.maintenance_diagnostic import _FAILURES
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.api import test_plan_manifest_application as application_tests
@@ -381,6 +383,7 @@ async def attempt(resources, launch, binding, tmp_path, monkeypatch, seat: Seate
         category is None for category in callbacks["worker_results"]]
     text = Path(authorization.attempt_record).read_text(encoding="utf-8")
     assert not any(program.strip() and program in text for program in seat.sent)
+    seat.kept = kept_turn(Path(authorization.attempt_record), seat, len(workers), content)
     return {
         "outcome": outcome, "node": node, "started": callbacks["admitted_started"],
         "completed": callbacks["admitted_completed"],
@@ -390,6 +393,41 @@ async def attempt(resources, launch, binding, tmp_path, monkeypatch, seat: Seate
 
 def by_digest(raw: bytes) -> dict[str, object]:
     return {"sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+
+
+def kept_turn(attempt_record: Path, seat: Seated, launched: int, content) -> Turn:
+    """The turn the attempt kept on disk: the seat's own record, in one private file.
+
+    It is what the peer sent and saw, less any call that never reached the
+    launcher, in the record's canonical bytes. Its text is in that file and in
+    no other file of the private root.
+    """
+    path = turn_path(attempt_record)
+    raw = path.read_bytes()
+    turn = Turn.from_json(raw.decode())
+    assert turn.to_json().encode() == raw
+    said = seat.recording()
+    assert turn == Turn(said.calls[:launched], said.completed, said.reply)
+    # The digest block indexes the file: the same programs, by fingerprint.
+    assert [by_digest(call.program.encode()) for call in turn.calls] == [
+        item["program"] for item in content["callbacks"]]
+    if turn.completed:
+        assert content["reply"] == (
+            None if turn.reply is None else by_digest(turn.reply.encode()))
+    # Structural: the capture's fixed names cannot carry it, nothing was left
+    # beside it, and no other file in the private root holds its text.
+    assert path.parent == attempt_record.parent
+    assert not {path.name, path.name + ".next"} & set(maintenance_evidence.FILES)
+    assert not path.with_name(path.name + ".next").exists()
+    if os.name == "posix":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    texts = [text.encode() for text in (*(call.program for call in turn.calls), turn.reply)
+             if text and text.strip()]
+    for other in path.parent.iterdir():
+        if other.is_file() and other != path:
+            held = other.read_bytes()
+            assert not any(text in held for text in texts), other.name
+    return turn
 
 
 def retain(tier, name, observed, seat, **extra):
@@ -450,6 +488,10 @@ async def test_a_model_shaped_reply_ends_where_the_packet_says(
     assert observed == expected, observed
     if name in RECORDED:
         assert seat.recording() == RECORDED[name]
+        # The file the adapter kept is that record, byte for byte (``kept_turn``
+        # checked its canonical form). It is therefore exactly what
+        # ``test_a_recorded_turn_replays_to_the_end_it_was_recorded_at`` replays.
+        assert seat.kept == RECORDED[name]
     if name == "read-then-end":
         # The peer was handed the whole target, as a model's first step expects.
         assert seat.seen[0].replace("\r\n", "\n") == BASE.decode() + "\n"
@@ -494,6 +536,8 @@ async def test_a_recorded_turn_replays_to_the_end_it_was_recorded_at(
     seat.settle()
     assert seat.recording() == turn and realness == replace(PORTABLE, model="replay")
     assert observed == SHARED[name][1], observed
+    # A replayed attempt keeps the turn it replayed: the file reproduces itself.
+    assert seat.kept == turn
 
 
 @CHANNEL
