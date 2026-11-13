@@ -87,14 +87,6 @@ call or spending.
 CHANNEL_DIAGNOSTIC_SHA256=f202f8b9ea48baedd1ca66f8bdd9e9ed4258dbfe066801f9a35fed1a620ea2ba
 ```
 
-  The diagnostic later gained the attempt's `content_digests` projection (#407):
-  digests and lengths of each callback program, its output and the reply. That
-  pin stays as written, and the bytes with the projection are pinned beside it:
-
-```text
-CONTENT_DIGESTS_DIAGNOSTIC_SHA256=28a2c47d0b3199131d626181dd8da6b1a467efe2c432428b6c40fbab88781a77
-```
-
 - **Result packet.** `api/maintenance_report.py` (#394) reads the run's retained
   graph and selects the matching row of the diagnostic's table. That row
   provides the request model, the checker and lease scopes, and the result

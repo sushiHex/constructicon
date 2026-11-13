@@ -188,9 +188,12 @@ def test_historical_helper_pins_and_successor_source_are_distinct():
                 "f202f8b9ea48baedd1ca66f8bdd9e9ed4258dbfe066801f9a35fed1a620ea2ba"
             )
             # The attempt's content digests (#407) are a later projection; the
-            # same record pins those bytes beside the channel pin, unchanged.
+            # own delivery record pins those bytes; the channel pin is unchanged.
+            record = (ROOT / "docs/plans/handoffs/maintenance-attempt-content-digests.md"
+                      ).read_text(encoding="utf-8")
+            assert "CONTENT_DIGESTS_DIAGNOSTIC_SHA256" not in channel
             digests = re.search(r"^CONTENT_DIGESTS_DIAGNOSTIC_SHA256=([0-9a-f]{64})$",
-                                channel, re.M)
+                                record, re.M)
             assert digests is not None and digests.group(1) != newest.group(1)
             current = digests
         assert hashlib.sha256(raw).hexdigest() == current.group(1)
