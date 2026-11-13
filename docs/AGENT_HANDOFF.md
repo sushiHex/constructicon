@@ -16,6 +16,36 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## A real model can be asked before a window, as advice only
+
+`tests/advisory_replay.py` adds one occupant to the model seat, `advisory`: a real model behind a public API, asked for each next call of the channel stored-reply turn. The owner approved this probe on 2026-11-12. It is **never acceptance** and never evidence for #407's live criterion. It uses no vendor binary, no subscription store, no window and no Constructicon authority. It does run the model's programs with the operator's own rights; see Risk.
+
+How it works:
+- **The request** is the placement lane's capture of the first request a real maintenance WRITE turn sends. `first_request` admits it only if it holds nothing but text messages and one offer of exactly the adapter's own tool, and its last message is the committed instruction alone. A key or an item the module would drop is refused, so what is sent is what was captured, less the plumbing listed below. The placement test now asserts, in CI, that the real capture is admitted and that every message is sent unchanged.
+- **The loop** is the seat. A function step may now return a `Reply`, which ends the turn with that message. The advisory occupant's step sends the conversation so far to the endpoint and returns the model's next program.
+- **No ceiling is restated.** The adapter decides the ninth call, a non-zero exit and an over-bound output, as it does for the hostile cases. A test shows the ninth call is sent and refused by the adapter. The advisory tests do not repeat the non-zero and over-bound cases.
+- **What the loop itself refuses**, each with a closed name and a turn that ends there: a tool name that is not exactly `contained_python`, arguments that are not one `program` string, two calls in one response, a response that is failed or not completed, a redirect, a request over its elapsed deadline, and an answer that arrives after the adapter closed the peer. A refusal means the loop ended the turn, not the model.
+- **The first request is made as the seat is built**, before any run exists. Each later one is made off the event loop, so the run's heartbeat keeps its lease while the endpoint thinks (#417 names that stretch).
+- **Network is off by default.** `network_transport` refuses by name without `CONSTRUCTICON_ADVISORY_NETWORK=1`, a key and an https endpoint. Redirects are refused, not followed. The key is removed from the environment before any worker starts.
+- **Outputs.** `outcome.json` holds the outcome, counts, integer token counts and commitments, and nothing a model or provider wrote. `turn.json` is the turn in the seat's record form, so a real reply replays offline; it holds the model's programs and is private.
+
+The command and the warning are in [CONTRIBUTING.md](CONTRIBUTING.md) under "Ask a real model, advisory only".
+
+What it cannot make identical to a live turn (`LIMITS` in the module):
+- **The request is translated.** The vendor's `additional_tools` item becomes a public function tool without its `functions` namespace. Item ids, client metadata, the prompt cache key and the reasoning context are dropped.
+- **The capture is the placement lane's.** That lane swaps the provider and the catalog path; vendor text under subscription authentication may differ.
+- **Authentication is an API key.** The endpoint may serve a different build under the same model name.
+- **The reply is not streamed**, and the vendor binary's handling of the stream, an unknown tool or malformed arguments is not exercised. The loop ends the turn with a closed name for those.
+- **The worker is the portable one.** There is no `/workspace` and no isolation, the interpreter's packages are importable, and the base holds the target and one other file.
+
+**Risk.** The model's programs run uncontained on the machine that runs the test, with that user's rights, and what they print is sent to the endpoint. The portable worker collects a program's whole output before any bound is checked and does not reap what a program starts. Run it in WSL2 or a disposable virtual machine, and not with `--showlocals`, which would print the key on a failure.
+
+What the loop does not own: a spending budget. The only bounds on cost are eight admitted calls, one elapsed deadline per request and the turn's own deadline.
+
+What this does not establish:
+- **That any endpoint accepts the body.** Nothing here was sent to a provider. Whether a public endpoint takes this model name, `reasoning.encrypted_content`, or reasoning items echoed back with `store: false` is unverified.
+- **Anything about a live attempt.** A model that writes here may not write there, and the reverse.
+
 ## A maintenance attempt keeps the model's programs and reply as text on the private host
 
 Owner decision, 2026-11-12: a live attempt retains the model's callback programs and final reply as bytes on the private host, never in public reports, so a failed attempt can be replayed offline (#407). The digests of #410 (its entry is further down) classify a failure; they cannot replay it.

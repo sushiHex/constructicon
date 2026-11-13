@@ -9,11 +9,18 @@ native peer, and an occupant is only where its programs come from.
   the outputs seen so far, as a model's next call is.
 - ``replay``: a recorded ``Turn``. Each output is compared with the record before
   the next program is sent; a divergence ends the turn, and ``settle`` raises.
+- ``advisory``: a real model behind a public API (``tests/advisory_replay.py``),
+  asked for each next call. It is never the vendor binary and never evidence;
+  it is seated only when a person turns the network on.
 - ``live``: a real model behind the vendor binary. It sits only on the private
   host inside an owner-approved window, so it is named here and never seated.
 
-No occupant here is a vendor binary or a model. ``Realness`` says what stood in
-every other place of a world, and tests assert it whole.
+A function step may also return a ``Reply``: the model ended its turn with that
+message instead of sending another call.
+
+No occupant in the repository's own test runs is a vendor binary or a model.
+``Realness`` says what stood in every other place of a world, and tests assert it
+whole.
 """
 
 from __future__ import annotations
@@ -27,9 +34,18 @@ from typing import Literal
 from tests.substrate.test_codex_protocol import completed
 from tests.substrate.test_codex_write import WriteNative
 
-Occupant = Literal["ideal", "hostile", "replay", "live"]
-Step = str | Callable[[tuple[str, ...]], str]
+Occupant = Literal["ideal", "hostile", "replay", "advisory", "live"]
 RECORD_VERSION = 1
+
+
+@dataclass(frozen=True)
+class Reply:
+    """A step's answer that is not a call: the turn ends with this message, or none."""
+
+    text: str | None
+
+
+Step = str | Callable[[tuple[str, ...]], "str | Reply"]
 
 
 class ReplayDiverged(AssertionError):
@@ -120,14 +136,36 @@ class Seated(WriteNative):
         self.expected = expected
         self.seen: list[str] = []
         self.divergence: str | None = None
-        super().__init__(self._program(0) if self.steps else "never sent")
-        if not self.steps:
+        first = self._program(0)
+        super().__init__("never sent" if first is None else first)
+        if first is None:
             self.callbacks.clear()
-            self.records[:] = [completed(answer=reply)]
+            self.records[:] = [completed(answer=self.reply)]
 
-    def _program(self, index: int) -> str:
+    def _program(self, index: int) -> str | None:
+        """The next call's program, or None once the occupant has nothing more to send."""
+        if index >= len(self.steps):
+            return None
         step = self.steps[index]
-        return step if isinstance(step, str) else step(tuple(self.seen))
+        program = step if isinstance(step, str) else step(tuple(self.seen))
+        if isinstance(program, Reply):
+            self.reply = program.text
+            return None
+        return program
+
+    def _continue(self, index: int) -> None:
+        """Answer the output of call ``index``: the next call, or the turn's completion."""
+        self._send(index, self._program(index + 1))
+
+    def _send(self, index: int, program: str | None) -> None:
+        if program is not None:
+            self.callbacks.append(self._callback_for(
+                f"server-{index + 2}", f"call-{index + 2}", program))
+            self._emit(self.callbacks[-1])
+            return
+        if self.expected is not None and not self.expected.completed:
+            self.divergence = "every recorded call was answered, yet the turn never completed"
+        self._emit(completed(answer=self.reply))
 
     def _respond(self, raw: bytes) -> None:
         request = json.loads(raw)
@@ -147,14 +185,8 @@ class Seated(WriteNative):
             self.divergence = (f"call {index + 1}: recorded {recorded}, "
                                f"produced {Seen.of(item['text'])}")
             self._emit(completed(answer=self.reply))
-        elif self.callback_index < len(self.steps):
-            self.callbacks.append(self._callback_for(
-                f"server-{index + 2}", f"call-{index + 2}", self._program(index + 1)))
-            self._emit(self.callbacks[-1])
         else:
-            if self.expected is not None and not self.expected.completed:
-                self.divergence = "every recorded call was answered, yet the turn never completed"
-            self._emit(completed(answer=self.reply))
+            self._continue(index)
 
     def _wire(self, method: str) -> list[dict]:
         """What this peer actually emitted, read back from its own bytes."""

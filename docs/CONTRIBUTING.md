@@ -201,6 +201,50 @@ own exam, installs a candidate or grants a new live attempt. Inspect the
 These focused commands are local development checks; code changes still require
 the full CI gate and risk-appropriate PR review under the delivery policy.
 
+### Ask a real model, advisory only
+
+Every rehearsal above feeds a scripted program, so none of them says whether a
+model acts on the instruction. The advisory replay does, cheaply and with no
+authority: it sends the first request a real maintenance turn was captured
+sending to an API endpoint you name, and runs each call the model makes through
+the same adapter, worker, capture and gate as the scripted cases
+([`tests/advisory_replay.py`](../tests/advisory_replay.py)).
+
+**It is never acceptance.** It uses no vendor binary, no subscription store and
+no operator window. Its result is not evidence for any live criterion, and the
+module's `LIMITS` lists what differs from a live turn.
+
+**Risk: the model's programs run uncontained on your machine.** The portable
+worker is a plain subprocess with your rights and no containment, and
+everything a program prints is sent to the endpoint. It collects a program's
+whole output before any bound is checked and does not reap what a program
+starts. Run it inside WSL2 or a disposable virtual machine, never on a machine
+that holds anything you would not hand to the model's provider. Do not add
+`--showlocals`: a failure would print the key. Nothing bounds what the run
+spends beyond eight admitted calls and a deadline per request.
+
+It is off unless you turn it on. The request file is the
+`codex-placement-*.json` evidence whose `model_visible.purpose` is
+`channel-stored-reply`, from the `proof (lifecycle)` artifact of a containment
+run on the commit you are testing:
+
+```bash
+CONSTRUCTICON_ADVISORY_NETWORK=1 \
+CONSTRUCTICON_ADVISORY_ENDPOINT=https://<provider>/v1/responses \
+CONSTRUCTICON_ADVISORY_API_KEY=<key> \
+CONSTRUCTICON_ADVISORY_REQUEST=<path to the capture> \
+PYTHONIOENCODING=utf-8 uv run --no-active python -m pytest \
+  tests/api/test_advisory_replay.py -k real_model -s </dev/null
+```
+
+`CONSTRUCTICON_ADVISORY_MODEL` overrides the captured model name and
+`CONSTRUCTICON_ADVISORY_OUTPUT` names the directory for the two files it writes.
+`outcome.json` holds the outcome, counts and commitments, and nothing the model
+wrote. `turn.json` holds the model's programs in the model seat's record form
+([`tests/model_seat.py`](../tests/model_seat.py)), so the turn replays offline;
+treat it as private. Without the first variable the case is skipped; with it
+and no key or no https endpoint it refuses by name before sending anything.
+
 ## Finding and tracking work
 
 Use [GitHub Issues](https://github.com/sushiHex/constructicon/issues) for current
