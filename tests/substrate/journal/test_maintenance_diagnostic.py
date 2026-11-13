@@ -578,6 +578,9 @@ def _content_record(source: Path, content: object, *, callbacks: bool = True) ->
         record["callbacks"] = {"schema_version": 1, "admitted_started": 8,
                                "admitted_completed": 8, "worker_results": ["success"] * 8}
     record["facts"]["content_digests"] = content
+    # The producer states the accepted answer's length beside its digest.
+    reply = content.get("reply") if isinstance(content, dict) else None
+    record["facts"]["answer_bytes"] = reply.get("bytes") if isinstance(reply, dict) else None
     path.write_text(json.dumps(record), encoding="utf-8")
     return path
 
@@ -627,6 +630,17 @@ def test_named_content_absence_passes_through_and_is_never_a_block(
     assert isinstance(attempt, dict) and attempt["content_digests"] == named
 
 
+def test_a_successful_outcome_without_an_answer_has_no_reply(tmp_path: Path) -> None:
+    content = _content()
+    content["reply"] = None
+    _content_record(tmp_path / "source", content)
+    report = diagnostic.analyze_snapshot(_snapshot(tmp_path / "source", tmp_path / "capture"),
+                                         RUN, AUTH)
+    assert report["complete"] is True, report
+    attempt = report["attempt"]
+    assert isinstance(attempt, dict) and attempt["content_digests"] == content
+
+
 def _damaged(name: str) -> tuple[object, bool]:
     content = _content()
     callbacks = content["callbacks"]
@@ -663,22 +677,36 @@ def _damaged(name: str) -> tuple[object, bool]:
         callbacks[0]["program"]["bytes"] = 128 * 1024 + 1
     elif name == "missing-reply":
         del content["reply"]
+    elif name == "output-without-program":
+        callbacks[0]["program"] = None
     return content, True
 
 
 @pytest.mark.parametrize("name", [
     "text", "no-callbacks", "short", "ninth", "output-without-result", "extra", "schema",
     "schema-bool", "upper", "short-sha", "bytes-bool", "bytes-over", "negative",
-    "program-over", "missing-reply",
+    "program-over", "missing-reply", "output-without-program",
+    "answer-length", "answer-absent", "answer-bool", "reply-absent",
 ])
 def test_malformed_content_digests_refuse_the_attempt_closed(tmp_path: Path, name: str) -> None:
     content, callbacks = _damaged(name)
+    if name == "reply-absent":
+        assert isinstance(content, dict)
+        content["reply"] = None
     path = _content_record(tmp_path / "source", content, callbacks=callbacks)
+    record = json.loads(path.read_text(encoding="utf-8"))
     if name == "output-without-result":
-        record = json.loads(path.read_text(encoding="utf-8"))
         record["dispatch"], record["facts"]["status"] = "possibly dispatched", "failure"
         record["callbacks"].update(admitted_completed=7, worker_results=["success"] * 7 + [None])
-        path.write_text(json.dumps(record), encoding="utf-8")
+    elif name == "answer-length":
+        record["facts"]["answer_bytes"] -= 1
+    elif name == "answer-absent":
+        record["facts"]["answer_bytes"] = None
+    elif name == "answer-bool":
+        record["facts"]["answer_bytes"] = True
+    elif name == "reply-absent":
+        record["facts"]["answer_bytes"] = 4
+    path.write_text(json.dumps(record), encoding="utf-8")
     report = diagnostic.analyze_snapshot(_snapshot(tmp_path / "source", tmp_path / "capture"),
                                          RUN, AUTH)
     assert report == {"schema_version": 1, "complete": False, "stage": "attempt",

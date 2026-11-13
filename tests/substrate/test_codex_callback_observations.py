@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+from constructicon.core import attempt_content as content_contracts
 from constructicon.core import qualification_write as contracts
 from constructicon.core.errors import ContractViolation
 from constructicon.core.executor import ExecutorError, ExecutorFailure, ExecutorSuccess, TaskSpec
@@ -328,19 +329,25 @@ def by_digest(raw):
 
 
 def test_content_bounds_restate_their_producers_and_bind_exactly():
-    assert contracts.CALLBACK_PROGRAM_BYTES == TOOL_PROGRAM_BYTES
-    assert ProcessLimits().stdout_bytes == contracts.CONTENT_DIGEST_BYTES
+    assert content_contracts.CALLBACK_PROGRAM_BYTES == TOOL_PROGRAM_BYTES
+    assert ProcessLimits().stdout_bytes == content_contracts.CONTENT_DIGEST_BYTES
     sha = "0" * 64
     def digests(count, *, program=1, size=1):
         return {"schema_version": 1, "reply": {"sha256": sha, "bytes": size}, "callbacks": [
             {"program": {"sha256": sha, "bytes": program}, "output": None}] * count}
     accepted = digests(MAX_TOOL_CALLS, program=TOOL_PROGRAM_BYTES,
-                       size=contracts.CONTENT_DIGEST_BYTES)
-    assert contracts.ContentDigests.model_validate(accepted).model_dump(mode="json") == accepted
+                       size=content_contracts.CONTENT_DIGEST_BYTES)
+    model = content_contracts.ContentDigests.model_validate(accepted)
+    assert model.model_dump(mode="json") == accepted
+    # A worker that never received a program cannot have produced output.
+    orphan = digests(1)
+    orphan["callbacks"] = [{"program": None, "output": {"sha256": sha, "bytes": 1}}]
+    with pytest.raises(ValidationError):
+        content_contracts.ContentDigests.model_validate(orphan)
     for refused in (digests(MAX_TOOL_CALLS + 1), digests(1, program=TOOL_PROGRAM_BYTES + 1),
-                    digests(1, size=contracts.CONTENT_DIGEST_BYTES + 1)):
+                    digests(1, size=content_contracts.CONTENT_DIGEST_BYTES + 1)):
         with pytest.raises(ValidationError):
-            contracts.ContentDigests.model_validate(refused)
+            content_contracts.ContentDigests.model_validate(refused)
 
 
 @pytest.mark.parametrize("result", [

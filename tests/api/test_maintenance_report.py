@@ -207,7 +207,8 @@ def test_capture_unchanged_packet_carries_maximal_content_digests_within_the_cap
     record.update(dispatch="completed", callbacks={
         "schema_version": 1, "admitted_started": 8, "admitted_completed": 8,
         "worker_results": ["success"] * 8})
-    record["facts"].update(status="success", content_digests=content)
+    record["facts"].update(status="success", content_digests=content,
+                           answer_bytes=content["reply"]["bytes"])
     path.write_text(json.dumps(record), encoding="utf-8")
     code, packet, text = run_main(root, out, capsys)
     assert code == 0 and packet["complete"] is True, packet

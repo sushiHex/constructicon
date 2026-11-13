@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Never
 
 from constructicon.core.address import ExecutionPath, RunId, ScopePath
+from constructicon.core.attempt_content import ContentDigests
 from constructicon.core.effect import MergeSubject
 from constructicon.core.envelope import GitRef
 from constructicon.core.identity import actor_id_is_canonical, parse_json_value
@@ -28,7 +29,7 @@ from constructicon.core.maintenance import (
     PlanManifestRequest,
     PlanManifestResult,
 )
-from constructicon.core.qualification_write import CallbackObservation, ContentDigests
+from constructicon.core.qualification_write import CallbackObservation
 from constructicon.core.workspace import acquisition_id_for, lease_id_for
 from constructicon.substrate.journal._sqlite_attestations import attestation_for_id
 from constructicon.substrate.journal._sqlite_base import (
@@ -181,8 +182,7 @@ def _attempt(path: Path, run_id: RunId, authorization_id: str,
         _require(callbacks is None or not (dispatch == "completed" or status == "success")
                  or callbacks.responses_complete)
         report.update(dispatch=dispatch, executor_status=status, failure_kind="unknown",
-                      content_digests=_content_digests(facts.get("content_digests", "unrecorded"),
-                                                       callbacks))
+                      content_digests=_content_digests(facts, callbacks))
         refusal = facts.get("refusal")
         if isinstance(refusal, str) and status == "failure":
             for kind in ("spawn", "timeout", "exit", "unavailable"):
@@ -198,18 +198,25 @@ def _attempt(path: Path, run_id: RunId, authorization_id: str,
     return report
 
 
-def _content_digests(value: object, callbacks: CallbackObservation | None) -> object:
+def _content_digests(facts: dict[str, Any], callbacks: CallbackObservation | None) -> object:
     """Digests and lengths only (codex.py ``_content_digests``); text never crosses.
 
     A named absence passes through; a block must describe exactly the admitted
-    prefix it sits beside, or the attempt is refused.
+    prefix it sits beside, and a successful outcome's reply must be the answer
+    whose length the same facts state, or the attempt is refused.
     """
+    value = facts.get("content_digests", "unrecorded")
     if value in ("unrecorded", "unrecordable"):
         return value
     _require(isinstance(value, dict) and callbacks is not None)
     content = ContentDigests.model_validate(value)
     assert callbacks is not None
     _require(not content.contradicts(callbacks))
+    if facts.get("status") == "success":
+        # One producer value feeds both (codex.py ``_attempt_facts``).
+        answer = facts.get("answer_bytes")
+        _require(answer is None or type(answer) is int)
+        _require((None if content.reply is None else content.reply.bytes) == answer)
     return content.model_dump(mode="json")
 
 

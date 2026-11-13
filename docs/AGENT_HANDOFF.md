@@ -25,9 +25,11 @@ The #397 generation-18 refusal (`capture-unchanged`) could not be classified, be
 What it does not establish:
 - **Content.** Only digests and lengths are kept; no program, output or reply text is. A length separates a short read from an edit, and a digest confirms a guess. It is a fingerprint, not a confidentiality boundary.
 - **Anything about READ or WRITE qualification attempts.** Their readers pin the facts' exact key set, so the block is emitted only when the provider carries a maintenance authorization. Claude's executor has no maintenance path and emits nothing.
-- **Older records.** A record without the block reads as `"unrecorded"`. A block the producer could not state exactly reads as `"unrecordable"`; a block that disagrees with the admitted callbacks beside it refuses the attempt stage.
+- **Older records.** A record without the block reads as `"unrecorded"`. A block the producer could not state exactly reads as `"unrecordable"`. A block refuses the attempt stage when it disagrees with the admitted callbacks beside it, carries an output without its program, or, on a successful outcome, states a reply whose length differs from `answer_bytes`.
 - **A worst-case packet bound.** The capture-unchanged packet with eight maximal entries measured 3,737 of 8,192 bytes; the largest possible packet of every other shape was not measured.
-- **An unchanged adapter.** `codex.py` changed, so `ADAPTER_REVISION` changes and anything bound to it needs regenerating. `codex_protocol.py` and the maintenance application sources did not change, so `PROTOCOL_REVISION` and the application revision hold.
+- **An unchanged adapter.** `codex.py` changed, so `ADAPTER_REVISION` changes and anything bound to it needs regenerating. `codex_protocol.py` and the maintenance application sources did not change, so `PROTOCOL_REVISION` and the application revision hold. The contract lives in its own module, `core/attempt_content.py`, because the WRITE report definition hashes all of `core/qualification_write.py`; that definition holds too.
+- **Durability before the outcome.** Callback observations are written as they happen; the digests stay in memory until the outcome is settled. A hard kill after a completed callback keeps its category and loses its fingerprint.
+- **What a program did.** A fingerprint and a length cannot say whether a program read or edited anything; two programs of equal length can do either.
 
 ## WRITE instructions state the callback guards that end an attempt
 

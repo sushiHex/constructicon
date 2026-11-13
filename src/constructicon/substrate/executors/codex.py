@@ -70,6 +70,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from constructicon.core.attempt_content import CallbackContent, ContentDigest, ContentDigests
 from constructicon.core.errors import ContractViolation
 from constructicon.core.executor import (
     ExecutorError,
@@ -90,7 +91,6 @@ from constructicon.core.native_operator import (
 )
 from constructicon.core.process import ProcessIO
 from constructicon.core.qualification import QualificationAuthorization
-from constructicon.core.qualification_write import CallbackContent, ContentDigest, ContentDigests
 from constructicon.core.run import OwnershipLost
 from constructicon.core.workspace import (
     AcquiredCapability,

@@ -173,9 +173,11 @@ async def test_one_maintenance_turn_records_purpose_and_completed_dispatch(
         assert "one call" not in text and "worker-output" not in text
         # The diagnostic's projection accepts the real producer's block as written
         # (this fixture's scope is not the diagnostic's graph, so not via _attempt).
+        # including the answer length the same facts state beside the reply digest.
+        assert record["facts"]["status"] == "success"
+        assert record["facts"]["answer_bytes"] == len(b"done")
         assert diagnostic._content_digests(
-            record["facts"]["content_digests"],
-            CallbackObservation.model_validate(record["callbacks"]),
+            record["facts"], CallbackObservation.model_validate(record["callbacks"]),
         ) == expected
         with pytest.raises(ContractViolation, match="executes one task only"):
             await acquired.resource.execute(TaskSpec(instruction="again"),
