@@ -378,6 +378,27 @@ vectors were recovered into an ordinary contribution in [PR #250](https://github
 The [recovery record](docs/plans/handoffs/M8-implementation-record.md#q13-contribution-recovered-and-published-for-review-refs-245-186)
 separates the historical exam from current-source regression evidence.
 
+A second fixed maintenance task, the stored-reply extraction, had one
+authorized live attempt ([#397](https://github.com/sushiHex/constructicon/issues/397)).
+The application completed normally and accepted no candidate: the writer was
+refused as `capture-unchanged`, because the attempt left the target at its
+base. The window then withdrew its generation, parked the host and released
+custody, with no retry
+([outcome record](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6785983613)).
+The follow-up is open as [#407](https://github.com/sushiHex/constructicon/issues/407),
+the one open issue in the M8 milestone. Merged so far: instructions that name the
+one write tool, where it runs and what is captured
+([#408](https://github.com/sushiHex/constructicon/pull/408)) and state the
+guards that end an attempt
+([#411](https://github.com/sushiHex/constructicon/pull/411)); the retained
+first request of a maintenance WRITE turn
+([#409](https://github.com/sushiHex/constructicon/pull/409)); retained
+digests and lengths of an attempt's callback content and reply
+([#410](https://github.com/sushiHex/constructicon/pull/410)); and model-shaped
+replies pinned to their refusals
+([#412](https://github.com/sushiHex/constructicon/pull/412)). None of these
+shows that a model now writes; only a further authorized attempt can.
+
 Claude Code is the independent second subscription adapter
 ([#40](https://github.com/sushiHex/constructicon/issues/40)). Its fixed
 pre-dispatch startup predicate, admitted READ composition and contained WRITE
@@ -398,7 +419,7 @@ These results do not auto-enable a provider, supply general vendor conformance,
 or qualify another boot: fresh continuity and qualification remain required.
 The gateway route ([#39](https://github.com/sushiHex/constructicon/issues/39))
 and OpenRouter ([#47](https://github.com/sushiHex/constructicon/issues/47))
-remain unselected. See the [implementation record](docs/plans/handoffs/M8-implementation-record.md)
+remain unselected, and both are tracked outside the M8 milestone. See the [implementation record](docs/plans/handoffs/M8-implementation-record.md)
 for current evidence and the [authentication assessment](docs/designs/EXECUTOR_AUTHENTICATION.md)
 for the route decision and its historical investigation.
 
