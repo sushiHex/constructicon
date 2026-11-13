@@ -32,6 +32,7 @@ the eventual code differs.
 
 | Record | Status |
 | --- | --- |
+| [Six unifications: fold the live path back into the kernel](handoffs/architecture-unifications-proposal.md) | Review draft, 2026-11-12, against `main` at `c9f0c84` ([#407](https://github.com/sushiHex/constructicon/issues/407)). A proposed architecture direction with its evidence and open questions. Not approved; it authorizes no implementation, installation, host operation or model attempt |
 | [Executor metering observations](handoffs/executor-metering-observations-proposal.md) | Accepted by the owner on 2026-11-05 for [#376](https://github.com/sushiHex/constructicon/issues/376); [ADR 0024](../adr/0024-retain-native-executor-metering.md) records adoption. Original proposal bytes are preserved; runtime evidence is separate |
 | [Run-scoped ordinary attestation identity](handoffs/run-scoped-attestation-identity-proposal.md) | Accepted by the owner on 2026-11-05; [ADR 0023](../adr/0023-ordinary-attestations-bind-their-minting-run.md) records adoption and implementation authority. Original proposal bytes are preserved; runtime evidence is separate |
 

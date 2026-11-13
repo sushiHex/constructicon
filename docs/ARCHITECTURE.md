@@ -235,6 +235,46 @@ precedes the journal's fenced attestation write. Existing acquisition guards
 and subject-independent closure refs fence use and recovery, including leases
 that never verified a candidate. No new journal phase or scheduler is involved.
 
+## Live execution
+
+A live executor is never generally available. Its provider publishes its own
+unavailable reasons, and admission clears them only for a provider that holds
+a verified authorization for exactly the graph being admitted. Three records
+govern such a run.
+
+**The run permit.** One file in root custody (owned by root, mode 0640, read
+through one primitive) authorizes one run. It exists today as two types:
+
+- `QualificationAuthorization`, with stage `qualification-no-dispatch`,
+  `qualification-read` or `qualification-write`;
+- the maintenance attempt authorizations, one per fixed contribution task
+  (`plan-manifest-maintenance`, `channel-stored-reply`).
+
+Both pin the run, the invocation path, the binding, the source graph, the
+capability, the adapter revision, the operator binding, the grants, the epoch
+and an expiry. Admission's question is timeless: is this graph authorized for
+this executor? Expiry, the run and the epoch are refused at acquisition.
+
+**The attempt budget.** Two records of intent are written before a turn is
+dispatched:
+
+- The attempt record is one private file per authorization. It moves through
+  `acquired`, `intent` and `outcome`, each made durable before anything depends
+  on it, and it holds bounded facts and no text. It is created exclusively, so
+  a second acquisition refuses. After `intent`, a death reads as possibly
+  dispatched and the attempt is never retried.
+- The metering intent is a journal record
+  ([ADR 0024](adr/0024-retain-native-executor-metering.md)). It is written and
+  its dispatch check passes before the first native write.
+
+**The dedicated journal.** A maintenance run requires a journal that retains
+only that task's two components and no other run. The attempt record is a file
+so that the budget outlives a journal reset.
+
+A maintenance contribution is a fixed Graph of a writer and a checker. Its
+acceptance is a journal-minted merge attestation plus a history proof. It does
+not install its candidate: `merge_verified` is not part of that Graph.
+
 ## Agent authoring and introspection
 
 M5 adds surfaces, never another workflow representation:
@@ -380,7 +420,7 @@ refusal, never a best-effort reconstruction.
 collaborators have disjoint responsibilities:
 
 ```text
-_CommandExecutor   twelve mutations; claim, immutable plan, apply/reconcile, record
+_CommandExecutor   thirteen mutations; claim, immutable plan, apply/reconcile, record
 _ControlQueries    authorized bounded reads and page continuations
 ```
 
@@ -818,6 +858,23 @@ as PARKED. See [adr/0010](adr/0010-loop-execution.md).
 One canonical `InvocationStatus` enum serves runtime, journal, API, and
 renderings. Run lifecycle: `PENDING → RUNNING → {SUCCEEDED | FAILED |
 CANCELLED | PARKED}` with machine-readable parked reasons.
+
+## Glossary
+
+Several words name more than one thing. Each row gives the meanings in use;
+the names in code and on the wire are unchanged.
+
+| Word | Meanings |
+| --- | --- |
+| channel | A **release channel** is a named pointer to a component version, such as `stable` ([ADR 0004](adr/0004-versioning-and-channels.md)). A **message channel** carries typed messages between a run and a participant ([ADR 0014](adr/0014-channel-identity-and-delivery.md)). |
+| maintenance | **Store maintenance** is offline operator work on a subscription store: login, repair, withdrawal and activation, each under a new generation ([ADR 0021](adr/0021-subscription-executors-bind-operator-stores.md)). A **contribution task** is one of the two fixed maintenance Graphs that propose a repository change. |
+| qualification | **Runner qualification** proves a hosted Linux runner meets the containment prerequisites ([ADR 0019](adr/0019-hosted-linux-runners-are-requalified-not-image-pinned.md)). **Executor conformance** is the staged evidence that an adapter behaves as its profile says. A **qualification authorization** is a run permit, described under [Live execution](#live-execution). |
+| candidate | A **registry candidate** is an unpromoted component version. A **Git candidate** is the commit a contained WRITE captured. |
+| manifest | The **`ExecutionManifest`** is the sealed description of one run. The **plan manifest** is the data file the first contribution task writes. A **`MANIFEST.sha256`** is a digest list for a set of files: the planning archive, or one operator package. |
+| receipt | An **`EffectReceipt`** records one applied effect. A **phase receipt** is an operator tool's record of one completed step. |
+| grant | **`EffectiveGrants`** are the resolved limits an invocation runs under. A **phase grant** is the reviewed record that releases one operator step. |
+| attempt | An **`AttemptCause`** says why a run attempt started. A **`MeteringAttempt`** is the journal's intent and outcome for one executor dispatch. An **`AttemptRecord`** is the private file that budgets one permit. |
+| generation, epoch | A **generation** numbers an operator store's maintenance history and is never reused. An **epoch** fences one run owner or one acquisition. Both are fencing counters, over different resources. |
 
 ## Milestones
 
