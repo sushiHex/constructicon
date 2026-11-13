@@ -16,6 +16,21 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## The api import contracts cover every api module, and metering names its routes once
+
+Two import-linter contracts enumerate children of `constructicon.api` by hand, because import-linter has no "every child except" form. Both had gaps. `tests/test_layer_contracts.py` now derives the children from the entries of the package directory (any file, any directory, with or without `__init__.py`), so a new entry fails that test until a contract names it:
+- **"Only the MCP adapter imports mcp"** now names every api child except `mcp`. It was missing `_claude_read_fixture`, `_metered_native`, `claude_qualification`, `claude_write_qualification` and `maintenance_report`.
+- **"The MCP adapter never reaches the qualification entry"** now forbids every api child outside the control surface (`control`, `system` and what those two import: `_control_commands`, `_control_queries`, `_metered_native`, `cursor`, `detail`, `introspection`, `run_host`). It was missing `_claude_read_fixture`, `claude_qualification`, `claude_write_qualification`, `maintenance_report` and `plan_manifest_application`. A new module is forbidden by default; the control-surface list in the test is the one place that admits one.
+
+A reported gap that was wrong: `_metered_native` cannot join the second contract. `api.system` imports it and the adapter imports `api.system`, so listing it breaks the contract on a legitimate chain (checked with a scratch copy of the configuration).
+
+`api/_metered_native.py` now holds one table of admitted native routes: each row gives the route's provider class, its handle class, its `MeteringSource` and how its fixed model is read. A route is selected by class identity (`type(x) is`), never by equality or hashing; the first draft used a dictionary lookup, and the review showed that a subclass whose metaclass answers `==` and `hash` for an admitted class would pass it. `api/system.py` asks `is_metered_route` and no longer names a vendor class. The refusals and their order are the ones the two `if type(...) is` chains gave, with one stricter: a route's meter is installed only on that route's own handle class, where either vendor's handle was accepted before.
+
+What this does not do:
+- **The test does not see `api/__init__.py` or import-linter's own semantics.** An import written in the package's `__init__.py` is outside both lists (naming the package as a source would include the adapter), and how a listed package covers its descendants is import-linter's rule. The test refuses `as_packages`, `allow_indirect_imports` and `ignore_imports` on both contracts.
+- **No L0 protocol for metering.** A structural contract needs `metering_source` and a model attribute on both providers. Adding them edits `substrate/executors/codex.py` and `substrate/executors/claude_provider.py`, and each module's `ADAPTER_REVISION` is a digest of its own whole source (`codex.py`, the `claude-read-owned-adapter` module set). That half waits for a planned requalification.
+- **Only the whole-tree identities move.** The changed source files, `api/_metered_native.py` and `api/system.py`, are in none of the per-file or per-module pins (the vendor adapter and protocol revisions, the maintenance application's eight files, the launcher, workspace, store and fixture pins). Two identities cover every file under `src/constructicon` and move with this change as with any source change: the installed controller tree, and `m9-installed-source` (`api/_m9/proposer.py`, `source_revision`), which an existing M9 trial directory is checked against (`api/_m9/trial.py`, `M9_STORE_SOURCE_OR_IDENTITY_DRIFT`). The first draft of this entry said no source-derived revision moves; the review corrected it.
+
 ## The WRITE recovery proof's successor no longer runs on a 0.4 s lease
 
 `test_controller_death_retains_the_worker_guard_until_successor_recovery` failed once in `proof (foundation)` (#417). The retained journal events show the successor reclaiming its own run:
