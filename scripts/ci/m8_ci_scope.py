@@ -322,6 +322,32 @@ def verify_docs(repository: Path) -> None:
     verify_markdown_links(repository)
 
 
+# A contained gate reads `git archive --format=tar` of a whole commit into memory
+# under ProcessLimits.artifact_bytes, restated here because this script imports
+# nothing; tests/test_tree_materialization_margin.py pins the two equal. This
+# repository is its own maintenance base, so its tree must stay under that bound
+# with room for a contribution. One tar record is all #423 found left to require.
+GATE_SNAPSHOT_BOUND = 16 * 1024 * 1024
+TAR_RECORD = 10_240
+REQUIRED_TREE_MARGIN = TAR_RECORD
+
+
+def verify_tree_margin(repository: Path, bound: int = GATE_SNAPSHOT_BOUND) -> int:
+    """Return the committed tree's margin under the gate snapshot bound, or refuse."""
+    # Committed bytes, as the gate's pinned Git reads them: an ambient
+    # core.autocrlf=true would inflate the archive and refuse a tree that fits.
+    size = len(_git(repository, "-c", "core.autocrlf=false", "-c", "core.eol=lf",
+                    "archive", "--format=tar", "HEAD"))
+    margin = bound - size
+    if margin < REQUIRED_TREE_MARGIN:
+        raise ScopeError(
+            f"tree-materialization-margin: HEAD archives to {size} bytes, {margin} below the "
+            f"{bound}-byte gate snapshot bound; {REQUIRED_TREE_MARGIN} are required. This is the "
+            "repository's size, not this change's logic (issue #423)"
+        )
+    return margin
+
+
 def gate_allows(scope: str, classification: str, docs: str, proofs: str) -> bool:
     """Accept only the two complete job-state shapes produced by the workflow."""
 
@@ -363,6 +389,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if arguments.command == "docs":
             verify_docs(arguments.repository)
+            # Prose is where this tree grows fastest, and prose skips the full lanes.
+            print(f"tree margin: {verify_tree_margin(arguments.repository)} bytes")
             return 0
         if arguments.command == "gate":
             allowed = gate_allows(
