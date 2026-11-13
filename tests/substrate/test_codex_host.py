@@ -32,6 +32,7 @@ from constructicon.substrate.executors.codex import (
     configured_model,
 )
 from constructicon.substrate.executors.codex_protocol import named_method
+from tests.maintenance_instructions import PLAN_PURPOSE, fast_import_entry
 from tests.substrate.test_codex_adapter import native_store
 
 ACCOUNT = digest("test-account", 1, "operator")
@@ -445,7 +446,7 @@ def test_maintenance_prepare_and_cli_preflight_accept_group_writable_inherited_u
                 blob = (repository / name).read_bytes()
                 assert hashlib.sha256(blob).hexdigest() == source_module.SOURCE_HASHES[name]
                 commit += f"M 100644 inline {name}\ndata {len(blob)}\n".encode() + blob + b"\n"
-            commit += b"\ndone\n"
+            commit += fast_import_entry(PLAN_PURPOSE) + b"\ndone\n"
             await GitProcess(str(Path(shutil.which("git")).resolve()), ProcessLimits()).run(
                 "fast-import", "--quiet", cwd=seed, stdin=commit,
             )

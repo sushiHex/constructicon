@@ -1019,6 +1019,66 @@ MUTANTS = (
         "test_preparation_pins_the_target_and_refuses_a_finished_extraction"
         "[already-refactored]",
     ),
+    (
+        "maintenance writer dispatches only the text its request pins",
+        WRITER, 'instruction = pinned_instruction(request, inputs.get("instruction"))',
+        'instruction = inputs.get("instruction")',
+        "tests/api/test_instruction_binding.py::"
+        "test_the_writer_refuses_before_dispatch_unless_the_text_is_the_pinned_one[other-text]",
+    ),
+    (
+        "maintenance instruction is compared by digest",
+        "constructicon.api.plan_manifest_application:pinned_instruction",
+        "hashlib.sha256(raw).hexdigest() != request.instruction_sha256", "False",
+        "tests/api/test_instruction_binding.py::"
+        "test_only_the_text_the_request_pins_is_the_instruction",
+    ),
+    (
+        "an era-one request is never dispatched",
+        "constructicon.api.plan_manifest_application:pinned_instruction",
+        "if request.instruction_sha256 is None:", "if False:",
+        "tests/api/test_instruction_binding.py::"
+        "test_only_the_text_the_request_pins_is_the_instruction",
+    ),
+    (
+        "assembled instruction is the pinned base commit's own",
+        "constructicon.api.plan_manifest_application:require_maintenance_resources",
+        "if instruction != resources.instruction:", "if False:",
+        "tests/api/test_instruction_binding.py::"
+        "test_assembled_resources_must_hold_the_base_commits_own_instruction"
+        "[other-digest-plan]",
+    ),
+    (
+        "assembled instruction matches its request digest",
+        "constructicon.api.plan_manifest_application:require_maintenance_resources",
+        "pinned_instruction(request, resources.instruction)", "pass",
+        "tests/api/test_instruction_binding.py::"
+        "test_assembled_resources_must_hold_the_base_commits_own_instruction"
+        "[era-one-plan]",
+    ),
+    *(
+        (
+            "base instruction refuses " + label,
+            "constructicon.api._maintenance_source:base_instruction", before, "if False:",
+            "tests/api/test_instruction_binding.py::"
+            "test_the_base_instruction_is_read_exactly_or_refused_by_name[" + label + "]",
+        )
+        for label, before in (
+            ("executable",
+             'if not entry.startswith(b"100644 blob ") or entry.count(b"\\n") != 1:'),
+            ("over-bound", "if not text or len(raw) > INSTRUCTION_BYTES:"),
+            ("helper-edited",
+             "if purpose == CHANNEL_PURPOSE and CHANNEL_HELPER not in text:"),
+        )
+    ),
+    (
+        "preparation refuses a base without its task instruction",
+        "constructicon.api._maintenance_source:prepare_source",
+        "await base_instruction(lambda *args: git(root / \"authority.git\", *args),\n"
+        "                           str(base_commit), purpose)", "pass",
+        "tests/api/test_instruction_binding.py::"
+        "test_preparation_refuses_a_base_without_its_instruction_before_any_pin[absent]",
+    ),
 )
 
 if __name__ == "__main__":

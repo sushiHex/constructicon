@@ -5,3 +5,5 @@
 /tests/vectors/plan_manifest.json text eol=lf
 # The hand-written channel stored-reply candidate is test data, compared by bytes.
 /tests/fixtures/channel_stored_reply/in_process_candidate.py.txt text eol=lf
+# Maintenance instructions are pinned by the digest of these exact bytes.
+/maintenance/*.txt text eol=lf

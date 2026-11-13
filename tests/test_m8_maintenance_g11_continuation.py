@@ -983,7 +983,13 @@ def test_exact_lifecycle_file_invocation_is_hash_bound_and_byte_clean(tmp_path, 
         assert (tmp_path / f"maintenance-g11-{kind}.stdout").read_bytes() == b"retained"
 
 
+# g11 is a frozen package from before instruction binding (#407). The installed
+# diagnostic has since gained exactly one cause, which a later package must accept.
+G11_CAUSES = (set(_FAILURES.values()) - {"writer-instruction"}) | {"unknown"}
+
+
 def test_diagnostic_cause_enum_exactly_matches_installed_source():
+    assert "writer-instruction" in set(_FAILURES.values())
     import ast
 
     tree = ast.parse(_programs(C11)[1])
@@ -993,10 +999,10 @@ def test_diagnostic_cause_enum_exactly_matches_installed_source():
              and isinstance(node.args[0].slice, ast.Constant)
              and node.args[0].slice.value == "cause"]
     assert len(calls) == 1
-    assert ast.literal_eval(calls[0].args[1]) == set(_FAILURES.values()) | {"unknown"}
+    assert ast.literal_eval(calls[0].args[1]) == G11_CAUSES
 
 
-@pytest.mark.parametrize("cause", sorted(set(_FAILURES.values()) | {"unknown"}))
+@pytest.mark.parametrize("cause", sorted(G11_CAUSES))
 def test_every_installed_source_cause_is_accepted_by_actual_checker(
     tmp_path, monkeypatch, capsys, cause,
 ):

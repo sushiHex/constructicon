@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from constructicon.api.plan_manifest_application import CHANNEL_INSTRUCTION, channel_reply_checks
+from constructicon.api.plan_manifest_application import channel_reply_checks
 from constructicon.core.errors import ContractViolation
 from constructicon.core.maintenance import CHANNEL_TARGET_PATH
 from constructicon.substrate.gates import channel_reply
@@ -66,6 +66,8 @@ def test_fixture_is_test_data_and_the_target_stays_unrefactored():
     assert CANDIDATE.count(b"self._stored_reply(request, ") == 2
     assert HELPER in CANDIDATE and CANDIDATE.count(b"pins no reply port") == 1
     # The instruction spells the oracle's one helper; the fixture matches it by hand.
+    from tests.maintenance_instructions import CHANNEL_INSTRUCTION
+
     assert channel_reply.HELPER_SOURCE.splitlines()[0] in CHANNEL_INSTRUCTION
 
 

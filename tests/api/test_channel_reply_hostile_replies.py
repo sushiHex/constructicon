@@ -43,7 +43,6 @@ import pytest
 
 from constructicon.api import maintenance_entry as entry
 from constructicon.api.plan_manifest_application import (
-    CHANNEL_INSTRUCTION,
     CHANNEL_STORED_REPLY,
     MaintenanceResources,
     channel_reply_checks,
@@ -68,6 +67,7 @@ from constructicon.substrate.journal.maintenance_diagnostic import _FAILURES
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.api import test_plan_manifest_application as application_tests
 from tests.api.test_plan_manifest_application import PortableProcessLauncher
+from tests.maintenance_instructions import CHANNEL_INSTRUCTION, CHANNEL_PURPOSE, pinned
 from tests.maintenance_task_world import (
     committed_tree_base,
     configure_executor_guard,
@@ -339,7 +339,10 @@ async def attempt(resources, launch, binding, tmp_path, monkeypatch, seat: Seate
     result = await entry.run_maintenance(resources=resources, executor=executor,
         executor_descriptor=descriptor_of(executor, "executor"), authorization=authorization)
     journal, run_id, request = resources.journal, authorization.run_id, resources.request
-    # The instruction the peer was sent is the task's own, imported and never restated.
+    # The instruction the peer was sent is the committed file's text, which the request
+    # pins by digest; it is read from the repository and never restated here.
+    assert request.instruction_sha256 == hashlib.sha256(
+        CHANNEL_INSTRUCTION.encode()).hexdigest()
     turn, = (item for item in native.received if item.get("method") == "turn/start")
     assert [item["text"] for item in turn["params"]["input"]] == [CHANNEL_INSTRUCTION]
     failures = [event for event in journal.events(run_id, limit=100)
@@ -533,8 +536,10 @@ async def contained_world(launcher, tmp_path):
         provider_id="maintenance-workspace", posture=Posture.WRITE, launcher=physical,
     )
     request = ChannelReplyRequest(repository=git.repository_id, target_ref=runner.target_ref,
-        base_commit=base, target_sha256=target_sha256, check_set_hash=gate.check_set_hash)
-    return MaintenanceResources(journal, git, workspace, gate, request, source), physical
+        base_commit=base, target_sha256=target_sha256, check_set_hash=gate.check_set_hash,
+        **pinned(CHANNEL_PURPOSE))
+    return MaintenanceResources(journal, git, workspace, gate, request, source,
+                                CHANNEL_INSTRUCTION), physical
 
 
 @pytest.mark.parametrize("name", sorted(CONTAINED))

@@ -195,7 +195,18 @@ def test_historical_helper_pins_and_successor_source_are_distinct():
             digests = re.search(r"^CONTENT_DIGESTS_DIAGNOSTIC_SHA256=([0-9a-f]{64})$",
                                 record, re.M)
             assert digests is not None and digests.group(1) != newest.group(1)
-            current = digests
+            assert digests.group(1) == (
+                "28a2c47d0b3199131d626181dd8da6b1a467efe2c432428b6c40fbab88781a77"
+            )
+            # Instruction binding (#407) adds one writer cause; its own delivery
+            # record pins those bytes and the earlier pins are unchanged.
+            binding = (ROOT / "docs/plans/handoffs/maintenance-instruction-binding.md"
+                       ).read_text(encoding="utf-8")
+            assert "INSTRUCTION_BINDING_DIAGNOSTIC_SHA256" not in record + channel
+            bound = re.search(r"^INSTRUCTION_BINDING_DIAGNOSTIC_SHA256=([0-9a-f]{64})$",
+                              binding, re.M)
+            assert bound is not None and bound.group(1) != digests.group(1)
+            current = bound
         assert hashlib.sha256(raw).hexdigest() == current.group(1)
 
 

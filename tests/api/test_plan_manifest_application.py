@@ -20,7 +20,6 @@ from pydantic import ValidationError
 
 from constructicon.api.control import ControlPlane
 from constructicon.api.plan_manifest_application import (
-    WRITE_INSTRUCTION,
     MaintenanceResources,
     derive_maintenance_result,
     maintenance_checks,
@@ -65,15 +64,24 @@ from tests.conftest import LEASE_TTL_S, FakeClock
 from tests.executorworld import FakeExecutorProvider, launch_identity
 from tests.gateworld import ControlledGate, ControlledGateProvider
 from tests.gitworld import WRITE_GRANTS, seed_authority
+from tests.maintenance_instructions import (
+    CHANNEL_INSTRUCTION,
+    CHANNEL_PURPOSE,
+    PLAN_PURPOSE,
+    TOOL_PREFIX,
+    WRITE_INSTRUCTION,
+    commit_instruction,
+    pinned,
+)
 from tests.runtime.test_async_workspace import until
 
 BASE, CANDIDATE, TREE, MERGE = (GitSha(char * 40) for char in "abcd")
 CHECK_SET = digest("maintenance-fake-check-set", 1, "fixed")
 REQUEST = PlanManifestRequest(
     repository="fake-authority", target_ref="refs/heads/main", base_commit=BASE,
-    target_sha256="f" * 64, check_set_hash=CHECK_SET,
+    target_sha256="f" * 64, check_set_hash=CHECK_SET, **pinned(PLAN_PURPOSE),
 )
-INPUTS = {"request": REQUEST.model_dump(mode="json")}
+INPUTS = {"request": REQUEST.model_dump(mode="json"), "instruction": WRITE_INSTRUCTION}
 
 
 class Writer:
@@ -567,7 +575,6 @@ class PortableChannelWriter(Writer):
         self.candidate = CANDIDATE if candidate is None else candidate
 
     async def execute(self, task, *, workspace, grants):
-        from constructicon.api.plan_manifest_application import CHANNEL_INSTRUCTION
         from constructicon.core.maintenance import CHANNEL_TARGET_PATH
 
         assert task.instruction == CHANNEL_INSTRUCTION and not self.validate_grants(grants)
@@ -712,6 +719,9 @@ async def concrete_resources(tmp_path, monkeypatch, *, committed_tree, channel=F
     monkeypatch.setattr(GitProcess, "run", portable_git)
     if channel and fresh:
         await channel_base(authority)
+    purpose = CHANNEL_PURPOSE if channel else PLAN_PURPOSE
+    # Every base holds the instruction its request pins; the committed tree already does.
+    await commit_instruction(authority.git_executable, repo, "refs/heads/main", purpose)
     base = authority.resolve_ref("refs/heads/main")
     # Pin the actual immutable authority blob, exactly as assembly must do.
     from constructicon.api.plan_manifest_application import channel_reply_checks
@@ -736,8 +746,9 @@ async def concrete_resources(tmp_path, monkeypatch, *, committed_tree, channel=F
     request = (ChannelReplyRequest if channel else PlanManifestRequest)(
         repository=authority.repository_id, target_ref=gate.target_ref,
         base_commit=base, target_sha256=hashlib.sha256(source).hexdigest(),
-        check_set_hash=gate.check_set_hash)
-    resources = MaintenanceResources(journal, authority, workspace, gate, request, source)
+        check_set_hash=gate.check_set_hash, **pinned(purpose))
+    resources = MaintenanceResources(journal, authority, workspace, gate, request, source,
+                                     CHANNEL_INSTRUCTION if channel else WRITE_INSTRUCTION)
     return resources, launch
 
 
@@ -778,7 +789,7 @@ async def test_concrete_assembly_real_git_and_journal_affirm_exact_accepted_resu
     await require_maintenance_resources(resources)
     graph = await register(control)
     submission = await control.runs_start(RUN_ACTOR, proposal=graph,
-        inputs={"request": resources.request.model_dump(mode="json")}, idempotency_key="concrete")
+        inputs=resources.inputs, idempotency_key="concrete")
     assert isinstance(submission, RunSubmission), submission
     result = await completed_concrete_attempt(submission.run_id)
     assert result.status is RunStatus.SUCCEEDED, result
@@ -833,7 +844,7 @@ async def test_concrete_successful_noop_is_refused_after_real_capture(
     monkeypatch.setattr(resources.workspace, "capture", observe_capture)
     graph = await register(control)
     submitted = await control.runs_start(RUN_ACTOR, proposal=graph,
-        inputs={"request": resources.request.model_dump(mode="json")}, idempotency_key="noop")
+        inputs=resources.inputs, idempotency_key="noop")
     assert isinstance(submitted, RunSubmission), submitted
     result = await completed_concrete_attempt(submitted.run_id)
     assert result.status is RunStatus.FAILED
@@ -887,7 +898,7 @@ async def test_application_refuses_history_despite_passing_generic_tree_gate(
     executor.executor.intermediate_commits = True
     graph = await register(control)
     submission = await control.runs_start(RUN_ACTOR, proposal=graph,
-        inputs={"request": resources.request.model_dump(mode="json")}, idempotency_key="history")
+        inputs=resources.inputs, idempotency_key="history")
     assert isinstance(submission, RunSubmission), submission
     result = await completed_concrete_attempt(submission.run_id)
     assert result.status is RunStatus.SUCCEEDED, result
@@ -919,16 +930,21 @@ def test_every_write_instruction_names_its_one_tool_where_it_runs_and_what_is_ca
     # vendor thread is told its own sandbox is read-only from /tmp, so the
     # instruction itself names the one granted tool, its working directory and
     # that its writes are the result. The cause is not proven; this removes one.
-    from constructicon.api.plan_manifest_application import (
-        CHANNEL_INSTRUCTION,
-        TASKS,
-        TOOL_PREFIX,
-    )
+    # The wording is data now: the committed file each base commit holds, one per
+    # fixed task, named by purpose (docs/designs/INSTRUCTION_BINDING.md).
+    from constructicon.api._maintenance_source import CHANNEL_HELPER
+    from constructicon.api.plan_manifest_application import TASKS
+    from constructicon.core.maintenance import INSTRUCTION_BYTES
+    from tests.maintenance_instructions import instruction, instruction_bytes
 
-    assert {task.instruction for task in TASKS} == {WRITE_INSTRUCTION, CHANNEL_INSTRUCTION}
+    assert {task.purpose for task in TASKS} == {PLAN_PURPOSE, CHANNEL_PURPOSE}
     for task in TASKS:
-        assert task.instruction.startswith(TOOL_PREFIX)
-        assert task.instruction.count("contained_python") == TOOL_PREFIX.count("contained_python")
+        text = instruction(task.purpose)
+        assert 0 < len(instruction_bytes(task.purpose)) <= INSTRUCTION_BYTES
+        assert text.startswith(TOOL_PREFIX)
+        assert text.count("contained_python") == TOOL_PREFIX.count("contained_python")
+    # The channel instruction quotes the installed oracle's helper byte for byte.
+    assert CHANNEL_HELPER in CHANNEL_INSTRUCTION and CHANNEL_HELPER not in WRITE_INSTRUCTION
     for phrase in ("calling the contained_python tool", "name ends in contained_python",
                    "repository root as its working directory", "exactly what is captured",
                    "read-only does not apply to contained_python", "Use relative paths.",

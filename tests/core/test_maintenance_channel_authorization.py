@@ -55,7 +55,9 @@ GOLDEN_FIELDS = [
 ]
 GOLDEN_CANONICAL_SHA256 = "230f69a950ef87d1d16e97be507559ec97d4b898022ade772bb758ab86e0db93"
 GOLDEN_DIGEST = "sha256:e39f208d38e116b5412f91e3255e5b8d4174b8b0c2d80c7c74ed2f6977781427"
-GOLDEN_SCHEMA_SHA256 = "79099579f878b9a8c821fc4c03b3c08e4b17ad1c80d8e5d53cca96307a39aa4d"
+# The schema alone was regenerated, deliberately, when the request gained its second era
+# (an optional pinned instruction digest, #407). The wire, bytes and digest above were not.
+GOLDEN_SCHEMA_SHA256 = "b02d685b48cd755b9db335738a1a56dc69d34f06934a7c47ab014807e9aac34c"
 GOLDEN_RUN_ID = "run-c9c3ac627c1f629db4899178f0663f34"
 
 
