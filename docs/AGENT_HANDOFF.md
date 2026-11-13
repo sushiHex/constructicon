@@ -21,10 +21,10 @@ a second PR just to record the merge. Nothing here authorizes work.
 A refused callback gets no reply, so the model cannot learn a guard by tripping it. `TOOL_PREFIX` now states the ones that apply to both executors:
 - **Eight calls.** `codex_protocol.MAX_TOOL_CALLS`, and the Claude WRITE recipe's `call_limit`.
 - **Only stdout comes back.** `codex.py` returns `result.stdout`; `claude_read_worker.py` returns the same; stderr never reaches the model.
-- **A non-zero worker is terminal.** An uncaught exception exits non-zero, and both executors refuse the callback (`codex.py` "the contained callback worker did not complete"; `claude_read_worker.py` "worker process refused"). The writer then fails before capture.
+- **A non-zero worker is terminal.** The guard reads the exit status, not the exception: an uncaught exception in the main program exits non-zero, while one in a thread can still exit zero. Both executors refuse the callback (`codex.py` "the contained callback worker did not complete"; `claude_read_worker.py` "worker process refused"). The writer then fails before capture.
 - **More than 32768 bytes of output is terminal.** `codex_protocol.TOOL_OUTPUT_BYTES`, and Claude's `WRITE_WORKER_LIMITS.stdout_bytes`.
 
-It also tells the model to catch and print exceptions, to use only the standard library (the worker is `/usr/bin/python3 -I` in the runtime root, which carries no project), and to print a one-line confirmation in the call that writes. The channel task names the `reply` method as a look-alike that must stay unchanged: it repeats two of the extracted statements, and the oracle (`channel_reply.CALLERS`) rewrites only `reply_for` and `acknowledge`.
+It also tells the model to catch exceptions and print them as errors, to use only the standard library (the worker is `/usr/bin/python3 -I` in the runtime root, which carries no project), and to print a one-line confirmation in the call that writes only if the re-read file holds its edit. A caught failure exits zero, so the confirmation is the model's only evidence of a write; the oracle still judges the captured tree. The channel task names the `reply` method as a look-alike that must stay unchanged: it repeats two of the extracted statements, and the oracle (`channel_reply.CALLERS`) rewrites only `reply_for` and `acknowledge`.
 
 The numbers are literals in the text. The instruction test holds them equal to the code's constants for both executors.
 

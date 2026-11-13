@@ -948,20 +948,20 @@ def test_every_write_instruction_names_its_one_tool_where_it_runs_and_what_is_ca
     assert ClaudeNativeRecipe.STREAM_JSON_WRITE.call_limit == MAX_TOOL_CALLS
     assert WRITE_WORKER_LIMITS.stdout_bytes == TOOL_OUTPUT_BYTES
     for phrase in (f"You have at most {MAX_TOOL_CALLS} calls and see only what each call prints.",
-                   "A call that raises an uncaught exception, exits non-zero or prints more "
+                   "A call that exits non-zero (as an uncaught exception does) or prints more "
                    f"than {TOOL_OUTPUT_BYTES} bytes ends the whole attempt with nothing captured",
-                   "catch exceptions and print them, and print only what you need.",
+                   "catch exceptions and print them as errors, and print only what you need.",
                    "Use only the Python standard library; do not import this project or run "
                    "its tests.",
                    "In the call that writes, re-read the file afterwards and print a one-line "
-                   "confirmation."):
+                   "confirmation only if it holds your edit."):
         assert phrase in TOOL_PREFIX, phrase
     # The oracle rewrites two callers only; `reply` repeats two of their statements.
     from constructicon.substrate.gates import channel_reply
 
     assert channel_reply.CALLERS == ("reply_for", "acknowledge")
-    assert "The reply method has similar statements and must stay unchanged." in (
-        CHANNEL_INSTRUCTION)
+    assert ("The separate method named reply (not reply_for) has similar statements and "
+            "must stay unchanged.") in CHANNEL_INSTRUCTION
     assert "must stay unchanged" not in WRITE_INSTRUCTION
     # The bounded WRITE grant admits exactly this one tool.
     root = Path(__file__).resolve().parents[2]
