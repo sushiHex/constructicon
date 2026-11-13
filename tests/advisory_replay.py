@@ -34,6 +34,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 from constructicon.substrate.executors.codex_protocol import (
@@ -54,6 +55,7 @@ SOCKET_TIMEOUT_S = 120.0
 # One request's whole elapsed time, however slowly its bytes arrive.
 REQUEST_DEADLINE_S = 600.0
 NAMESPACE = "functions"
+INVENTORY = Path(__file__).with_name("fixtures") / "native_production_inventory.json"
 # The keys the placement lane's capture carries. Another key is another request.
 CAPTURE_KEYS = frozenset({
     "client_metadata", "include", "input", "model", "parallel_tool_calls", "prompt_cache_key",
@@ -110,19 +112,24 @@ def _is_text_message(item: Any) -> bool:
 
 
 def _is_the_one_tool(item: Any) -> bool:
-    """The vendor's offer of exactly the adapter's declaration, and nothing beside it."""
-    if not isinstance(item, dict) or set(item) - {"id", "role", "type", "tools"}:
+    """The vendor's sealed WRITE offer as measured, carrying the adapter's declaration.
+
+    Producer: the pinned vendor binary, which sends its tools in one
+    ``additional_tools`` input item (vendor source ``core/src/client.rs:902-933``,
+    cited at ``tests/native_inventory.py:64-65``). The exact offer is not assumed
+    here: it is the one measured on that binary and retained in
+    ``tests/fixtures/native_production_inventory.json`` (``sealed.write``; record
+    ``docs/plans/handoffs/M8-N5-native-tool-inventory.md``), which the placement
+    lane holds every real capture to. A capture that differs is a new vendor
+    shape to measure, not one to translate by guess.
+    """
+    measured = json.loads(INVENTORY.read_bytes())["sealed"]["write"]
+    if measured != [{"type": "namespace", "name": NAMESPACE, "description": "",
+                     "tools": [{**_tool(), "strict": False}]}]:
+        # The measured offer no longer carries the adapter's declaration.
         return False
-    namespaces = item.get("tools")
-    if not isinstance(namespaces, list) or len(namespaces) != 1:
-        return False
-    namespace, = namespaces
-    if (not isinstance(namespace, dict)
-            or set(namespace) != {"type", "name", "description", "tools"}
-            or (namespace["type"], namespace["name"], namespace["description"])
-            != ("namespace", NAMESPACE, "")):
-        return False
-    return namespace["tools"] == [{**_tool(), "strict": False}]
+    return (isinstance(item, dict) and not set(item) - {"id", "role", "type", "tools"}
+            and item.get("tools") == measured)
 
 
 def first_request(raw: bytes, *, instruction: str) -> dict[str, Any]:
