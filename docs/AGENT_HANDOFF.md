@@ -16,6 +16,21 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## The first request of a maintenance WRITE turn is retained offline
+
+The placement lane (real pinned Codex binary, loopback fake provider) now runs one production WRITE turn per maintenance task with the task's real instruction as its input (`tests/substrate/test_provider_placement.py`, `test_a_maintenance_write_turn_shows_the_model_its_instruction_and_one_tool`). Each capture lands in the `proof (lifecycle)` artifact as a `codex-placement-*.json` whose `model_visible` field names #407, the task purpose and the instruction's SHA-256.
+
+The test pins what the model is shown:
+- The instruction, `TOOL_PREFIX` first, is the whole last user message.
+- The only tool offered is `functions.contained_python`.
+- One developer message carries the vendor's sentence "`sandbox_mode` is `read-only`: The sandbox only permits reading files."
+- No `<cwd>` appears anywhere in the request. The thread's cwd never reaches the model, so the prefix is the only statement of where `contained_python` runs.
+
+What this does not establish:
+- **That a model writes.** The provider is a fixture that answers with fixed text. Only a live attempt measures a model's behaviour.
+- **The live request byte for byte.** The lane swaps the provider and the catalog path (`tests/native_inventory.py`, `probe_setup`). Production's provider and authentication may change vendor-authored text.
+- **Claude's request.** This lane is Codex only.
+
 ## WRITE instructions name their one tool, its working directory and the capture
 
 The #397 generation-18 attempt (#77 comment 6785983613) completed normally and was refused at the writer as `capture-unchanged`. The retained typed report shows:
