@@ -16,6 +16,42 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Model-shaped replies to the stored-reply task are pinned to their refusals
+
+`tests/api/test_channel_reply_hostile_replies.py` drives the channel stored-reply task with replies shaped like a model's, not the one correct program, and pins where each ends. It has two tiers over one scripted native peer:
+- **portable**: the real adapter callback mediation, entry, journal, capture and exact-extraction gate, with a plain subprocess worker.
+- **contained**: the same through the provisioned Linux launcher over the full committed tree, in the `proof (mediation)` lane. Each case is retained there as `codex-maintenance-hostile-*.json`.
+
+Observed in containment run 43344607526 (contained tier unless marked):
+
+| Reply | Outcome | Callbacks started / completed |
+| --- | --- | --- |
+| Text only, no tool call (portable) | `capture-unchanged` | 0 / 0 |
+| One call that prints the whole target, then the turn ends | `capture-unchanged` | 1 / 1 |
+| Read, then the correct replace | accepted | 2 / 2 |
+| Read, then a replace that matches nothing, no assert (portable) | `capture-unchanged` | 2 / 2 |
+| One call that raises | `writer-not-positive`, worker `nonzero` | 1 / 0 |
+| Correct edit, then a call that raises (portable) | `writer-not-positive` | 2 / 1 |
+| One call that prints the target as hex (43,520 bytes) | `writer-not-positive`, worker `success` | 1 / 0 |
+| Nine calls (portable) | `writer-not-positive` | 8 / 8 |
+| Correct edit written through `/workspace/...` | accepted | 2 / 2 |
+| Correct edit, then `py_compile` of the target | accepted | 2 / 2 |
+| `import constructicon` | `writer-not-positive`, worker `nonzero` | 1 / 0 |
+| Correct edit plus a `.bak` file | `gate-not-positive` | 2 / 2 |
+| Helper with a docstring; `reply` also rewritten; one caller left (portable) | `gate-not-positive` each | 2 / 2 |
+
+What this established:
+- The whole 21,760-byte target fits one callback output (21,761 bytes returned against the 32,768 bound).
+- `__pycache__/` is ignored by the full tree and is not captured.
+- The worker runs in `/workspace` on Python 3.12, with `.git` present and `/usr/bin/git` on its path.
+- A correct write is lost if any later call raises or a ninth call arrives. The peer is sent no output for the failing call.
+- Text only, a read only and a no-op rewrite all report `capture-unchanged`. Only the callback counts tell the first from the other two; the last two need the content digests.
+
+What it did not:
+- **Whether a model sends any of these.** The peer is a scripted byte channel; there is no vendor binary and no model in either tier. The placement lane's fake provider scripts at most one tool call and answers it with fixed text, so it cannot carry these cases.
+- **Claude's WRITE path.** Codex adapter only.
+- **A model that runs `git` itself.** The worker can reach it; no case commits or stages.
+
 ## The first request of a maintenance WRITE turn is retained offline
 
 The placement lane (real pinned Codex binary, loopback fake provider) now runs one production WRITE turn per maintenance task with the task's real instruction as its input (`tests/substrate/test_provider_placement.py`, `test_a_maintenance_write_turn_shows_the_model_its_instruction_and_one_tool`). Each capture lands in the `proof (lifecycle)` artifact as a `codex-placement-*.json` whose `model_visible` field names #407, the task purpose and the instruction's SHA-256.
