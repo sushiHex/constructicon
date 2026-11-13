@@ -936,6 +936,33 @@ def test_every_write_instruction_names_its_one_tool_where_it_runs_and_what_is_ca
                    "for a file you create, check first that it does not exist",
                    "Do not finish until the write has succeeded."):
         assert phrase in TOOL_PREFIX, phrase
+    # The guards the model cannot see, stated with the code's own numbers for both
+    # executors: a refused callback gets no reply, so the instruction is the only warning.
+    from constructicon.substrate.executors.claude_native import ClaudeNativeRecipe
+    from constructicon.substrate.executors.claude_write_worker import WRITE_WORKER_LIMITS
+    from constructicon.substrate.executors.codex_protocol import (
+        MAX_TOOL_CALLS,
+        TOOL_OUTPUT_BYTES,
+    )
+
+    assert ClaudeNativeRecipe.STREAM_JSON_WRITE.call_limit == MAX_TOOL_CALLS
+    assert WRITE_WORKER_LIMITS.stdout_bytes == TOOL_OUTPUT_BYTES
+    for phrase in (f"You have at most {MAX_TOOL_CALLS} calls and see only what each call prints.",
+                   "A call that raises an uncaught exception, exits non-zero or prints more "
+                   f"than {TOOL_OUTPUT_BYTES} bytes ends the whole attempt with nothing captured",
+                   "catch exceptions and print them, and print only what you need.",
+                   "Use only the Python standard library; do not import this project or run "
+                   "its tests.",
+                   "In the call that writes, re-read the file afterwards and print a one-line "
+                   "confirmation."):
+        assert phrase in TOOL_PREFIX, phrase
+    # The oracle rewrites two callers only; `reply` repeats two of their statements.
+    from constructicon.substrate.gates import channel_reply
+
+    assert channel_reply.CALLERS == ("reply_for", "acknowledge")
+    assert "The reply method has similar statements and must stay unchanged." in (
+        CHANNEL_INSTRUCTION)
+    assert "must stay unchanged" not in WRITE_INSTRUCTION
     # The bounded WRITE grant admits exactly this one tool.
     root = Path(__file__).resolve().parents[2]
     source = (root / "src/constructicon/core/maintenance.py").read_text(encoding="utf-8")
