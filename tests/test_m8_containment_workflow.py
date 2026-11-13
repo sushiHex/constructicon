@@ -121,7 +121,8 @@ PROOFS = {
     "Prove common-runtime capture and gate lifecycles": (
         "mediation",
         "tests/substrate/test_contained_capture.py tests/substrate/test_capture_lifecycle.py "
-        "tests/substrate/test_contained_gates.py tests/substrate/test_gate_lifecycle.py",
+        "tests/substrate/test_contained_gates.py tests/substrate/test_gate_lifecycle.py "
+        "tests/api/test_channel_reply_hostile_replies.py",
     ),
     "Prove containment as the non-sudo service user": (
         "foundation",
