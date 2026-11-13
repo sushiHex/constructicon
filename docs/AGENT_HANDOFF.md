@@ -16,6 +16,41 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## The model has one seat, and a recorded turn replays through the real path
+
+`tests/model_seat.py` names the seam the maintenance worlds already had: the scripted native peer is the model's seat, and an occupant is only where its programs come from. `scripted_task_executor` takes the seat (it took a program or a `native=` peer), and the launcher it returns carries a `Realness` manifest that tests compare whole, where they used to check launcher types by hand. It holds the model occupant, the worker launcher's class, whether that class is the Linux boundary, the class of the world under the operator store, and the identity kind. The occupant is the seat's own label and the identity kind is a constant; the two classes and the boundary flag are read from the objects in use.
+
+| Occupant | Programs come from | Used by |
+| --- | --- | --- |
+| `ideal` | the one program a rehearsal knows is right | the task witness, the rehearsal, the entry test |
+| `hostile` | what a model plausibly sends; a step may be computed from the outputs seen so far | `tests/api/test_channel_reply_hostile_replies.py` |
+| `replay` | a recorded `Turn` | the same file |
+| `live` | a real model behind the vendor binary | named only; it raises |
+
+A `Turn` (record version 1) holds:
+- the ordered callback programs;
+- for each, the digest and length of the output the model saw, null when nothing came back (only the last call may lack one);
+- whether the turn completed, and the completion's message if it had one.
+
+The replay occupant compares each produced output with the record before it sends the next program. On a difference it ends the turn, and `settle()` raises `ReplayDiverged`; it never continues open-loop. `settle()` also raises unless what the peer emitted and saw equals the record exactly. A seat's own record is read back from the bytes its peer emitted, never from what it intended to send.
+
+What the tests establish:
+- Three hostile cases are also stated as records, and their hostile runs assert the records equal what the seat saw. Each record replays to the same outcome in the portable tier; one replays in the contained tier.
+- Two records the system no longer reproduces (made over another file; an output the adapter now refuses) stop at the first call, and the recorded edit is never sent or run.
+- One hostile case computes its second program from the first output (`rewrite-from-what-it-read`), so the peer's next step depends on tool output.
+
+What this does not establish:
+- **That any real turn is recorded.** Every record here is synthesised from a scripted case. A live attempt retains digests and lengths at most (#410's `ContentDigests`), and a replay needs the program text and the reply text.
+- **Anything about a model or the vendor binary.** No occupant here is either.
+
+To fill a record from a live attempt (an owner policy decision, not made here):
+- **What to keep:** each admitted program's bytes and the final reply's bytes, on the private host only. Outputs need digests alone, because the replay regenerates them.
+- **Bounds that already exist:** 8 calls of at most 128 KiB each (`codex_protocol.py`, `MAX_TOOL_CALLS`, `TOOL_PROGRAM_BYTES`). The reply has no bound of its own; it is bounded only by the 256 KiB ceiling on one protocol record (`RECORD_BYTES`), so a tighter one would have to be chosen.
+- **Where:** a second file beside the attempt record, written with the same exclusive 0600 create and fsync (`attempt_record.py`, `_write`). It cannot go in the attempt record, which holds "bounded facts and no text", and #410 asserts no program text appears there.
+- **What must not change:** the diagnostic and report stay allowlist projections of at most 8,192 bytes each (`maintenance_diagnostic.py` and `api/maintenance_report.py`), so the text cannot reach a public report.
+- **What has no rule yet:** retrieving such a file from the host. The one reviewed boundary for private host output (`docs/plans/handoffs/M8-private-output-guard.md`) covers the drift tool's capture alone. A turn file would need its own reviewed boundary of that kind: an exclusive capture, compared privately, never printed.
+- **Cost:** the write sits in `codex.py`, so the adapter revision changes and the next package must carry it.
+
 ## The api import contracts cover every api module, and metering names its routes once
 
 Two import-linter contracts enumerate children of `constructicon.api` by hand, because import-linter has no "every child except" form. Both had gaps. `tests/test_layer_contracts.py` now derives the children from the entries of the package directory (any file, any directory, with or without `__init__.py`), so a new entry fails that test until a contract names it:

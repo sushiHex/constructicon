@@ -4,6 +4,8 @@ The full committed checkout tree supplies fixture data; its captured tree OID
 is imported without history or network into a deterministic parentless base.
 The scripted native peer replaces the vendor, while the real adapter mediates
 its callback through the supplied portable or physically contained launcher.
+Who answers the turn is the seat's occupant (``tests/model_seat.py``); what stood
+in every other place is the launcher's ``realness``.
 """
 
 from __future__ import annotations
@@ -31,10 +33,11 @@ from constructicon.substrate.executors.codex import CodexOperatorProvider, launc
 from constructicon.substrate.executors.codex_host import WRITE_GRANTS as GRANTS
 from constructicon.substrate.executors.codex_host import WRITE_PROFILE
 from constructicon.substrate.executors.codex_protocol import CONTAINED_PYTHON_CATALOG
-from constructicon.substrate.executors.linux import ProcessLimits
+from constructicon.substrate.executors.linux import LinuxLauncher, ProcessLimits
 from constructicon.substrate.gates.contained import ContainedGateRunner
 from constructicon.substrate.git.capture import ContainedWriteWorkspaceProvider
 from constructicon.substrate.git.process import GitProcess
+from tests.model_seat import Realness, Seated, ideal
 from tests.native_operator_world import native_egress
 from tests.substrate.test_codex_adapter import (
     BINARY,
@@ -44,7 +47,6 @@ from tests.substrate.test_codex_adapter import (
     bare_launcher,
     descriptor_of,
 )
-from tests.substrate.test_codex_write import write_native
 
 
 def task_vectors() -> bytes:
@@ -120,6 +122,7 @@ async def import_fixture_tree(authority, repository, tree: bytes) -> str:
 @dataclass(frozen=True, kw_only=True)
 class ScriptedWorkerLauncher(ScriptedLauncher):
     process_launcher: object
+    realness: Realness
 
     async def run(self, command, **kwargs):
         return await self.process_launcher.run(command, **kwargs)
@@ -166,8 +169,9 @@ async def prepare_task_attempt(
     )
     assert len(blob) <= 32768 and len(program.encode()) <= process_launcher.limits.input_bytes
     resources, executor, scripted, configuration, authorization = await scripted_task_executor(
-        resources, process_launcher, binding, tmp_path, program, authorization=authorization,
-        authorization_id=authorization_id, key=key, attempt_record=attempt_record)
+        resources, process_launcher, binding, tmp_path, ideal(program),
+        authorization=authorization, authorization_id=authorization_id, key=key,
+        attempt_record=attempt_record)
     configure_executor_guard(monkeypatch)
     capture = []
     original_capture = resources.workspace.capture
@@ -183,14 +187,13 @@ async def prepare_task_attempt(
 
 
 async def scripted_task_executor(
-    resources, process_launcher, binding, tmp_path, program, *, task=None,
+    resources, process_launcher, binding, tmp_path, seat: Seated, *, task=None,
     authorization=None, authorization_id="full-tree-task-witness", key="one-task",
-    attempt_record=None, native=None,
+    attempt_record=None,
 ):
-    """The real adapter, scripted native peer and the task's own exact authorization.
+    """The real adapter, the seated peer and the task's own exact authorization.
 
-    ``native`` replaces the one-callback peer with another scripted peer (several
-    callbacks, or none); ``program`` is then unused.
+    The returned launcher's ``realness`` names what stood in each place.
     """
     from constructicon.api.plan_manifest_application import PLAN_MANIFEST
 
@@ -199,8 +202,11 @@ async def scripted_task_executor(
     scripted = ScriptedWorkerLauncher(
         **{name: getattr(prototype, name) for name in (
             "runtime_root", "expected_runtime", "bubblewrap", "policy", "expected_policy_sha256",
-        )}, native=write_native(program=program) if native is None else native,
-        result=FINISHED, process_launcher=process_launcher,
+        )}, native=seat, result=FINISHED, process_launcher=process_launcher,
+        realness=Realness(
+            model=seat.occupant, worker=type(process_launcher),
+            contained=isinstance(process_launcher, LinuxLauncher),
+            store_world=type(binding[0]), identity="fixture"),
     )
     # The real entry requires one exact launcher object for the executor and
     # workspace; the gate shares it too. Rebuild identified companion pins.
@@ -265,6 +271,8 @@ async def exercise_task_entry(
         journal.events(run_id, limit=100)
     assert state.owner_id is None and not journal.cancel_requested(run_id)
     assert scripted.native.methods.count("turn/start") == 1
+    assert scripted.realness.model == "ideal"
+    assert scripted.realness.worker is type(process_launcher)
     assert configuration.encode() in binding[0].configurations
     assert executor.identity.profile == WRITE_PROFILE and authorization.grants == GRANTS
     assert len(scripted.native.callback_responses) == 1

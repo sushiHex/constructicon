@@ -389,6 +389,7 @@ async def test_scripted_callback_candidate_is_accepted_through_the_real_adapter(
     concrete_application, portable_binding, tmp_path, monkeypatch,
 ):
     from tests.maintenance_task_world import configure_executor_guard, scripted_task_executor
+    from tests.model_seat import ideal
 
     resources, _executor, _system, control, launch = concrete_application
     await control.shutdown()
@@ -401,7 +402,8 @@ async def test_scripted_callback_candidate_is_accepted_through_the_real_adapter(
     )
     assert len(program.encode()) <= launch.limits.input_bytes
     resources, executor, scripted, _configuration, authorization = await scripted_task_executor(
-        resources, launch, portable_binding, tmp_path, program, task=CHANNEL_STORED_REPLY)
+        resources, launch, portable_binding, tmp_path, ideal(program), task=CHANNEL_STORED_REPLY)
+    assert scripted.realness.model == "ideal" and not scripted.realness.contained
     assert type(authorization) is ChannelReplyAttemptAuthorization
     configure_executor_guard(monkeypatch)
     result = await entry.run_maintenance(resources=resources, executor=executor,

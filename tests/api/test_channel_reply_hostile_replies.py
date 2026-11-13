@@ -18,20 +18,25 @@ What is real, by tier. Each case asserts which worker launcher it used.
   provisioned lane and is skipped elsewhere.
 
 Never real in either tier: the vendor binary and the model. The native peer is a
-scripted byte channel (``WriteNative``), so a case says what the system does with
-a reply, never whether a model sends it. The placement lane's fake provider
+scripted byte channel, so a case says what the system does with a reply, never
+whether a model sends it. The placement lane's fake provider
 (``tests/native_provider.py``) scripts at most one tool call, and that lane
 answers the call with fixed text, with no worker, capture or gate behind it; it
 cannot carry these cases.
+
+Who answers is the model seat's occupant (``tests/model_seat.py``): ``hostile``
+for the cases, ``replay`` for the same turns as records. Each world's ``Realness``
+is asserted whole, so a case proves which implementations it selected.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
-from dataclasses import fields
+from dataclasses import fields, replace
 from pathlib import Path
 
 import pytest
@@ -68,11 +73,23 @@ from tests.maintenance_task_world import (
     configure_executor_guard,
     scripted_task_executor,
 )
+from tests.model_seat import (
+    RECORD_VERSION,
+    Call,
+    Realness,
+    ReplayDiverged,
+    Seated,
+    Seen,
+    Turn,
+    hostile,
+    live,
+    replay,
+)
+from tests.operator_store_world import StoreWorld
 from tests.substrate.test_channel_reply_oracle import BASE
 from tests.substrate.test_codex_adapter import descriptor_of
 from tests.substrate.test_codex_adapter import portable_binding as portable_binding
 from tests.substrate.test_codex_protocol import completed
-from tests.substrate.test_codex_write import WriteNative
 from tests.substrate.test_contained_gates import MaintenanceNativeLauncher, qualify, unqualified
 from tests.substrate.test_linux_containment import launcher as launcher
 from tests.substrate.test_native_codex_mediation import write_evidence
@@ -178,6 +195,19 @@ WHERE = (
 ACCEPTED = "accepted"
 
 
+def rewrite(seen: tuple[str, ...]) -> str:
+    """The whole target written back from the text the previous call printed."""
+    # What the peer saw: print's trailing newline, and CRLF from a Windows text pipe.
+    text = seen[-1].replace("\r\n", "\n")[:-1]
+    for old, new in ((OLD_REPLY_FOR, NEW_REPLY_FOR), (OLD_ACKNOWLEDGE, NEW_ACKNOWLEDGE),
+                     (LAST_METHOD_END + NEXT_FUNCTION,
+                      LAST_METHOD_END + "\n" + HELPER + NEXT_FUNCTION)):
+        text = text.replace(old, new)
+    return ("from pathlib import Path\n"
+            f"Path({CHANNEL_TARGET_PATH!r}).write_bytes({text.encode()!r})\n"
+            "print('rewrote')\n")
+
+
 def case(programs, outcome, *, node=None, started=None, completed=None, workers=None,
          seen=None):
     """Expected facts; the callback counts default to every program completing."""
@@ -200,6 +230,9 @@ SHARED = {
     "read-then-end": case([READ], "capture-unchanged", node="writer"),
     # The natural two steps. The first prints the whole target.
     "read-then-edit": case([READ, EDIT], ACCEPTED),
+    # The second program is computed from the first output, as a model's is: a
+    # wrong or missing output would write a wrong file.
+    "rewrite-from-what-it-read": case([READ, rewrite], ACCEPTED),
     # A replace that matches nothing and no assert: a silent rewrite of the same bytes.
     "edit-matches-nothing": case([READ, edit_program(checked=False, misremembered=True)],
                                  "capture-unchanged", node="writer"),
@@ -233,8 +266,8 @@ COMPILE = edit_program(after="import py_compile\npy_compile.compile(str(p), dora
 # this interpreter can import the project).
 CONTAINED = {
     name: SHARED[name] for name in (
-        "read-then-end", "read-then-edit", "call-raises", "output-over-bound",
-        "edit-plus-backup",
+        "read-then-end", "read-then-edit", "rewrite-from-what-it-read", "call-raises",
+        "output-over-bound", "edit-plus-backup",
     )
 } | {
     # Where a call runs, as the worker itself reports it.
@@ -251,24 +284,57 @@ CONTAINED = {
 }
 
 
-def hostile_native(programs) -> WriteNative:
-    """The scripted peer: each program as one callback in turn, then completion."""
-    if not programs:
-        native = WriteNative("never sent")
-        native.records[:] = [completed(answer="The file is read-only, so I changed nothing.")]
-        return native
-    return WriteNative(programs[0], callbacks=[
-        WriteNative._callback_for(f"server-{index}", f"call-{index}", program)
-        for index, program in enumerate(programs, 1)
-    ])
+def said(text: str) -> Seen:
+    """A callback output as this platform's pipe delivers it to the peer."""
+    return Seen.of(text.replace("\n", os.linesep))
 
 
-async def attempt(resources, launch, binding, tmp_path, monkeypatch, programs):
-    """One entry run against the scripted reply; the facts a packet would carry."""
-    native = hostile_native(programs)
+WHOLE = said(BASE.decode() + "\n")
+WROTE = said(f"wrote {Path(CHANNEL_TARGET_PATH).name} True\n")
+# Hostile cases as recorded turns: version 1 of the record a live attempt would
+# fill. The hostile runs below assert these are what their seats saw.
+RECORDED = {
+    "read-then-end": Turn((Call(READ, WHOLE),), True, "done"),
+    "read-then-edit": Turn((Call(READ, WHOLE), Call(EDIT, WROTE)), True, "done"),
+    # The failing call returned nothing, and the turn never replied.
+    "edit-then-raise": Turn((Call(EDIT, WROTE), Call(WRONG_PATH, None)), False, None),
+}
+# Records the system no longer reproduces: the reason, and where the run ends.
+DIVERGED = {
+    # Recorded over another file. The first output differs, so the edit is never sent.
+    "another-base": (
+        Turn((Call(READ, Seen.of("another file\n")), Call(EDIT, WROTE)), True, "done"),
+        "call 1: recorded Seen", case([READ], "capture-unchanged", node="writer")[1]),
+    # Recorded as seen, but the adapter refuses this output: nothing comes back.
+    "output-now-refused": (
+        Turn((Call(HEX_DUMP, Seen.of("recorded")), Call(EDIT, WROTE)), True, "done"),
+        "call 1: recorded an output, none was returned",
+        SHARED["output-over-bound"][1]),
+}
+PORTABLE = Realness(model="hostile", worker=PortableProcessLauncher, contained=False,
+                    store_world=StoreWorld, identity="fixture")
+PHYSICAL = replace(PORTABLE, worker=MaintenanceNativeLauncher, contained=True)
+
+
+def sent_as_written(seat: Seated, programs) -> bool:
+    """Every literal program reached the wire as its case wrote it, in order."""
+    return len(seat.sent) <= len(programs) and all(
+        sent == step for sent, step in zip(seat.sent, programs, strict=False)
+        if isinstance(step, str))
+
+
+def seated(programs) -> Seated:
+    """The hostile occupant; with no call at all it still says why."""
+    return hostile(programs) if programs else hostile(
+        (), reply="The file is read-only, so I changed nothing.")
+
+
+async def attempt(resources, launch, binding, tmp_path, monkeypatch, seat: Seated):
+    """One entry run against the seated reply; the facts a packet would carry."""
     resources, executor, scripted, _configuration, authorization = await scripted_task_executor(
-        resources, launch, binding, tmp_path, "", task=CHANNEL_STORED_REPLY, native=native)
-    assert scripted.native is native and authorization.purpose == "channel-stored-reply"
+        resources, launch, binding, tmp_path, seat, task=CHANNEL_STORED_REPLY)
+    native = scripted.native
+    assert native is seat and authorization.purpose == "channel-stored-reply"
     configure_executor_guard(monkeypatch)
     result = await entry.run_maintenance(resources=resources, executor=executor,
         executor_descriptor=descriptor_of(executor, "executor"), authorization=authorization)
@@ -292,14 +358,11 @@ async def attempt(resources, launch, binding, tmp_path, monkeypatch, programs):
     callbacks = record["callbacks"]
     # Which worker ran: every admitted program reached this launcher, in order.
     workers = [kwargs for _command, kwargs in launch.calls if kwargs.get("input_kind") == "task"]
-    assert [kwargs["stdin"].decode() for kwargs in workers] == programs[:len(workers)]
+    assert [kwargs["stdin"].decode() for kwargs in workers] == seat.sent[:len(workers)]
     assert len(workers) == callbacks["admitted_started"]
     assert all(kwargs["posture"] is Posture.WRITE for kwargs in workers)
-    seen = []
-    for response in native.callback_responses:
-        assert response["result"]["success"] is True
-        item, = response["result"]["contentItems"]
-        seen.append(item["text"])
+    assert all(response["result"]["success"] is True for response in seat.callback_responses)
+    assert len(seat.seen) == len(seat.callback_responses)
     # The retained fingerprints are of exactly these bytes: each program as the
     # worker received it, and each output the peer was handed. They are what
     # tells a read and nothing more from a rewrite of the same bytes, which end
@@ -309,27 +372,27 @@ async def attempt(resources, launch, binding, tmp_path, monkeypatch, programs):
         record["facts"], CallbackObservation.model_validate(callbacks)) == content
     assert [item["program"] for item in content["callbacks"]] == [
         by_digest(kwargs["stdin"]) for kwargs in workers]
-    for index, text in enumerate(seen):
+    for index, text in enumerate(seat.seen):
         assert content["callbacks"][index]["output"] == by_digest(text.encode())
     assert [item["output"] is None for item in content["callbacks"]] == [
         category is None for category in callbacks["worker_results"]]
     text = Path(authorization.attempt_record).read_text(encoding="utf-8")
-    assert not any(program.strip() and program in text for program in programs)
+    assert not any(program.strip() and program in text for program in seat.sent)
     return {
         "outcome": outcome, "node": node, "started": callbacks["admitted_started"],
         "completed": callbacks["admitted_completed"],
-        "workers": callbacks["worker_results"], "seen": len(seen),
-    }, seen, content
+        "workers": callbacks["worker_results"], "seen": len(seat.seen),
+    }, scripted.realness, content
 
 
 def by_digest(raw: bytes) -> dict[str, object]:
     return {"sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
 
 
-def retain(tier, name, observed, seen, **extra):
-    write_evidence(f"codex-maintenance-hostile-{tier}-{name}.json", {
-        "issue": 407, "tier": tier, "case": name, **observed,
-        "seen_bytes": [len(text.encode()) for text in seen],
+def retain(tier, name, observed, seat, **extra):
+    write_evidence(f"codex-maintenance-{seat.occupant}-{tier}-{name}.json", {
+        "issue": 407, "tier": tier, "case": name, "model": seat.occupant, **observed,
+        "seen_bytes": [len(text.encode()) for text in seat.seen],
         "instruction_sha256": hashlib.sha256(CHANNEL_INSTRUCTION.encode()).hexdigest(),
         **extra,
     })
@@ -354,6 +417,8 @@ def test_the_scripted_edits_are_what_their_cases_claim(tmp_path):
     assert BASE.decode().count(OLD_REPLY_FOR) == BASE.decode().count(OLD_ACKNOWLEDGE) == 1
     assert BASE.decode().count(REPLY_LOOKUP) == 1
     assert check_extraction(BASE, candidate(EDIT))["passed"] is True
+    assert candidate(rewrite((BASE.decode() + "\n",))) == candidate(EDIT)
+    assert candidate(rewrite(("another file\n",))) != candidate(EDIT)
     for program in (edit_program(helper=DOCSTRING_HELPER), edit_program(also_reply=True),
                     edit_program(acknowledge=False)):
         with pytest.raises(ExtractionRefusal) as refused:
@@ -372,15 +437,78 @@ async def test_a_model_shaped_reply_ends_where_the_packet_says(
 ):
     resources, _executor, _system, control, launch = concrete_application
     await control.shutdown()
-    assert type(launch) is PortableProcessLauncher
     programs, expected = SHARED[name]
-    observed, seen, content = await attempt(resources, launch, portable_binding, tmp_path,
-                                            monkeypatch, programs)
-    retain("portable", name, observed, seen, content_digests=content)
+    seat = seated(programs)
+    observed, realness, content = await attempt(resources, launch, portable_binding, tmp_path,
+                                                monkeypatch, seat)
+    retain("portable", name, observed, seat, content_digests=content)
+    assert realness == PORTABLE and realness.worker is type(launch)
+    assert sent_as_written(seat, programs)
     assert observed == expected, observed
+    if name in RECORDED:
+        assert seat.recording() == RECORDED[name]
     if name == "read-then-end":
         # The peer was handed the whole target, as a model's first step expects.
-        assert seen[0].replace("\r\n", "\n") == BASE.decode() + "\n"
+        assert seat.seen[0].replace("\r\n", "\n") == BASE.decode() + "\n"
+
+
+def test_a_recorded_turn_keeps_its_exact_form_and_the_live_seat_stays_empty():
+    turn = RECORDED["edit-then-raise"]
+    record = json.loads(turn.to_json())
+    assert set(record) == {"version", "calls", "completed", "reply"}
+    assert record["version"] == RECORD_VERSION and record["completed"] is False
+    assert record["reply"] is None and record["calls"][1] == {"program": WRONG_PATH, "seen": None}
+    assert set(record["calls"][0]["seen"]) == {"sha256", "bytes"}
+    assert Turn.from_json(turn.to_json()) == turn
+    for damaged in ({**record, "version": RECORD_VERSION + 1}, {**record, "output": "text"},
+                    {**record, "completed": 0}, {**record, "reply": "said after no completion"},
+                    {**record, "calls": record["calls"][::-1]}):
+        with pytest.raises(ValueError):
+            Turn.from_json(json.dumps(damaged))
+    with pytest.raises(ValueError, match="sent nothing"):
+        replay(Turn((), False, None))
+    # A seat records what its peer emitted, and before the turn that is nothing.
+    assert hostile([READ]).recording() == Turn((), False, None)
+    # A turn may complete without a message; that is not a turn that never completed.
+    wordless = replay(Turn((), True, None))
+    assert wordless.records == [completed(answer=None)]
+    with pytest.raises(NotImplementedError, match="owner-approved window"):
+        live()
+
+
+@CHANNEL
+@pytest.mark.parametrize("name", sorted(RECORDED))
+async def test_a_recorded_turn_replays_to_the_end_it_was_recorded_at(
+    concrete_application, portable_binding, tmp_path, monkeypatch, name,
+):
+    resources, _executor, _system, control, launch = concrete_application
+    await control.shutdown()
+    turn = Turn.from_json(RECORDED[name].to_json())
+    seat = replay(turn)
+    observed, realness, content = await attempt(resources, launch, portable_binding, tmp_path,
+                                                monkeypatch, seat)
+    retain("portable", name, observed, seat, content_digests=content)
+    seat.settle()
+    assert seat.recording() == turn and realness == replace(PORTABLE, model="replay")
+    assert observed == SHARED[name][1], observed
+
+
+@CHANNEL
+@pytest.mark.parametrize("name", sorted(DIVERGED))
+async def test_a_replay_that_diverges_stops_there_and_fails(
+    concrete_application, portable_binding, tmp_path, monkeypatch, name,
+):
+    resources, _executor, _system, control, launch = concrete_application
+    await control.shutdown()
+    turn, reason, expected = DIVERGED[name]
+    seat = replay(turn)
+    observed, realness, _content = await attempt(resources, launch, portable_binding, tmp_path,
+                                                monkeypatch, seat)
+    assert realness == replace(PORTABLE, model="replay")
+    with pytest.raises(ReplayDiverged, match=reason):
+        seat.settle()
+    # Closed loop: the recorded edit after the divergence was never sent or run.
+    assert seat.sent == [turn.calls[0].program] and observed == expected, observed
 
 
 async def contained_world(launcher, tmp_path):
@@ -415,14 +543,39 @@ async def test_a_model_shaped_reply_through_the_contained_worker_capture_and_gat
 ):
     resources, physical = await contained_world(launcher, tmp_path)
     programs, expected = CONTAINED[name]
-    observed, seen, content = await attempt(resources, physical, portable_binding, tmp_path,
-                                            monkeypatch, programs)
+    seat = seated(programs)
+    observed, realness, content = await attempt(resources, physical, portable_binding, tmp_path,
+                                                monkeypatch, seat)
     # Every recorded call really launched through the provisioned boundary.
-    assert type(physical) is MaintenanceNativeLauncher and isinstance(physical, LinuxLauncher)
-    retain("contained", name, observed, seen, content_digests=content,
-           **({"worker_reports": seen[0].splitlines()} if name == "where-am-i" else {}))
+    assert realness == PHYSICAL and realness.worker is type(physical)
+    assert sent_as_written(seat, programs)
+    retain("contained", name, observed, seat, content_digests=content,
+           **({"worker_reports": seat.seen[0].splitlines()} if name == "where-am-i" else {}))
     assert observed == expected, observed
+    if name in RECORDED:
+        assert seat.recording() == RECORDED[name]
     if name == "read-then-end":
-        assert seen[0] == BASE.decode() + "\n"
+        assert seat.seen[0] == BASE.decode() + "\n"
     if name == "where-am-i":
-        assert seen[0].splitlines()[:2] == ["/workspace", "True"], seen[0]
+        assert seat.seen[0].splitlines()[:2] == ["/workspace", "True"], seat.seen[0]
+
+
+@pytest.mark.parametrize("name", ["read-then-edit", "another-base"])
+async def test_a_recorded_turn_through_the_contained_worker_capture_and_gate(
+    launcher, portable_binding, tmp_path, monkeypatch, name,
+):
+    resources, physical = await contained_world(launcher, tmp_path)
+    turn, reason, expected = DIVERGED.get(name) or (RECORDED[name], None, SHARED[name][1])
+    seat = replay(Turn.from_json(turn.to_json()))
+    observed, realness, content = await attempt(resources, physical, portable_binding, tmp_path,
+                                                monkeypatch, seat)
+    assert realness == replace(PHYSICAL, model="replay")
+    retain("contained", name, observed, seat, content_digests=content)
+    assert observed == expected, observed
+    if reason is None:
+        seat.settle()
+        assert seat.recording() == turn
+    else:
+        with pytest.raises(ReplayDiverged, match=reason):
+            seat.settle()
+        assert seat.sent == [turn.calls[0].program]
