@@ -16,6 +16,24 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## The WRITE recovery proof's successor no longer runs on a 0.4 s lease
+
+`test_controller_death_retains_the_worker_guard_until_successor_recovery` failed once in `proof (foundation)` (#417). The retained journal events show the successor reclaiming its own run:
+- Epoch 1 is the killed original. Epoch 2 is the successor's attempt: both leases acquired, one metering intent, no metering outcome. 1.8 s later comes a second `RunReclaimed`, a third epoch with no metering intent, and `recorded proposal did not succeed`.
+- No other process could have claimed the run. The run host handles `OwnershipLost` silently and requeues (`run_host.py`, `_run`); any other failure is reported and deferred, and the successor's stderr carried no such report.
+- Among the fences on an owner's own journal writes, only metering's reads the expiry time and not just owner and epoch (`_sqlite_metering._require_owner`, since #377); a claim by another owner also reads it, and there was no other owner. `test_post_commit_owner_expiry_cannot_use_fresh_intent` pins the result: an owner whose lease lapses after its intent gets `OwnershipLost` at `check_dispatch`, leaving an intent-only attempt.
+- The owner module ran both controllers with `lease_ttl_s=0.4` and an 0.08 s heartbeat. The heartbeat cannot run during a synchronous stretch, and there is one by construction between the intent and the dispatch check: `_before_task_write` (`codex.py`) commits the intent, then `_require_open_sync` runs two `git` subprocesses through `AcquisitionClosure.is_closed`, then `check_dispatch` reads the lease, with no await between them.
+
+The successor now uses the default lease durations. The original keeps 0.4 s, because the test waits for that lease to expire after the kill. On failure, or when the run is not terminal within its bound, the owner module also prints how many handles the successor made and which methods the scripted peer received.
+
+What this does not establish:
+- **What used up the lease.** No heartbeat or call times are retained. The synchronous commit and `git` calls are a mechanism that exists in source; whether they, a scheduling stall or a wall-clock step took the third of a second was not observed.
+- **Which metering call refused, or whether metering was the first failure.** `check_dispatch` and `settle` both apply the fence. `execute` settles before it re-raises any other exception, so an `OwnershipLost` from that settlement replaces an earlier failure and the run host stays silent either way. In the new failure output, `turn/start` among the peer's methods means the dispatch check had passed; it does not name a replaced error.
+- **Why the third attempt failed.** One scripted peer serves the whole successor process, and a finished conversation closes its stdin for good (`tests/substrate/test_codex_adapter.py`, `ScriptedNative.close_stdin` and `write`), so a later conversation's first write is refused before any metering intent. That reading comes from source; it was not run.
+- **Anything about #410.** This test's provider carries no authorization, so its handle has no attempt record and #410's digest code returns before hashing anything. Nothing ties the failure to it, and nothing here retests it.
+- **The original controller.** It still has the same margin before it reports. A lapse there would fail a different assertion (`worker_calls == 1`); that has not been seen.
+- **Production margins.** The same synchronous stretch runs under the default 30 s lease, and each `git` call may take up to its 60 s timeout. Whether the fence should be read without subprocess work in between is a design question this slice leaves open.
+
 ## The live path is named in ARCHITECTURE.md, and a direction is proposed
 
 Docs only; no source or test changed.
