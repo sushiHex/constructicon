@@ -16,6 +16,30 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## WRITE instructions state the callback guards that end an attempt
+
+A refused callback gets no reply, so the model cannot learn a guard by tripping it. `TOOL_PREFIX` now states the ones that apply to both executors:
+- **Eight calls.** `codex_protocol.MAX_TOOL_CALLS`, and the Claude WRITE recipe's `call_limit`.
+- **Only stdout comes back.** `codex.py` returns `result.stdout`; `claude_read_worker.py` returns the same; stderr never reaches the model.
+- **A non-zero worker is terminal.** The guard reads the exit status, not the exception: an uncaught exception in the main program exits non-zero, while one in a thread can still exit zero. Both executors refuse the callback (`codex.py` "the contained callback worker did not complete"; `claude_read_worker.py` "worker process refused"). The writer then fails before capture.
+- **More than 32768 bytes of output is terminal.** `codex_protocol.TOOL_OUTPUT_BYTES`, and Claude's `WRITE_WORKER_LIMITS.stdout_bytes`.
+
+It also tells the model to catch exceptions and print them as errors, to use only the standard library (the worker is `/usr/bin/python3 -I` in the runtime root, which carries no project), and to print a one-line confirmation in the call that writes only if the re-read file holds its edit. A caught failure exits zero, so the confirmation is the model's only evidence of a write; the oracle still judges the captured tree. The channel task names the `reply` method as a look-alike that must stay unchanged: it repeats two of the extracted statements, and the oracle (`channel_reply.CALLERS`) rewrites only `reply_for` and `acknowledge`.
+
+Two more facts are stated:
+- **A later failing call loses an earlier correct write.** The writer fails before capture whichever call was refused, so the prefix says "even after an earlier call wrote correctly" and tells the model to check by printing rather than asserting. Observed in the hostile-reply lane (PR #412).
+- **Do not run git.** Capture stages everything and commits only a dirty tree (`substrate/git/capture.py`, `_CAPTURE`), so the model never needs it. One commit by the model would pass the sole-parent check and two would be refused; neither is exercised by a test.
+
+Not forbidden, because they work: a `/workspace/...` path, and `py_compile` (its `__pycache__` is ignored and not captured, per the same lane).
+
+The numbers are literals in the text. The instruction test holds them equal to the code's constants for both executors.
+
+What this does not establish:
+- **That a model heeds it.** No real model has run this instruction.
+- **Other terminal causes are not listed.** Invalid UTF-8 output, the per-attempt timeout and the 128 KiB program bound also end an attempt; the prefix stays short and omits them.
+- **The application revision changes again.** A package built for an earlier revision cannot run this one.
+- **No guard, oracle or checker changed.**
+
 ## Model-shaped replies to the stored-reply task are pinned to their refusals
 
 `tests/api/test_channel_reply_hostile_replies.py` drives the channel stored-reply task with replies shaped like a model's, not the one correct program, and pins where each ends. It has two tiers over one scripted native peer:
@@ -52,6 +76,7 @@ What it did not:
 - **Claude's WRITE path.** Codex adapter only.
 - **A model that runs `git` itself.** The worker can reach it; no case commits or stages.
 
+
 ## The first request of a maintenance WRITE turn is retained offline
 
 The placement lane (real pinned Codex binary, loopback fake provider) now runs one production WRITE turn per maintenance task with the task's real instruction as its input (`tests/substrate/test_provider_placement.py`, `test_a_maintenance_write_turn_shows_the_model_its_instruction_and_one_tool`). Each capture lands in the `proof (lifecycle)` artifact as a `codex-placement-*.json` whose `model_visible` field names #407, the task purpose and the instruction's SHA-256.
@@ -66,6 +91,7 @@ What this does not establish:
 - **That a model writes.** The provider is a fixture that answers with fixed text. Only a live attempt measures a model's behaviour.
 - **The live request byte for byte.** The lane swaps the provider and the catalog path (`tests/native_inventory.py`, `probe_setup`). Production's provider and authentication may change vendor-authored text.
 - **Claude's request.** This lane is Codex only.
+
 
 ## WRITE instructions name their one tool, its working directory and the capture
 
