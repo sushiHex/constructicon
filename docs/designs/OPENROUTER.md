@@ -4,6 +4,12 @@ Status: proposed integration scope, 2026-09-10. Tracks
 [#47](https://github.com/sushiHex/constructicon/issues/47); not approved M8
 scope, a qualified adapter, or authorization for account access or paid calls.
 
+Status note, 2026-11-12: the text below is the 2026-09-10 assessment and is
+unchanged. Its statement that the Pi adapter is unimplemented is no longer
+current: a bounded local Pi READ profile has since been built and qualified
+(see M8 in [ARCHITECTURE.md](../ARCHITECTURE.md#milestones)). OpenRouter
+through Pi remains untested and unselected.
+
 ## Recommendation
 
 Use the planned Pi executor with an explicit OpenRouter configuration. Do not

@@ -32,6 +32,7 @@ the eventual code differs.
 
 | Record | Status |
 | --- | --- |
+| [Six unifications: fold the live path back into the kernel](handoffs/architecture-unifications-proposal.md) | Review draft, 2026-11-12, against `main` at `c9f0c84` ([#407](https://github.com/sushiHex/constructicon/issues/407)). A proposed architecture direction with its evidence and open questions. Not approved; it authorizes no implementation, installation, host operation or model attempt |
 | [Executor metering observations](handoffs/executor-metering-observations-proposal.md) | Accepted by the owner on 2026-11-05 for [#376](https://github.com/sushiHex/constructicon/issues/376); [ADR 0024](../adr/0024-retain-native-executor-metering.md) records adoption. Original proposal bytes are preserved; runtime evidence is separate |
 | [Run-scoped ordinary attestation identity](handoffs/run-scoped-attestation-identity-proposal.md) | Accepted by the owner on 2026-11-05; [ADR 0023](../adr/0023-ordinary-attestations-bind-their-minting-run.md) records adoption and implementation authority. Original proposal bytes are preserved; runtime evidence is separate |
 
@@ -75,6 +76,7 @@ the eventual code differs.
 | Record | Purpose |
 | --- | --- |
 | [Stored-reply operator package](handoffs/maintenance-channel-reply-session.md) | Source-bound closed-step template and producer-to-consumer offline composition; unresolved declarations refuse a normal build, original installers retain their shell settings, and no host operation or model attempt is authorized |
+| [Maintenance attempt content digests](handoffs/maintenance-attempt-content-digests.md) | Delivery record for the attempt's `content_digests` block (#407): digests and lengths of callback programs, outputs and the reply, never text, and the installed diagnostic's pinned bytes for that era; no package, window or live attempt is authorized |
 | [Second fixed maintenance task delivery](handoffs/maintenance-channel-reply-delivery.md) | Credential-free implementation of the closed `channel-stored-reply` task: stdlib whole-module exam, unchanged plan-manifest wire (golden), task-crossing, revision and redispatch boundaries, differential calibration; the target stays unrefactored, and no installation or live run is authorized |
 | [Maintenance rehearsal launcher and packet](handoffs/maintenance-launcher-record.md) | Test-side credential-free maintenance rehearsal outside pytest (synthetic base, fake peer/store, portable launcher) and a shipped bounded read-only result packet; current journal schema only, no live attempt |
 | [Second fixed maintenance task decision](handoffs/maintenance-channel-reply-task.md) | Proposed closed `channel-stored-reply` task beside the unchanged plan-manifest task: stdlib whole-module exact-extraction exam, identity/installation consequences and exception boundaries; no implementation, installation or live run authorized |

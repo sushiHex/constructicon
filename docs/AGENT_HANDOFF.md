@@ -16,6 +16,99 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## The api import contracts cover every api module, and metering names its routes once
+
+Two import-linter contracts enumerate children of `constructicon.api` by hand, because import-linter has no "every child except" form. Both had gaps. `tests/test_layer_contracts.py` now derives the children from the entries of the package directory (any file, any directory, with or without `__init__.py`), so a new entry fails that test until a contract names it:
+- **"Only the MCP adapter imports mcp"** now names every api child except `mcp`. It was missing `_claude_read_fixture`, `_metered_native`, `claude_qualification`, `claude_write_qualification` and `maintenance_report`.
+- **"The MCP adapter never reaches the qualification entry"** now forbids every api child outside the control surface (`control`, `system` and what those two import: `_control_commands`, `_control_queries`, `_metered_native`, `cursor`, `detail`, `introspection`, `run_host`). It was missing `_claude_read_fixture`, `claude_qualification`, `claude_write_qualification`, `maintenance_report` and `plan_manifest_application`. A new module is forbidden by default; the control-surface list in the test is the one place that admits one.
+
+A reported gap that was wrong: `_metered_native` cannot join the second contract. `api.system` imports it and the adapter imports `api.system`, so listing it breaks the contract on a legitimate chain (checked with a scratch copy of the configuration).
+
+`api/_metered_native.py` now holds one table of admitted native routes: each row gives the route's provider class, its handle class, its `MeteringSource` and how its fixed model is read. A route is selected by class identity (`type(x) is`), never by equality or hashing; the first draft used a dictionary lookup, and the review showed that a subclass whose metaclass answers `==` and `hash` for an admitted class would pass it. `api/system.py` asks `is_metered_route` and no longer names a vendor class. The refusals and their order are the ones the two `if type(...) is` chains gave, with one stricter: a route's meter is installed only on that route's own handle class, where either vendor's handle was accepted before.
+
+What this does not do:
+- **The test does not see `api/__init__.py` or import-linter's own semantics.** An import written in the package's `__init__.py` is outside both lists (naming the package as a source would include the adapter), and how a listed package covers its descendants is import-linter's rule. The test refuses `as_packages`, `allow_indirect_imports` and `ignore_imports` on both contracts.
+- **No L0 protocol for metering.** A structural contract needs `metering_source` and a model attribute on both providers. Adding them edits `substrate/executors/codex.py` and `substrate/executors/claude_provider.py`, and each module's `ADAPTER_REVISION` is a digest of its own whole source (`codex.py`, the `claude-read-owned-adapter` module set). That half waits for a planned requalification.
+- **Only the whole-tree identities move.** The changed source files, `api/_metered_native.py` and `api/system.py`, are in none of the per-file or per-module pins (the vendor adapter and protocol revisions, the maintenance application's eight files, the launcher, workspace, store and fixture pins). Two identities cover every file under `src/constructicon` and move with this change as with any source change: the installed controller tree, and `m9-installed-source` (`api/_m9/proposer.py`, `source_revision`), which an existing M9 trial directory is checked against (`api/_m9/trial.py`, `M9_STORE_SOURCE_OR_IDENTITY_DRIFT`). The first draft of this entry said no source-derived revision moves; the review corrected it.
+
+## The WRITE recovery proof's successor no longer runs on a 0.4 s lease
+
+`test_controller_death_retains_the_worker_guard_until_successor_recovery` failed once in `proof (foundation)` (#417). The retained journal events show the successor reclaiming its own run:
+- Epoch 1 is the killed original. Epoch 2 is the successor's attempt: both leases acquired, one metering intent, no metering outcome. 1.8 s later comes a second `RunReclaimed`, a third epoch with no metering intent, and `recorded proposal did not succeed`.
+- No other process could have claimed the run. The run host handles `OwnershipLost` silently and requeues (`run_host.py`, `_run`); any other failure is reported and deferred, and the successor's stderr carried no such report.
+- Among the fences on an owner's own journal writes, only metering's reads the expiry time and not just owner and epoch (`_sqlite_metering._require_owner`, since #377); a claim by another owner also reads it, and there was no other owner. `test_post_commit_owner_expiry_cannot_use_fresh_intent` pins the result: an owner whose lease lapses after its intent gets `OwnershipLost` at `check_dispatch`, leaving an intent-only attempt.
+- The owner module ran both controllers with `lease_ttl_s=0.4` and an 0.08 s heartbeat. The heartbeat cannot run during a synchronous stretch, and there is one by construction between the intent and the dispatch check: `_before_task_write` (`codex.py`) commits the intent, then `_require_open_sync` runs two `git` subprocesses through `AcquisitionClosure.is_closed`, then `check_dispatch` reads the lease, with no await between them.
+
+The successor now uses the default lease durations. The original keeps 0.4 s, because the test waits for that lease to expire after the kill. On failure, or when the run is not terminal within its bound, the owner module also prints how many handles the successor made and which methods the scripted peer received.
+
+What this does not establish:
+- **What used up the lease.** No heartbeat or call times are retained. The synchronous commit and `git` calls are a mechanism that exists in source; whether they, a scheduling stall or a wall-clock step took the third of a second was not observed.
+- **Which metering call refused, or whether metering was the first failure.** `check_dispatch` and `settle` both apply the fence. `execute` settles before it re-raises any other exception, so an `OwnershipLost` from that settlement replaces an earlier failure and the run host stays silent either way. In the new failure output, `turn/start` among the peer's methods means the dispatch check had passed; it does not name a replaced error.
+- **Why the third attempt failed.** One scripted peer serves the whole successor process, and a finished conversation closes its stdin for good (`tests/substrate/test_codex_adapter.py`, `ScriptedNative.close_stdin` and `write`), so a later conversation's first write is refused before any metering intent. That reading comes from source; it was not run.
+- **Anything about #410.** This test's provider carries no authorization, so its handle has no attempt record and #410's digest code returns before hashing anything. Nothing ties the failure to it, and nothing here retests it.
+- **The original controller.** It still has the same margin before it reports. A lapse there would fail a different assertion (`worker_calls == 1`); that has not been seen.
+- **Production margins.** The same synchronous stretch runs under the default 30 s lease, and each `git` call may take up to its 60 s timeout. Whether the fence should be read without subprocess work in between is a design question this slice leaves open.
+
+## The live path is named in ARCHITECTURE.md, and a direction is proposed
+
+Docs only; no source or test changed.
+
+`docs/ARCHITECTURE.md` now has:
+- **Live execution.** The run permit (the qualification authorization and the maintenance attempt authorizations), the two records of intent written before a dispatch (the attempt record file and the journal's metering intent), and the rule that a maintenance run needs a journal holding nothing else. It also states that a maintenance contribution does not install its candidate.
+- **Glossary.** The words that name more than one thing: channel, maintenance, qualification, candidate, manifest, receipt, grant, attempt, and generation versus epoch.
+- **The mutation count.** The facade has thirteen mutations (`api/control.py`), not twelve. The failure-test table now says thirteen too: `tests/api/test_capability_disposal.py` covers the three response-loss seams for the thirteenth (read, not run here).
+
+`docs/plans/handoffs/architecture-unifications-proposal.md` is a review draft, not an approved plan. It proposes six unifications (identity per meaning, one permit law, one refusal code, one model seat, one ledger, one path ending in `merge_verified`) with evidence read at `c9f0c84`, and lists what five review passes could not verify.
+
+What this does not establish:
+- **Approval of the direction as a whole.** Two owner decisions were relayed to the draft on 2026-11-12 (bind the instruction by digest before generation 19; retain a model's programs and reply as bytes on the private host), and their own records govern. The journal as the only attempt budget still needs an ADR.
+- **The detailed designs.** `docs/designs/RUN_PERMIT.md` and `docs/designs/REFUSAL_CODE.md` (PR #416) and `docs/designs/INSTRUCTION_BINDING.md` carry the detail and govern where they differ. They narrowed two unifications: the permit law is shared as functions over a closed union, not a base class, and the refusal code retires sentence matching, not the other vocabularies. A code names a guard, so `capture-unchanged` stays one code and the #407 digests separate its three shapes.
+- **The open questions in the draft.** In particular, whether a revision change always forces live requalification is inferred, not confirmed.
+
+The review pass found that two unifications hold only under conditions, now stated in the draft: a journal-only attempt budget must survive a journal reset as the attempt file does, and installing through `merge_verified` needs the history proof moved before the effect.
+
+Left unchanged on purpose: ADR 0021's reliance on proposed ADR 0020, and the `canary` step in ADR 0004 and `designs/SELF_IMPROVEMENT.md`. `docs/adr/README.md` no longer says that no live model adapter exists, and `designs/OPENROUTER.md` gained a dated status note instead of a rewrite.
+
+## A maintenance attempt retains digests and lengths of its callback content and reply
+
+The #397 generation-18 refusal (`capture-unchanged`) could not be classified, because nothing retained what the model's one callback program was, what it printed, or what the model finally said (#407 item 2). A maintenance attempt's outcome facts now carry `content_digests`, and the installed diagnostic and the maintenance report packet project it at `diagnostic.attempt.content_digests`:
+- one entry per admitted callback, in admitted order: the sha256 and byte length of the program handed to the worker as stdin, and of the worker's retained stdout;
+- the sha256 and byte length of the outcome's output text. That is the terminal answer on success, the last completed message otherwise, and null when the outcome carries none.
+
+What it does not establish:
+- **Content.** Only digests and lengths are kept; no program, output or reply text is. A length separates a short read from an edit, and a digest confirms a guess. It is a fingerprint, not a confidentiality boundary.
+- **Anything about READ or WRITE qualification attempts.** Their readers pin the facts' exact key set, so the block is emitted only when the provider carries a maintenance authorization. Claude's executor has no maintenance path and emits nothing.
+- **Older records.** A record without the block reads as `"unrecorded"`. A block the producer could not state exactly reads as `"unrecordable"`. A block refuses the attempt stage when it disagrees with the admitted callbacks beside it, carries an output without its program, or, on a successful outcome, states a reply whose length differs from `answer_bytes`.
+- **A worst-case packet bound.** The capture-unchanged packet with eight maximal entries measured 3,737 of 8,192 bytes; the largest possible packet of every other shape was not measured.
+- **An unchanged adapter.** `codex.py` changed, so `ADAPTER_REVISION` changes and anything bound to it needs regenerating. `codex_protocol.py` and the maintenance application sources did not change, so `PROTOCOL_REVISION` and the application revision hold. The contract lives in its own module, `core/attempt_content.py`, because the WRITE report definition hashes all of `core/qualification_write.py`; that definition holds too.
+- **Durability before the outcome.** Callback observations are written as they happen; the digests stay in memory until the outcome is settled. A hard kill after a completed callback keeps its category and loses its fingerprint.
+- **What a program did.** A fingerprint and a length cannot say whether a program read or edited anything; two programs of equal length can do either.
+
+## WRITE instructions state the callback guards that end an attempt
+
+A refused callback gets no reply, so the model cannot learn a guard by tripping it. `TOOL_PREFIX` now states the ones that apply to both executors:
+- **Eight calls.** `codex_protocol.MAX_TOOL_CALLS`, and the Claude WRITE recipe's `call_limit`.
+- **Only stdout comes back.** `codex.py` returns `result.stdout`; `claude_read_worker.py` returns the same; stderr never reaches the model.
+- **A non-zero worker is terminal.** The guard reads the exit status, not the exception: an uncaught exception in the main program exits non-zero, while one in a thread can still exit zero. Both executors refuse the callback (`codex.py` "the contained callback worker did not complete"; `claude_read_worker.py` "worker process refused"). The writer then fails before capture.
+- **More than 32768 bytes of output is terminal.** `codex_protocol.TOOL_OUTPUT_BYTES`, and Claude's `WRITE_WORKER_LIMITS.stdout_bytes`.
+
+It also tells the model to catch exceptions and print them as errors, to use only the standard library (the worker is `/usr/bin/python3 -I` in the runtime root, which carries no project), and to print a one-line confirmation in the call that writes only if the re-read file holds its edit. A caught failure exits zero, so the confirmation is the model's only evidence of a write; the oracle still judges the captured tree. The channel task names the `reply` method as a look-alike that must stay unchanged: it repeats two of the extracted statements, and the oracle (`channel_reply.CALLERS`) rewrites only `reply_for` and `acknowledge`.
+
+Two more facts are stated:
+- **A later failing call loses an earlier correct write.** The writer fails before capture whichever call was refused, so the prefix says "even after an earlier call wrote correctly" and tells the model to check by printing rather than asserting. Observed in the hostile-reply lane (PR #412).
+- **Do not run git.** Capture stages everything and commits only a dirty tree (`substrate/git/capture.py`, `_CAPTURE`), so the model never needs it. One commit by the model would pass the sole-parent check and two would be refused; neither is exercised by a test.
+
+Not forbidden, because they work: a `/workspace/...` path, and `py_compile` (its `__pycache__` is ignored and not captured, per the same lane).
+
+The numbers are literals in the text. The instruction test holds them equal to the code's constants for both executors.
+
+What this does not establish:
+- **That a model heeds it.** No real model has run this instruction.
+- **Other terminal causes are not listed.** Invalid UTF-8 output, the per-attempt timeout and the 128 KiB program bound also end an attempt; the prefix stays short and omits them.
+- **The application revision changes again.** A package built for an earlier revision cannot run this one.
+- **No guard, oracle or checker changed.**
+
+
 ## Model-shaped replies to the stored-reply task are pinned to their refusals
 
 `tests/api/test_channel_reply_hostile_replies.py` drives the channel stored-reply task with replies shaped like a model's, not the one correct program, and pins where each ends. It has two tiers over one scripted native peer:
@@ -52,6 +145,7 @@ What it did not:
 - **Claude's WRITE path.** Codex adapter only.
 - **A model that runs `git` itself.** The worker can reach it; no case commits or stages.
 
+
 ## The first request of a maintenance WRITE turn is retained offline
 
 The placement lane (real pinned Codex binary, loopback fake provider) now runs one production WRITE turn per maintenance task with the task's real instruction as its input (`tests/substrate/test_provider_placement.py`, `test_a_maintenance_write_turn_shows_the_model_its_instruction_and_one_tool`). Each capture lands in the `proof (lifecycle)` artifact as a `codex-placement-*.json` whose `model_visible` field names #407, the task purpose and the instruction's SHA-256.
@@ -66,6 +160,7 @@ What this does not establish:
 - **That a model writes.** The provider is a fixture that answers with fixed text. Only a live attempt measures a model's behaviour.
 - **The live request byte for byte.** The lane swaps the provider and the catalog path (`tests/native_inventory.py`, `probe_setup`). Production's provider and authentication may change vendor-authored text.
 - **Claude's request.** This lane is Codex only.
+
 
 ## WRITE instructions name their one tool, its working directory and the capture
 

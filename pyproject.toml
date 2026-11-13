@@ -82,6 +82,8 @@ source_modules = ["constructicon.runtime"]
 forbidden_modules = ["constructicon.substrate"]
 
 # MCP is an optional L4 transport. No other package may import it.
+# The api entries are every child of constructicon.api except mcp itself;
+# tests/test_layer_contracts.py derives that set from the package directory.
 [[tool.importlinter.contracts]]
 name = "Only the MCP adapter imports mcp"
 type = "forbidden"
@@ -90,42 +92,55 @@ source_modules = [
     "constructicon.substrate",
     "constructicon.runtime",
     "constructicon.sdk",
+    "constructicon.api._claude_read_fixture",
     "constructicon.api._control_commands",
     "constructicon.api._control_queries",
+    "constructicon.api._m9",
+    "constructicon.api._maintenance_identity",
+    "constructicon.api._maintenance_source",
+    "constructicon.api._metered_native",
+    "constructicon.api._qualification_write_assembly",
+    "constructicon.api._qualification_write_graph",
+    "constructicon.api._qualification_write_report",
+    "constructicon.api.claude_qualification",
+    "constructicon.api.claude_write_qualification",
     "constructicon.api.control",
     "constructicon.api.cursor",
     "constructicon.api.detail",
     "constructicon.api.introspection",
-    "constructicon.api.plan_manifest_application",
-    "constructicon.api.maintenance_entry",
-    "constructicon.api._maintenance_source",
-    "constructicon.api._maintenance_identity",
-    "constructicon.api.qualification",
     "constructicon.api.m9_trial",
-    "constructicon.api._m9",
-    "constructicon.api._qualification_write_graph",
-    "constructicon.api._qualification_write_assembly",
-    "constructicon.api._qualification_write_report",
+    "constructicon.api.maintenance_entry",
+    "constructicon.api.maintenance_report",
+    "constructicon.api.plan_manifest_application",
+    "constructicon.api.qualification",
     "constructicon.api.run_host",
     "constructicon.api.system",
 ]
 forbidden_modules = ["mcp"]
 
-# M8 N5 Stage 1: the qualification entry is not a caller-selectable surface.
+# M8 N5 Stage 1: no fixed-task entry is a caller-selectable surface. The MCP
+# adapter may reach only the control surface (control, system and what they
+# import); every other child of constructicon.api is forbidden here, so a new
+# module is refused until tests/test_layer_contracts.py admits it by name.
 [[tool.importlinter.contracts]]
 name = "The MCP adapter never reaches the qualification entry"
 type = "forbidden"
 source_modules = ["constructicon.api.mcp"]
 forbidden_modules = [
-    "constructicon.api.qualification",
-    "constructicon.api.m9_trial",
+    "constructicon.api._claude_read_fixture",
     "constructicon.api._m9",
-    "constructicon.api.maintenance_entry",
-    "constructicon.api._maintenance_source",
     "constructicon.api._maintenance_identity",
-    "constructicon.api._qualification_write_graph",
+    "constructicon.api._maintenance_source",
     "constructicon.api._qualification_write_assembly",
+    "constructicon.api._qualification_write_graph",
     "constructicon.api._qualification_write_report",
+    "constructicon.api.claude_qualification",
+    "constructicon.api.claude_write_qualification",
+    "constructicon.api.m9_trial",
+    "constructicon.api.maintenance_entry",
+    "constructicon.api.maintenance_report",
+    "constructicon.api.plan_manifest_application",
+    "constructicon.api.qualification",
 ]
 
 # Dependency budget: the kernel imports stdlib + pydantic only.

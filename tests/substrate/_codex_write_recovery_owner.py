@@ -13,6 +13,7 @@ import json
 import os
 import signal
 import sys
+from contextlib import suppress
 from dataclasses import fields
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from constructicon.core.native_operator import NativeOperatorStoreIdentityV1
 from constructicon.core.run import RunStatus
 from constructicon.core.workspace import acquisition_id_for
 from constructicon.runtime.registry import CapabilityDescriptor
+from constructicon.runtime.walker import DEFAULT_HEARTBEAT_INTERVAL_S, DEFAULT_LEASE_TTL_S
 from constructicon.substrate.executors.linux import LinuxLauncher
 from constructicon.substrate.executors.operator_store import BindingStore
 from constructicon.substrate.git.acquisition import AcquisitionPaths
@@ -99,11 +101,19 @@ def assemble(root: Path, owner: str, *, recover: bool):
         binding=(_binding(), workspace.closure),
         root=root / "executor",
     )
+    # The original's lease is short because the test waits for it to expire after
+    # the kill. Nothing waits for the successor's lease, and a short one is a
+    # scheduling margin: metering refuses dispatch on an expired lease
+    # (_sqlite_metering._require_owner), so a loop stall past the TTL makes the
+    # successor abandon its own attempt and reclaim the run at a third epoch (#417).
+    ttl_s, heartbeat_s = (
+        (DEFAULT_LEASE_TTL_S, DEFAULT_HEARTBEAT_INTERVAL_S) if recover else (0.4, 0.08)
+    )
     system = Constructicon(
         journal=journal,
         owner_id=owner,
-        lease_ttl_s=0.4,
-        heartbeat_interval_s=0.08,
+        lease_ttl_s=ttl_s,
+        heartbeat_interval_s=heartbeat_s,
         root_grants=WRITE_GRANTS,
         capabilities={"capture": workspace, "recorded": executor},
         catalog={
@@ -193,13 +203,27 @@ async def _recover(root: Path) -> None:
         records = journal.run_records(limit=2)
         assert len(records) == 1
         run_id = records[0].run_id
-        async with asyncio.timeout(40):
-            while journal.run_state(run_id).status not in (
-                RunStatus.SUCCEEDED, RunStatus.FAILED,
-            ):
-                await asyncio.sleep(0.01)
+        # A run still not terminal after the bound fails the assertion below, so
+        # the same facts are printed for a timeout as for a failed run.
+        with suppress(TimeoutError):
+            async with asyncio.timeout(40):
+                while journal.run_state(run_id).status not in (
+                    RunStatus.SUCCEEDED, RunStatus.FAILED,
+                ):
+                    await asyncio.sleep(0.01)
         state = journal.run_state(run_id)
-        assert state.status is RunStatus.SUCCEEDED, journal.events(run_id)
+        # On failure only: how far the attempts in this process got. More than
+        # one handle means the successor reclaimed its own run. ``turn/start``
+        # among the peer's methods means the dispatch check had passed; the
+        # facts do not name an earlier error that a settlement refusal replaced.
+        assert state.status is RunStatus.SUCCEEDED, {
+            "status": state.status.value,
+            "handles": len(executor.handles),
+            "peer_methods": native.methods,
+            "callback_responses": len(native.callback_responses),
+            "worker_calls": len(launcher.worker_calls),
+            "events": journal.events(run_id),
+        }
         rows = journal.capability_leases(run_id)
         workspace_row = max(
             (item for item in rows if item.binding_id == "workspace"),

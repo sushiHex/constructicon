@@ -17,7 +17,7 @@ from typing import Any, Literal
 
 from pydantic import ValidationError
 
-from constructicon.api._metered_native import MeteredNativeOperator
+from constructicon.api._metered_native import MeteredNativeOperator, is_metered_route
 from constructicon.api.introspection import (
     build_component_description,
     build_system_description,
@@ -71,8 +71,6 @@ from constructicon.runtime.walker import (
 from constructicon.sdk.types import DefinitionBundle
 from constructicon.substrate.effects.channel import ChannelSendEffect
 from constructicon.substrate.effects.git import MergeVerifiedEffect
-from constructicon.substrate.executors.claude_provider import ClaudeOperatorProvider
-from constructicon.substrate.executors.codex import CodexOperatorProvider
 from constructicon.substrate.gates.contained import ContainedGateRunner
 from constructicon.substrate.gates.runner import BoundGateRunner, CheckSpec, GateRunner
 from constructicon.substrate.git.authority import GitAuthority, GitWorkspaceCapability
@@ -280,10 +278,7 @@ class Constructicon:
         execution_capabilities = dict(self._capabilities)
         if isinstance(journal, SqliteJournal):
             for capability_id, resource in self._capabilities.items():
-                if capability_id in self._catalog and (
-                    type(resource) is CodexOperatorProvider
-                    or type(resource) is ClaudeOperatorProvider
-                ):
+                if capability_id in self._catalog and is_metered_route(resource):
                     execution_capabilities[capability_id] = MeteredNativeOperator(journal, resource)
         self._walker = Walker(
             registry=self._registry,

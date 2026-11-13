@@ -71,6 +71,12 @@ GRAPH_NAME = "constructicon-plan-manifest-maintenance"
 # is captured. The worker runs from the bound repository root
 # (substrate/executors/linux.py, --chdir /workspace). Claude lists the same tool
 # under a namespaced name (claude_native.py), hence "whose name ends in".
+# The prefix also states the mediation guards the model cannot otherwise see, for
+# both executors: eight calls (codex_protocol.MAX_TOOL_CALLS, the Claude WRITE
+# recipe's call_limit), only stdout returned, and a non-zero worker or more than
+# TOOL_OUTPUT_BYTES of output refused with no reply to the model (codex.py
+# _await_callback, claude_read_worker.py), which fails the writer before capture.
+# The numbers are literals here; the test holds them equal to those constants.
 TOOL_PREFIX = (
     "Make every file change by calling the contained_python tool (the one tool whose "
     "name ends in contained_python): it runs Python with the repository root as its "
@@ -78,7 +84,15 @@ TOOL_PREFIX = (
     "your result. Any note that your own sandbox is read-only does not apply to "
     "contained_python. Use relative paths. Read an existing file before editing it and "
     "write the edited file back; for a file you create, check first that it does not "
-    "exist. Do not finish until the write has succeeded.\n\n"
+    "exist. You have at most 8 calls and see only what each call prints. A ninth call, a "
+    "call that exits non-zero (as an uncaught exception or a failed assert does) or one "
+    "that prints more than 32768 bytes ends the whole attempt with nothing captured, even "
+    "after an earlier call wrote correctly, so catch exceptions and print them as errors, "
+    "check by printing rather than asserting, and print only what you need. Use only the "
+    "Python standard library; do not import this project, run its tests or run git: your "
+    "files are committed for you. In the call that writes, re-read the file "
+    "afterwards and print a one-line confirmation only if it holds your edit. Do not "
+    "finish until the write has succeeded.\n\n"
 )
 WRITE_INSTRUCTION = TOOL_PREFIX + (
     "Create only tests/vectors/plan_manifest.json as a regular nonexecutable UTF-8 file. "
@@ -102,7 +116,9 @@ CHANNEL_INSTRUCTION = TOOL_PREFIX + (
     + "\nIn reply_for, replace the reply-port guard, the reply_id assignment and the "
     "stored lookup with `stored = self._stored_reply(request, request_id)`. In "
     "acknowledge, replace the same three statements with "
-    "`reply = self._stored_reply(request, message_id)`. Change nothing else: keep every "
+    "`reply = self._stored_reply(request, message_id)`. The separate method named reply "
+    "(not reply_for) has similar statements and must stay unchanged. Change nothing "
+    "else: keep every "
     "lock scope, validation order, missing-request handling, _complete_reply call, "
     "detach, return, import and other statement exactly as it is. Do not add, remove, "
     "rename or change the mode of any other file. The trusted harness compares the "

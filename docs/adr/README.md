@@ -22,7 +22,9 @@ Accepted [ADR 0018](0018-live-executors-are-leased-contained-processes.md)
 and the [frozen M8 plan](../plans/milestones/M8-live-executors-rev1.md)
 define a Linux-first leased process boundary, complete live executor
 profiles, and gateway-only initial authentication for the v1 profile. PR A–D
-are merged; no live model adapter exists. Accepted ADR 0021 supersedes the
+are merged. No live model adapter existed at that acceptance; the adapters
+built since are listed under M8 in [ARCHITECTURE.md](../ARCHITECTURE.md#milestones).
+Accepted ADR 0021 supersedes the
 authentication clauses for the explicit v3 profile only; gateway v1 is
 unchanged and unselected. Operator deployment is separate from GitHub
 Actions proof runs.
