@@ -23,15 +23,18 @@ Docs only; no source or test changed.
 `docs/ARCHITECTURE.md` now has:
 - **Live execution.** The run permit (the qualification authorization and the maintenance attempt authorizations), the two records of intent written before a dispatch (the attempt record file and the journal's metering intent), and the rule that a maintenance run needs a journal holding nothing else. It also states that a maintenance contribution does not install its candidate.
 - **Glossary.** The words that name more than one thing: channel, maintenance, qualification, candidate, manifest, receipt, grant, attempt, and generation versus epoch.
-- **The mutation count.** The facade has thirteen mutations (`api/control.py`), not twelve.
+- **The mutation count.** The facade has thirteen mutations (`api/control.py`), not twelve. The failure-test table now says thirteen too: `tests/api/test_capability_disposal.py` covers the three response-loss seams for the thirteenth (read, not run here).
 
-`docs/plans/handoffs/architecture-unifications-proposal.md` is a review draft, not an approved plan. It proposes six unifications (identity per meaning, one permit, one refusal code, one model seat, one ledger, one path ending in `merge_verified`) with evidence read at `c9f0c84`, and lists what five review passes could not verify.
+`docs/plans/handoffs/architecture-unifications-proposal.md` is a review draft, not an approved plan. It proposes six unifications (identity per meaning, one permit law, one refusal code, one model seat, one ledger, one path ending in `merge_verified`) with evidence read at `c9f0c84`, and lists what five review passes could not verify.
 
 What this does not establish:
-- **Approval of any unification.** Two need an owner decision (binding the instruction by digest; retaining a model's programs and reply as private bytes) and one needs an ADR (the journal as the only attempt budget).
+- **Approval of the direction as a whole.** Two owner decisions were relayed to the draft on 2026-11-12 (bind the instruction by digest before generation 19; retain a model's programs and reply as bytes on the private host), and their own records govern. The journal as the only attempt budget still needs an ADR.
+- **The detailed designs.** `docs/designs/RUN_PERMIT.md` and `docs/designs/REFUSAL_CODE.md` (PR #416) and `docs/designs/INSTRUCTION_BINDING.md` carry the detail and govern where they differ. They narrowed two unifications: the permit law is shared as functions over a closed union, not a base class, and the refusal code retires sentence matching, not the other vocabularies. A code names a guard, so `capture-unchanged` stays one code and the #407 digests separate its three shapes.
 - **The open questions in the draft.** In particular, whether a revision change always forces live requalification is inferred, not confirmed.
 
-Left unchanged on purpose: the failure-test table's "all twelve mutations" (the proof's coverage of the thirteenth was not checked), ADR 0021's reliance on proposed ADR 0020, and the `canary` step in ADR 0004 and `designs/SELF_IMPROVEMENT.md`. `docs/adr/README.md` no longer says that no live model adapter exists, and `designs/OPENROUTER.md` gained a dated status note instead of a rewrite.
+The review pass found that two unifications hold only under conditions, now stated in the draft: a journal-only attempt budget must survive a journal reset as the attempt file does, and installing through `merge_verified` needs the history proof moved before the effect.
+
+Left unchanged on purpose: ADR 0021's reliance on proposed ADR 0020, and the `canary` step in ADR 0004 and `designs/SELF_IMPROVEMENT.md`. `docs/adr/README.md` no longer says that no live model adapter exists, and `designs/OPENROUTER.md` gained a dated status note instead of a rewrite.
 
 ## A maintenance attempt retains digests and lengths of its callback content and reply
 

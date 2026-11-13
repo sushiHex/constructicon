@@ -388,9 +388,13 @@ custody, with no retry
 The follow-up is open as [#407](https://github.com/sushiHex/constructicon/issues/407),
 the one open issue in the M8 milestone. Merged so far: instructions that name the
 one write tool, where it runs and what is captured
-([#408](https://github.com/sushiHex/constructicon/pull/408)); the retained
+([#408](https://github.com/sushiHex/constructicon/pull/408)) and state the
+guards that end an attempt
+([#411](https://github.com/sushiHex/constructicon/pull/411)); the retained
 first request of a maintenance WRITE turn
-([#409](https://github.com/sushiHex/constructicon/pull/409)); and model-shaped
+([#409](https://github.com/sushiHex/constructicon/pull/409)); retained
+digests and lengths of an attempt's callback content and reply
+([#410](https://github.com/sushiHex/constructicon/pull/410)); and model-shaped
 replies pinned to their refusals
 ([#412](https://github.com/sushiHex/constructicon/pull/412)). None of these
 shows that a model now writes; only a further authorized attempt can.

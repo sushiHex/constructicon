@@ -3,10 +3,26 @@
 Status: review draft, 2026-11-12, written against `main` at `c9f0c84`.
 A proposed direction. It authorizes no implementation, installation, host
 operation or model attempt, and it changes no invariant or accepted ADR.
-Each unification needs its own reviewed change, and those marked below need an
-owner decision or an ADR first.
+Each unification needs its own reviewed change.
 
 Refs [#407](https://github.com/sushiHex/constructicon/issues/407).
+
+## Detailed designs and decisions
+
+This document is the map. Three design documents carry the detail, and where
+they differ from an earlier draft of this one, they govern:
+
+| Unification | Design | Where |
+| --- | --- | --- |
+| 1, instruction half | `docs/designs/INSTRUCTION_BINDING.md` | branch `feat/instruction-bound-by-digest`; not on the remote when this was written, so its content is unread here |
+| 2 | `docs/designs/RUN_PERMIT.md` | PR [#416](https://github.com/sushiHex/constructicon/pull/416), a proposal |
+| 3 | `docs/designs/REFUSAL_CODE.md` | PR [#416](https://github.com/sushiHex/constructicon/pull/416), a proposal |
+
+Two owner decisions were relayed to this draft on 2026-11-12. They are recorded
+here as relayed, and their own records govern:
+
+- The instruction is bound by digest before generation 19.
+- A model's programs and reply are retained as bytes on the private host.
 
 ## How to read the evidence
 
@@ -24,17 +40,18 @@ receipts, and one command law.
 
 M8 and M9 reuse that kernel for execution. A maintenance attempt is a real
 Graph started through `runs_start`, and its acceptance is a journal-minted
-attestation. Around that run they built a second system: a second kind of
-authority, a second ledger, a second vocabulary for refusal, and identity
-derived from files rather than from meaning. Each is a special case of a
-kernel idea that was rebuilt beside it.
+attestation. Around that run they built a second system: a second copy of the
+authority law, a second ledger, cause carried as prose, and identity derived
+from files rather than from meaning. Each is a special case of a kernel idea
+that was rebuilt beside it.
 
 Two consequences are visible today:
 
-- **A wording change costs a release.** The generation-18 attempt was refused
-  because of instruction wording
+- **A wording change costs a release.** The generation-18 attempt left its
+  candidate unchanged and was refused
   ([outcome record](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6785983613)).
-  Correcting the wording changes an application revision and the installed
+  Why is not retained (`api/plan_manifest_application.py:67-69`); instruction
+  wording is the inferred cause. Correcting the wording changes an application revision and the installed
   controller tree, so the next attempt needs a new package, an installation and
   new authorizations.
 - **The central promise is not exercised by a live contribution.** The
@@ -45,15 +62,17 @@ Two consequences are visible today:
 
 ## The six unifications
 
-Each row folds a parallel mechanism into one idea. None loosens a guard: every
-proposal keeps exactness and attestation, and either narrows what a pin covers
-or moves a fact to the place that already holds facts of its kind.
+Each row folds a parallel mechanism into one idea. None is meant to loosen a
+guard: every proposal keeps exactness and attestation, and either narrows what
+a pin covers or moves a fact to the place that already holds facts of its
+kind. For 5 and 6 that holds only under the conditions their sections state,
+and a design that cannot meet them should not be built.
 
 | # | One... | Folds into | Retires |
 | --- | --- | --- | --- |
 | 1 | identity per meaning | content identity (ADR 0006) | whole-file revisions; the instruction hashed three times and shown nowhere |
-| 2 | permit | the capability lease law | two authorization types with copied predicates |
-| 3 | refusal code | the sealed `NodeFailed` event | exception prose as the wire format |
+| 2 | permit law | the capability lease law | the second copy of one predicate and one grant shape; both permit types stay |
+| 3 | refusal code | the sealed `NodeFailed` event | sentence matching as the carrier of cause; the other vocabularies stay |
 | 4 | model seat | the executor seam (ADR 0005) | all-or-nothing model realness in tests |
 | 5 | ledger | the journal (ADR 0007, ADR 0024) | the attempt file and the dedicated journal |
 | 6 | path | `merge_verified` | the hand-made pull request |
@@ -64,7 +83,8 @@ or moves a fact to the place that already holds facts of its kind.
 
 - `PROTOCOL_REVISION` hashes all of `codex_protocol`
   (`substrate/executors/codex.py:240`), tool description included.
-- `ADAPTER_REVISION` hashes all of `codex.py` (`codex.py:2619-2620`).
+- `ADAPTER_REVISION` hashes all of `codex.py`
+  (`substrate/executors/codex.py:2619-2620`).
 - The launcher revision hashes all of `linux.py`
   (`substrate/executors/linux.py:626`).
 - The maintenance application revision hashes eight whole files
@@ -98,23 +118,24 @@ eight files and never sees a digest of the words the model will read.
 hashed. The exam is untouched, so a wrong instruction can cost an attempt but
 cannot produce a false acceptance: the gate still decides (I12).
 
-**Needs an owner decision.** Source currently says the instruction is "never a
+**Decided for the first half.** Source says the instruction is "never a
 caller-selected instruction or exam" (`core/maintenance.py:32`,
-`api/plan_manifest_application.py:8-10`). The first half restates that as
-"owner-approved by digest". The channel instruction also interpolates the
-oracle's helper source, so a data copy needs a parity check against it.
+`api/plan_manifest_application.py:8-10`). Binding by digest restates that as
+"owner-approved by digest", and the owner's decision to do so before
+generation 19 was relayed on 2026-11-12. The channel instruction interpolates
+the oracle's helper source, so a data copy needs a parity check against it.
 
 **Cost.** Instruction half: medium, and it needs one last controller
 installation. Unit half: large, with one deliberate requalification per vendor.
 
-### 2. One permit
+### 2. One permit law
 
 **Today.** Two authorization types carry the same idea, a root-custody permit
-for exactly one run:
+for exactly one run, and each holds its own copy of the law:
 
-- `acquisition_faults` is the same ten-row predicate in both, differing only
-  in the epoch bound and the refusal prefix (`core/qualification.py:156-174`,
-  `core/maintenance.py:170-190`).
+- `acquisition_faults` is the same ten-row predicate in both, differing in the
+  epoch bound, in whether grants may be unpinned, and in the refusal prefix
+  (`core/qualification.py:156-174`, `core/maintenance.py:170-190`).
 - The bounded WRITE grant shape is written out twice
   (`core/qualification.py:109-118`, `core/maintenance.py:145-154`).
 - Both are read through one root-custody primitive, "shared by the separate
@@ -123,16 +144,26 @@ for exactly one run:
   holding such an authorization for exactly this graph
   (`runtime/validator.py:338-361`).
 
-**Proposal.** One L0 run permit with a typed purpose and payload. The two
-existing types become two purposes of it, with byte-identical wire goldens.
+**Proposal.** Share the law, not the type. `docs/designs/RUN_PERMIT.md` puts
+the predicates in L0 functions that accept a closed union of the two existing
+types. There is no base class: a base holding the common fields would change
+the field order of printed permits, and tests pin those bytes.
+
+The two capability pins are not duplicates and both stay.
+`MaintenanceCapabilityPin` bounds its id at 256 characters
+(`core/maintenance.py:101`); `QualificationCapabilityPin` has no upper bound
+(`core/qualification_write.py:35`).
 
 **Guarantee preserved.** Root-file custody; exact run, path, binding, graph,
 capability, revision, operator binding, grants, epoch and expiry pins; timeless
-admission.
+admission; every printed byte and refusal sentence, pinned by goldens first.
 
-**Cost.** Medium. It touches no vendor revision *(inferred: both types live in
-`core/`, outside the adapter modules; the application revision does include
-`core/maintenance.py`)*.
+**Cost.** Only the golden tests are free. Adoption edits files that two
+revisions hash whole: `core/maintenance.py` is in the maintenance application
+revision (`api/_maintenance_identity.py:14-18`), and `core/qualification.py` is
+in the Claude adapter revision
+(`substrate/executors/claude_provider.py:881-885`). Adoption therefore belongs
+inside the planned requalification.
 
 ### 3. One refusal code
 
@@ -143,29 +174,41 @@ A specific cause is computed at its producer and then travels as English:
   (`runtime/walker.py:1831-1835`).
 - The maintenance diagnostic recovers the cause by exact-matching eleven
   sentences (`substrate/journal/maintenance_diagnostic.py:67-79`, `:298-304`).
-- One name covers several causes. A captured candidate equal to the base is
-  `capture-unchanged` whether the model made no call, only read, or rewrote
-  the file unchanged (`api/plan_manifest_application.py:153-154`;
-  `tests/api/test_channel_reply_hostile_replies.py` pins the three).
 - Any callback fault becomes "the contained callback failed" with a type name
   (`substrate/executors/codex.py:966`).
 - The gate's refusal already carries "a closed reason code; never
-  candidate-controlled diagnostic text" (`substrate/gates/channel_reply.py:55`),
+  candidate-controlled diagnostic text" (`substrate/gates/channel_reply.py:55-56`),
   and a failed gate is then reported as one sentence
   (`api/plan_manifest_application.py:186-190`).
 
-**Proposal.** One closed cause code, carried beside the prose from producer to
-report: an attribute on the violation, a field of the `NodeFailed` payload,
-and a projected field of the report. The sentence table becomes the fallback
-for records written before the code existed.
+**Proposal.** One closed code, carried beside the prose from producer to
+report: an attribute on the violation and a field of the sealed `NodeFailed`
+event. `docs/designs/REFUSAL_CODE.md` has the design. Its scope is narrower
+than "one taxonomy":
+
+- **One mechanism retires**: sentence matching as the carrier of cause. The
+  sentence table stays only as the reader for events written before codes.
+- **The other vocabularies stay.** Most answer a different question (a worker
+  result category, an executor error kind, a preflight stage) and do not
+  collapse into one set.
+- **A code names a guard, not a behaviour.** A captured candidate equal to the
+  base is one guard (`api/plan_manifest_application.py:153-154`), so
+  `capture-unchanged` stays one code. Its three shapes (no call, a read only,
+  a rewrite that changed nothing) are separated by retained callback and reply
+  digests ([#407](https://github.com/sushiHex/constructicon/issues/407) item 2),
+  not by the code.
+- **A failed gate does not split either** without a changed exam, by the
+  design's own account.
 
 **Guarantee preserved.** Codes are drawn from closed sets and carry no
 model-authored content, so the "digests and lengths, never text" bound holds.
-Sealed events and report readers pin exact shapes, so this lands as a new
-schema era beside the old one (ADR 0016), never as a widened old record.
+An uncoded failure's payload stays byte-identical.
 
-**Cost.** Medium. Whether a new `CheckResult` field needs an era of its own is
-an [open question](#open-questions).
+**Cost.** Staged, and stated per step in the design. The first step (the code
+type and the walker) moves no source-derived revision that the design found. Passing codes from the
+application moves the maintenance application revision. Carrying a callback's
+code through the adapters moves both adapter revisions and the Codex protocol
+revision, and belongs in the planned requalification.
 
 ### 4. One model seat
 
@@ -177,9 +220,12 @@ an [open question](#open-questions).
 - A fake provider sits above the real binary. It answers with at most one tool
   call, and nothing stands behind it (`tests/native_provider.py:85-97`).
 
-A live attempt is the only place every part meets. It retains counts and
-categories of callbacks, never their content
-(`core/qualification_write.py:160-172`).
+A live attempt is the only place every part meets. At `c9f0c84` it retained
+counts and categories of callbacks, never their content
+(`core/qualification_write.py:160-172`). PR
+[#410](https://github.com/sushiHex/constructicon/pull/410), merged after that
+commit, adds digests and lengths of each program, its output and the reply.
+Those classify an attempt; they cannot replay one.
 
 **Proposal.** Name the seat that the hostile-reply harness already has, and
 give it four occupants: ideal script, hostile script, recorded replay, live.
@@ -188,9 +234,9 @@ divergence.
 
 **Guarantee preserved.** Test-only. No product guard changes.
 
-**Needs an owner decision.** Replay needs the model's programs and reply as
-bytes, held privately. Digests and lengths classify a failure but cannot replay
-it. That is a private-output policy choice.
+**Decided.** Replay needs the model's programs and reply as bytes. The owner's
+decision to retain them on the private host was relayed on 2026-11-12. Nothing
+retained that way may enter public text, a report or the repository.
 
 **Cost.** Small for the seat. Retention is a separate change.
 
@@ -200,7 +246,11 @@ it. That is a private-output policy choice.
 
 - the journal's metering intent, `meter.intend()`
   (`substrate/executors/codex.py:1758`, ADR 0024);
-- the attempt file's intent, `self.attempt.intend()` (`codex.py:1773`).
+- the attempt file's intent, `self.attempt.intend()`
+  (`substrate/executors/codex.py:1773`).
+
+Both precede the write of `turn/start`, not the first native write: native
+start-up requests are sent earlier (`substrate/executors/codex.py:782-783`).
 
 The attempt file exists because the budget must "outlive a journal reset". It
 is "not an executor ledger (ADR 0018:331-332), which the owner set aside for
@@ -215,12 +265,18 @@ a journal that holds no other component and no other run
 permit was consumed. Live runs then use the standing journal, with the
 "nothing else" rule replaced by a check scoped to the permit and its manifest.
 
-**Guarantee preserved.** One attempt per permit; intent before the first
-native write; a possibly dispatched attempt is never retried.
+**Guarantee to preserve.** One attempt per permit; intent before `turn/start`
+is written; a possibly dispatched attempt is never retried.
+
+**Condition.** The file refuses a second acquisition even after the journal is
+reset or replaced: it is reserved outside the journal and an existing
+reservation refuses (`substrate/executors/attempt_record.py:1-8`). A journal
+row vanishes with the journal. So this unification holds only if the design
+says how consumption survives a reset, or forbids reset and replacement while
+a permit is usable. Without that it loosens a guard and must not be built.
 
 **Needs an ADR.** This changes the live path and retires a recorded owner
-exception. It rests on an [unproven premise](#open-questions): that a journal
-row is as strong as the file against the stated threat model.
+exception.
 
 **Cost.** Large. It depends on 2.
 
@@ -233,10 +289,21 @@ claim installation, merge, or durable rendered-artifact storage"
 **Proposal.** End the fixed Graph in `merge_verified` against the private
 authority. Export becomes a projection bound to the effect receipt.
 
-**Guarantee preserved.** The exact prepared merge commit, the moved-base
+**Guarantee to preserve.** The exact prepared merge commit, the moved-base
 refusal, and the one-parent history proof.
 
-**Cost.** Small to medium. It is the last step because it changes what a live
+**Condition.** Appending the effect is not enough, for two reasons:
+
+- The history proof runs outside the Graph today, after it has succeeded
+  (`api/plan_manifest_application.py:658-664`). A candidate can pass the Graph
+  and its attestation and still fail that proof. The proof must become a
+  trusted step before the effect, or a refused candidate would be installed.
+- Acceptance today requires the target ref to equal the pinned base
+  (`api/plan_manifest_application.py:525-526`). After an installation it no
+  longer does. Acceptance before installation and reporting after it must
+  become two steps.
+
+**Cost.** Medium. It is the last step because it changes what a live
 window does.
 
 ## Sequence
@@ -245,9 +312,12 @@ window does.
 | --- | --- | --- |
 | Before generation 19 | The instruction half of 1 | Generation 19 already needs an installation; this makes it the last one caused by wording |
 | MVP window | One live attempt under its own scope and approval | #407 |
-| After, with no requalification | 2, 3, 4 | None touches a vendor revision *(inferred for 3: the callback refusal sits in `codex.py`, which is pinned)* |
-| One planned requalification | The unit half of 1 | Every later split and the shared native-operator lifecycle wait on it |
+| After, moving no vendor revision | 4; the golden tests of 2; the first step of 3 | Tests only, or files outside every source-derived revision |
+| One planned requalification | The unit half of 1; adoption of 2; the adapter steps of 3 | Each edits files a revision hashes whole, so they land together |
 | Last | 5, then 6 | They change the live path itself |
+
+If the planned requalification is not taken, 2 stops at its goldens and 3 at
+the steps that move no adapter revision. Both designs say so.
 
 ## Open questions
 
@@ -260,11 +330,10 @@ Carried from the reviews. None is established.
   double hashing in unification 1 assumes.
 - Whether the workflow file's full digest, or only values derived from it,
   enters host identity.
-- Whether adding a field to `CheckResult` changes sealed attestation bytes and
-  so needs an ADR 0016 era.
-- Whether a journal row is as strong as the attempt file. The file's own
-  threat model says "the runtime is not an adversary of its own budget"
-  (`attempt_record.py:15-17`).
+- How a journal record of a consumed permit would survive a journal reset, as
+  the attempt file does. The file's own threat model says "the runtime is not
+  an adversary of its own budget"
+  (`substrate/executors/attempt_record.py:15-17`).
 - Whether operator packages already built enforce exact key sets that a new
   report field would break.
 - What the capture does when a write lands only on ignored paths, and so
@@ -275,15 +344,13 @@ Carried from the reviews. None is established.
   approvals falling to about 12 and one) are estimates from procedure text,
   not from a session log, and are not relied on here.
 - Whether a real model can be reached outside a window at all.
+- The content of `docs/designs/INSTRUCTION_BINDING.md`, which was not
+  available to read when this draft was written.
 
 ## Records this draft leaves unchanged
 
 These were named as stale and are left as written, for the reason given:
 
-- `docs/ARCHITECTURE.md`, failure-test table, "across all twelve mutations".
-  The facade has thirteen mutations (`api/control.py:482-673`). Whether the
-  response-loss proof covers the thirteenth was not checked, so the claim about
-  the proof is not edited.
 - ADR 0021 (accepted) cites the egress design of ADR 0020 (proposed). ADR 0020's
   status line already records the relationship; accepted ADR text is not
   rewritten.
