@@ -309,18 +309,22 @@ CALLBACK_OUTPUT = "contained fixture output"
 
 
 async def inventory_turn(image, tmp_path, *, without=(), write=False, tool=None, arguments=None,
-                         namespace=None):
+                         namespace=None, prompt=PLACEMENT_PROMPT, label=None):
     """One production turn of the mode at ``gpt-6.1-sol``, its layers less ``without``.
 
     Initialize, the thread and the turn are the adapter's own requests. A
     callback is answered as the adapter answers it; any other server request
-    fails the lane, since nothing else may reach the client.
+    fails the lane, since nothing else may reach the client. ``prompt`` is the
+    turn's one text input, which the fake provider requires as the exact last
+    user message; ``label`` names the retained capture.
     """
 
     config, files = probe_setup(*without)
     callbacks = []
 
     async def turn(wire, observed):
+        if label is not None:
+            observed["model_visible"] = label
         observed["placement"] = (await wire.read())["placement"]
         observed["bootstrap"] = await wire.read()
         opened = initialize_request(0, client=CLIENT_NAME, version=CLIENT_VERSION,
@@ -332,7 +336,7 @@ async def inventory_turn(image, tmp_path, *, without=(), write=False, tool=None,
         )["params"])
         started = await wire.rpc("turn/start", {
             "threadId": thread["thread"]["id"],
-            "input": [{"type": "text", "text": PLACEMENT_PROMPT}],
+            "input": [{"type": "text", "text": prompt}],
         })
         while (message := await wire.read()).get("method") != "turn/completed":
             if "id" in message:
@@ -345,7 +349,7 @@ async def inventory_turn(image, tmp_path, *, without=(), write=False, tool=None,
         await wire.drain()
 
     async with placement(image, model=PREPARE_MODEL, tool=tool, arguments=arguments,
-                         namespace=namespace) as (composed, peer, record):
+                         namespace=namespace, scenario=prompt) as (composed, peer, record):
         _observations, result = await observe(
             composed, peer, tmp_path, record=record, query=turn, config=config, files=files,
         )
@@ -382,6 +386,58 @@ async def test_a_sealed_write_turn_offers_only_the_callback_and_it_answers(
     # the item's own ``id`` is the vendor's.
     assert {key: value for key, value in output.items() if key != "id"} == {
         "type": "function_call_output", "call_id": "call_probe", "output": CALLBACK_OUTPUT}
+
+
+READ_ONLY_NOTE = (
+    "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is "
+    "`read-only`: The sandbox only permits reading files."
+)
+"""The vendor's permissions sentence for the thread's ``sandbox: "read-only"``
+(``codex_protocol.thread_start_request``), as observed in this lane's captures."""
+
+
+def message_texts(request, role):
+    return [part["text"] for item in request["input"]
+            if item.get("type") == "message" and item.get("role") == role
+            for part in item["content"]]
+
+
+@pytest.mark.parametrize("purpose", ["plan-manifest-maintenance", "channel-stored-reply"])
+async def test_a_maintenance_write_turn_shows_the_model_its_instruction_and_one_tool(
+    placement_image, tmp_path, purpose,
+):
+    """The first request a real maintenance WRITE turn sends, retained as sent (#407).
+
+    Production's thread and configuration with the task's real instruction as the
+    turn's one input, exactly as ``turn_request`` sends it. The capture records
+    what the model is shown; whether a model then writes is not measured here.
+    """
+
+    from constructicon.api.plan_manifest_application import TOOL_PREFIX, task_for_purpose
+
+    instruction = task_for_purpose(purpose).instruction
+    assert instruction.startswith(TOOL_PREFIX) and len(instruction) > len(TOOL_PREFIX)
+    requests, callbacks = await inventory_turn(
+        placement_image, tmp_path, write=True, prompt=instruction,
+        label={"issue": 407, "purpose": purpose,
+               "instruction_sha256": hashlib.sha256(instruction.encode()).hexdigest()},
+    )
+    assert len(requests) == 1 and not callbacks
+    request, = requests
+    # The one tool, under the name the prefix tells the model to look for.
+    assert offered_tools(request) == INVENTORY["sealed"]["write"]
+    assert tool_inventory(request) == ["functions.contained_python"]
+    # The instruction, prefix first, is the whole last user message.
+    users = message_texts(request, "user")
+    assert users[-1] == instruction and users[-1].startswith(TOOL_PREFIX)
+    assert sum(TOOL_PREFIX in text for text in users) == 1
+    # The vendor tells the model its sandbox is read-only, once, as a developer.
+    permissions = [text for text in message_texts(request, "developer") if READ_ONLY_NOTE in text]
+    assert len(permissions) == 1
+    assert not any("sandbox_mode" in text for text in users)
+    # No working directory is shown: the thread's cwd (NATIVE_CWD) never reaches
+    # the model, so only the prefix says where contained_python runs.
+    assert "<cwd>" not in json.dumps(request)
 
 
 @pytest.mark.parametrize("without", [
