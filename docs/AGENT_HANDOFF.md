@@ -26,6 +26,12 @@ A refused callback gets no reply, so the model cannot learn a guard by tripping 
 
 It also tells the model to catch exceptions and print them as errors, to use only the standard library (the worker is `/usr/bin/python3 -I` in the runtime root, which carries no project), and to print a one-line confirmation in the call that writes only if the re-read file holds its edit. A caught failure exits zero, so the confirmation is the model's only evidence of a write; the oracle still judges the captured tree. The channel task names the `reply` method as a look-alike that must stay unchanged: it repeats two of the extracted statements, and the oracle (`channel_reply.CALLERS`) rewrites only `reply_for` and `acknowledge`.
 
+Two more facts are stated:
+- **A later failing call loses an earlier correct write.** The writer fails before capture whichever call was refused, so the prefix says "even after an earlier call wrote correctly" and tells the model to check by printing rather than asserting. Observed in the hostile-reply lane (PR #412).
+- **Do not run git.** Capture stages everything and commits only a dirty tree (`substrate/git/capture.py`, `_CAPTURE`), so the model never needs it. One commit by the model would pass the sole-parent check and two would be refused; neither is exercised by a test.
+
+Not forbidden, because they work: a `/workspace/...` path, and `py_compile` (its `__pycache__` is ignored and not captured, per the same lane).
+
 The numbers are literals in the text. The instruction test holds them equal to the code's constants for both executors.
 
 What this does not establish:

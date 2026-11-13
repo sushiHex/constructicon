@@ -948,11 +948,14 @@ def test_every_write_instruction_names_its_one_tool_where_it_runs_and_what_is_ca
     assert ClaudeNativeRecipe.STREAM_JSON_WRITE.call_limit == MAX_TOOL_CALLS
     assert WRITE_WORKER_LIMITS.stdout_bytes == TOOL_OUTPUT_BYTES
     for phrase in (f"You have at most {MAX_TOOL_CALLS} calls and see only what each call prints.",
-                   "A call that exits non-zero (as an uncaught exception does) or prints more "
-                   f"than {TOOL_OUTPUT_BYTES} bytes ends the whole attempt with nothing captured",
-                   "catch exceptions and print them as errors, and print only what you need.",
-                   "Use only the Python standard library; do not import this project or run "
-                   "its tests.",
+                   "A ninth call, a call that exits non-zero (as an uncaught exception or a "
+                   "failed assert does) or one that prints more than "
+                   f"{TOOL_OUTPUT_BYTES} bytes ends the whole attempt with nothing captured, "
+                   "even after an earlier call wrote correctly",
+                   "catch exceptions and print them as errors, check by printing rather than "
+                   "asserting, and print only what you need.",
+                   "Use only the Python standard library; do not import this project, run "
+                   "its tests or run git: your files are committed for you.",
                    "In the call that writes, re-read the file afterwards and print a one-line "
                    "confirmation only if it holds your edit."):
         assert phrase in TOOL_PREFIX, phrase
