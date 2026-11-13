@@ -185,9 +185,13 @@ async def prepare_task_attempt(
 async def scripted_task_executor(
     resources, process_launcher, binding, tmp_path, program, *, task=None,
     authorization=None, authorization_id="full-tree-task-witness", key="one-task",
-    attempt_record=None,
+    attempt_record=None, native=None,
 ):
-    """The real adapter, scripted native peer and the task's own exact authorization."""
+    """The real adapter, scripted native peer and the task's own exact authorization.
+
+    ``native`` replaces the one-callback peer with another scripted peer (several
+    callbacks, or none); ``program`` is then unused.
+    """
     from constructicon.api.plan_manifest_application import PLAN_MANIFEST
 
     task = PLAN_MANIFEST if task is None else task
@@ -195,8 +199,8 @@ async def scripted_task_executor(
     scripted = ScriptedWorkerLauncher(
         **{name: getattr(prototype, name) for name in (
             "runtime_root", "expected_runtime", "bubblewrap", "policy", "expected_policy_sha256",
-        )}, native=write_native(program=program), result=FINISHED,
-        process_launcher=process_launcher,
+        )}, native=write_native(program=program) if native is None else native,
+        result=FINISHED, process_launcher=process_launcher,
     )
     # The real entry requires one exact launcher object for the executor and
     # workspace; the gate shares it too. Rebuild identified companion pins.
