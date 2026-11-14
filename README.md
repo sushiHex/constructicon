@@ -17,11 +17,13 @@ same typed control plane.
 
 > Authored intent may be ergonomic. Executed reality must be explicit.
 
-**Developer preview.** M1 through M7.1 are complete, and M8 (live executors)
-reached its bounded closure: executor contracts, networkless Linux containment,
-contained WRITE capture and gates, and three adapters with recorded evidence.
-Codex and Claude Code have accepted historical subscription READ and WRITE
-evidence; Pi has a qualified bounded local READ profile. M9 (self-improvement
+**Developer preview.** M1 through M7.1 are complete, and the M8 (live
+executors) milestone is closed under a bounded acceptance: executor contracts,
+networkless Linux containment, contained WRITE capture and gates, and three
+adapters with recorded evidence. Codex and Claude Code have accepted historical
+subscription READ and WRITE evidence, and a live Codex maintenance attempt
+wrote a real edit that the application accepted; Pi has a qualified bounded
+local READ profile. M9 (self-improvement
 through evaluated candidates) delivered its bounded first phase: an installed
 fixed selector trial, run live once through owner approval, promotion and
 rollback.
@@ -335,13 +337,15 @@ scope:
 | M6 | Durable authenticated command law, race-safe hosting, revision-pinned reads, MCP v2 adapter, and counterfactual replay |
 | M7 | Durable channels, human advice and approval, restart-safe waiting, and deterministic panels |
 | M7.1 | Explicit panel membership, ordered mapped fan-in, exact endpoint diagnostics, and strengthened counterfactual admission |
-| M8 (bounded closure) | Executor policy and launch identity, networkless Linux containment, contained WRITE capture and gates, and Codex, Claude Code and Pi adapters with bounded evidence |
+| M8 (bounded closure) | Executor policy and launch identity, networkless Linux containment, contained WRITE capture and gates, Codex, Claude Code and Pi adapters with bounded evidence, and one accepted live maintenance edit |
 | M9 (bounded first phase) | A fixed self-improvement trial, run live once: catalog selection, scripted exam, owner approval, journal proof, promotion and rollback |
 
 ### M8: live executors
 
 M8 closed under the bounded acceptance recorded in
-[#42](https://github.com/sushiHex/constructicon/issues/42). It includes complete
+[#42](https://github.com/sushiHex/constructicon/issues/42); its last open issue,
+[#407](https://github.com/sushiHex/constructicon/issues/407), closed on
+2026-11-14 with the milestone. It includes complete
 executor grant policy, content-bound launch identity, record-before-materialization leases, a
 networkless Linux launcher, owned READ/WRITE workspaces, and process cleanup
 that survives controller death. Failure of the trusted reaper itself is outside
@@ -378,26 +382,43 @@ vectors were recovered into an ordinary contribution in [PR #250](https://github
 The [recovery record](docs/plans/handoffs/M8-implementation-record.md#q13-contribution-recovered-and-published-for-review-refs-245-186)
 separates the historical exam from current-source regression evidence.
 
-A second fixed maintenance task, the stored-reply extraction, had one
-authorized live attempt ([#397](https://github.com/sushiHex/constructicon/issues/397)).
-The application completed normally and accepted no candidate: the writer was
-refused as `capture-unchanged`, because the attempt left the target at its
-base. The window then withdrew its generation, parked the host and released
-custody, with no retry
+A second fixed maintenance task, the stored-reply extraction, took two
+authorized live windows of one attempt each. In generation 18
+([#397](https://github.com/sushiHex/constructicon/issues/397)) the model
+made one callback, the target stayed at its base, and the writer was refused
+as `capture-unchanged`
 ([outcome record](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6785983613)).
-The follow-up is open as [#407](https://github.com/sushiHex/constructicon/issues/407),
-the one open issue in the M8 milestone. Merged so far: instructions that name the
-one write tool, where it runs and what is captured
-([#408](https://github.com/sushiHex/constructicon/pull/408)) and state the
-guards that end an attempt
-([#411](https://github.com/sushiHex/constructicon/pull/411)); the retained
-first request of a maintenance WRITE turn
-([#409](https://github.com/sushiHex/constructicon/pull/409)); retained
-digests and lengths of an attempt's callback content and reply
-([#410](https://github.com/sushiHex/constructicon/pull/410)); and model-shaped
-replies pinned to their refusals
-([#412](https://github.com/sushiHex/constructicon/pull/412)). None of these
-shows that a model now writes; only a further authorized attempt can.
+The follow-up, [#407](https://github.com/sushiHex/constructicon/issues/407),
+changed what the model is told and what an attempt retains, not the effort
+or sandbox settings:
+
+- the instruction names the one write tool, where it runs and what is
+  captured ([#408](https://github.com/sushiHex/constructicon/pull/408)),
+  states the guards that end an attempt
+  ([#411](https://github.com/sushiHex/constructicon/pull/411)), and is pinned
+  by digest as the target is
+  ([#420](https://github.com/sushiHex/constructicon/pull/420));
+- the model-visible first request was captured offline on the pinned client
+  ([#409](https://github.com/sushiHex/constructicon/pull/409));
+- an attempt records digests and lengths of its callback programs, their
+  output and the reply
+  ([#410](https://github.com/sushiHex/constructicon/pull/410)), and keeps the
+  turn itself only on the private host
+  ([#419](https://github.com/sushiHex/constructicon/pull/419));
+- model-shaped replies are pinned to their refusals
+  ([#412](https://github.com/sushiHex/constructicon/pull/412)), and the
+  application's writer, capture, checker and gate guards record a typed
+  refusal code in their journal events
+  ([#428](https://github.com/sushiHex/constructicon/pull/428)).
+
+In generation 19 the model made two callbacks, and the application was
+**accepted**. The window then withdrew
+its generation, parked the host and released custody
+([outcome record](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6872120435)).
+That closed #407 and the M8 milestone. It is one accepted attempt on one fixed
+task at one recorded revision: evidence that the bounded path carries a real
+model edit to acceptance, not a measured success rate
+([record](docs/plans/handoffs/M8-implementation-record.md#stored-reply-write-accepted--generation-19-407)).
 
 Claude Code is the independent second subscription adapter
 ([#40](https://github.com/sushiHex/constructicon/issues/40)). Its fixed
