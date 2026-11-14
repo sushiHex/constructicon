@@ -145,7 +145,7 @@ def classify_changes(entries: tuple[DiffEntry, ...]) -> str:
     return "full"
 
 
-def _git(repository: Path, *arguments: str) -> bytes:
+def _git(repository: Path, *arguments: str, stdin: bytes | None = None) -> bytes:
     environment = os.environ.copy()
     environment.update(
         {
@@ -160,7 +160,8 @@ def _git(repository: Path, *arguments: str) -> bytes:
             ["git", "--no-replace-objects", *arguments],
             cwd=repository,
             env=environment,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL if stdin is None else None,
+            input=stdin,
             capture_output=True,
             check=False,
             timeout=30,
@@ -348,6 +349,45 @@ def verify_tree_margin(repository: Path, bound: int = GATE_SNAPSHOT_BOUND) -> in
     return margin
 
 
+# The maintenance WRITE capture exports the base's whole ancestry, and assembly
+# refuses a base that leaves no room under MAINTENANCE_PACK_LIMITS
+# (ContainedWriteWorkspaceProvider.require_capture_headroom). The bounds are
+# restated here; tests/test_capture_headroom_margin.py pins them and drives that
+# guard on HEAD. A capture then adds one commit, the trees on one path and one
+# edited target, about 25 KB for the larger target at aaf9920. One MiB is forty
+# of those, so this refuses while a fix can still land, not at a live assembly.
+CAPTURE_OBJECT_BOUND = 100_000
+CAPTURE_EXPANDED_BOUND = 192 * 1024 * 1024
+REQUIRED_CAPTURE_MARGIN = 1024 * 1024
+
+
+def verify_capture_headroom(repository: Path, bound: int = CAPTURE_EXPANDED_BOUND) -> int:
+    """Return HEAD's ancestry headroom under the capture's expanded bound, or refuse."""
+    # These read stored objects, as the guard does, so no line-ending filter
+    # applies. A shallow clone hides ancestry and would overstate the headroom.
+    if _git(repository, "rev-parse", "--is-shallow-repository").strip() != b"false":
+        raise ScopeError("capture-headroom-margin: HEAD's history is shallow; fetch all of it")
+    objects = _git(repository, "rev-list", "--objects", "--no-object-names", "HEAD")
+    count = len(objects.splitlines())
+    if not 0 < count < CAPTURE_OBJECT_BOUND:
+        raise ScopeError(
+            f"capture-headroom-margin: HEAD's ancestry has {count} objects; the capture "
+            f"admits fewer than {CAPTURE_OBJECT_BOUND}"
+        )
+    rows = _git(repository, "cat-file", "--batch-check=%(objectsize)", stdin=objects).splitlines()
+    if len(rows) != count or not all(row.isdigit() for row in rows):
+        raise ScopeError("capture-headroom-margin: Git's object sizes contradict HEAD's objects")
+    size = sum(int(row) for row in rows)
+    headroom = bound - size
+    if headroom < REQUIRED_CAPTURE_MARGIN:
+        raise ScopeError(
+            f"capture-headroom-margin: HEAD's ancestry expands to {size} bytes, {headroom} "
+            f"below the {bound}-byte capture bound; {REQUIRED_CAPTURE_MARGIN} are required. "
+            "This is the repository's history, not this change's logic (issue #423)"
+        )
+    return headroom
+
+
 def gate_allows(scope: str, classification: str, docs: str, proofs: str) -> bool:
     """Accept only the two complete job-state shapes produced by the workflow."""
 
@@ -391,6 +431,9 @@ def main(argv: list[str] | None = None) -> int:
             verify_docs(arguments.repository)
             # Prose is where this tree grows fastest, and prose skips the full lanes.
             print(f"tree margin: {verify_tree_margin(arguments.repository)} bytes")
+            headroom = verify_capture_headroom(arguments.repository)
+            print(f"capture headroom: {CAPTURE_EXPANDED_BOUND - headroom} of "
+                  f"{CAPTURE_EXPANDED_BOUND} expanded bytes, {headroom} to spare")
             return 0
         if arguments.command == "gate":
             allowed = gate_allows(

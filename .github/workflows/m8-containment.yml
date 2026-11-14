@@ -52,6 +52,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # The capture headroom check measures HEAD's whole ancestry.
+          fetch-depth: 0
           persist-credentials: false
       - run: python3 scripts/ci/m8_ci_scope.py docs
 

@@ -54,6 +54,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # The capture headroom check measures HEAD's whole ancestry.
+          fetch-depth: 0
           persist-credentials: false
       - run: python3 scripts/ci/m8_ci_scope.py docs
 
@@ -102,6 +104,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # tests/test_capture_headroom_margin.py measures HEAD's whole ancestry.
+          fetch-depth: 0
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
