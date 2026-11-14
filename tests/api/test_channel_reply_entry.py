@@ -10,6 +10,8 @@ import asyncio
 import hashlib
 import json
 import shutil
+import sqlite3
+from contextlib import closing
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,9 +21,11 @@ import pytest
 from constructicon.api import maintenance_entry as entry
 from constructicon.api.plan_manifest_application import (
     CHANNEL_STORED_REPLY,
+    INVENTORY_CHECK_NAME,
     PLAN_MANIFEST,
     maintenance_graph,
 )
+from constructicon.core.address import ExecutionPath, ScopePath
 from constructicon.core.envelope import utc_now
 from constructicon.core.errors import ContractViolation
 from constructicon.core.executor import ExecutorGrantPolicy
@@ -34,8 +38,10 @@ from constructicon.core.maintenance import (
     MaintenanceCapabilityPin,
 )
 from constructicon.core.manifest import source_graph_hash_for
+from constructicon.core.refusal import RefusalCode
 from constructicon.core.run import RunStatus
 from constructicon.substrate.executors.codex_host import WRITE_GRANTS
+from constructicon.substrate.gates.channel_reply import CHECK_NAME as CHANNEL_CHECK
 from constructicon.substrate.git.pack import PackLimits
 from constructicon.substrate.git.process import GitProcess
 from tests.api import test_plan_manifest_application as application_tests
@@ -244,13 +250,28 @@ async def test_the_shipped_packet_reads_a_real_channel_run_from_a_private_copy(
     assert_closed_refusal(refused, text, "diagnostic")
 
 
+def attested_checks(resources, run_id):
+    """Each attestation the run minted, as (check name, status) pairs."""
+    with closing(sqlite3.connect(resources.journal._db_path)) as connection:
+        ids = [row[0] for row in connection.execute("SELECT attestation_id FROM attestations")]
+    found = [resources.journal.load_attestation(value) for value in ids]
+    return [(attestation.ok, [(check.name, check.status) for check in attestation.checks])
+            for attestation in found if attestation.created_by_run == run_id]
+
+
 @CHANNEL
-@pytest.mark.parametrize("candidate", ["noop", "extra-edit"])
-async def test_a_refused_candidate_publishes_nothing(concrete_application, candidate):
+@pytest.mark.parametrize(("candidate", "code", "failed"), [
+    ("noop", RefusalCode.CAPTURE_UNCHANGED, None),
+    ("extra-edit", RefusalCode.GATE_NOT_POSITIVE, CHANNEL_CHECK),
+    ("extra-file", RefusalCode.GATE_NOT_POSITIVE, INVENTORY_CHECK_NAME),
+], ids=["noop", "extra-edit", "extra-file"])
+async def test_a_refused_candidate_publishes_nothing(concrete_application, candidate, code,
+                                                     failed):
     resources, executor, _system, control, _launch = concrete_application
     await control.shutdown()
-    executor.executor.candidate = (BASE if candidate == "noop" else CANDIDATE.replace(
-        b"if max_batch <= 0:", b"if max_batch < 0:"))
+    executor.executor.candidate = {"noop": BASE, "extra-file": CANDIDATE}.get(
+        candidate, CANDIDATE.replace(b"if max_batch <= 0:", b"if max_batch < 0:"))
+    executor.executor.extra = candidate == "extra-file"
     auth = authorize(resources, executor, CHANNEL_STORED_REPLY)
     result = await entry.run_maintenance(resources=resources, executor=executor,
         executor_descriptor=executor.descriptor("executor"), authorization=auth)
@@ -261,7 +282,61 @@ async def test_a_refused_candidate_publishes_nothing(concrete_application, candi
                 if event.kind == "NodeFailed"]
     expected = ("maintenance captured candidate equals the pinned base" if candidate == "noop"
                 else "maintenance candidate failed its exact gate")
-    assert failures == [{"error_type": "ContractViolation", "error": expected}]
+    assert failures == [{"error_type": "ContractViolation", "error": expected,
+                         "refusal": [code.value]}]
+    # An extra file and a wrong edit fail different named checks of one exam.
+    checks = [(name, "failed" if name == failed else "passed")
+              for name in (INVENTORY_CHECK_NAME, CHANNEL_CHECK)]
+    assert attested_checks(resources, auth.run_id) == ([(False, checks)] if failed else [])
+
+
+async def refused_world(tmp_path, monkeypatch):
+    """The concrete_application world, assembled here so one test can pair two of them."""
+    resources, _launch = await application_tests.concrete_resources(
+        tmp_path, monkeypatch, committed_tree=False, channel=True)
+    executor = application_tests.FakeExecutorProvider()
+    executor.executor = application_tests.PortableChannelWriter(CANDIDATE.replace(
+        b"if max_batch <= 0:", b"if max_batch < 0:"))
+    executor._identity = launch_identity(executor.executor.profile)
+    await application_tests.maintenance_system(resources, executor_id="executor",
+        executor=executor, executor_descriptor=executor.descriptor("executor"),
+        writer_grants=WRITE_GRANTS)
+    return resources, executor
+
+
+async def test_a_code_changes_no_status_checkpoint_or_attestation(
+    tmp_path, portable_binding, portable_acquisition_namespace,
+):
+    """Paired runs differ only in whether the failing guard is coded (REFUSAL_CODE.md)."""
+    from constructicon.api import plan_manifest_application as application
+
+    def uncoded(*args, refusal=()):
+        return ContractViolation(*args)
+
+    observed = []
+    for coded in (True, False):
+        # Each world substitutes its own primitives, scoped to its own directory.
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            if not coded:
+                monkeypatch.setattr(application, "ContractViolation", uncoded)
+            resources, executor = await refused_world(tmp_path / str(coded), monkeypatch)
+            auth = authorize(resources, executor, CHANNEL_STORED_REPLY)
+            assert await entry.run_maintenance(resources=resources, executor=executor,
+                executor_descriptor=executor.descriptor("executor"), authorization=auth) is None
+        events = resources.journal.events(auth.run_id, limit=100)
+        failure, = (event.payload for event in events if event.kind == "NodeFailed")
+        refusal = failure.pop("refusal", None)
+        assert refusal == ([RefusalCode.GATE_NOT_POSITIVE.value] if coded else None)
+        observed.append((
+            resources.journal.run_state(auth.run_id).status, failure,
+            [event.kind for event in events],
+            [resources.journal.checkpoint(auth.run_id, ExecutionPath(scope=ScopePath(
+                segments=(CHANNEL_STORED_REPLY.graph_name, node)))) is not None
+             for node in ("writer", "checker")],
+            attested_checks(resources, auth.run_id),
+        ))
+    assert observed[0] == observed[1]
+    assert observed[0][0] is RunStatus.FAILED and observed[0][3] == [True, False]
 
 
 @pytest.mark.parametrize(("concrete_application", "assembled", "crossed"), [

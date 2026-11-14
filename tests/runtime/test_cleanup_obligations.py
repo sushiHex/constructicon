@@ -12,6 +12,7 @@ import pytest
 from constructicon.core.address import ExecutionPath, RunId, ScopePath
 from constructicon.core.errors import ContractViolation, JournalDamaged
 from constructicon.core.manifest import CapabilityLease
+from constructicon.core.refusal import RefusalCode
 from constructicon.core.run import (
     TERMINAL_STATUS_EVENTS,
     CleanupUnresolved,
@@ -267,6 +268,31 @@ async def test_failed_close_escapes_its_site_and_releases_every_sibling(world, n
     provider.before_execute = None
     await world.succeed(run_id, winner)
     assert len(provider.executor.calls) == int(not node_fails)
+
+
+async def test_a_failed_close_seals_the_original_errors_own_codes(world):
+    """The cleanup branch records the node's error, so it records that error's codes."""
+    run_id = RunId("failed-close-coded")
+    provider = world.provider("retaining")
+    world.provider("sibling")
+    close_error = OSError("close failed")
+    node_error = ContractViolation("invocation refused",
+                                   refusal=(RefusalCode.CAPTURE_UNCHANGED,))
+
+    async def fail_close(handle):
+        raise close_error
+
+    async def fail_node(handle):
+        raise node_error
+
+    provider.before_close, provider.before_execute = fail_close, fail_node
+    result = await outcome(await world.start(run_id, {"executor": "retaining", "z": "sibling"}))
+    assert result is close_error and result.__cause__ is node_error
+    failed = [event for event in world.journal.events(run_id) if event.kind == "NodeFailed"]
+    assert [event.payload for event in failed] == [{
+        "error": "invocation refused", "error_type": "ContractViolation",
+        "refusal": ["capture.unchanged"],
+    }]
 
 
 @pytest.mark.parametrize("heartbeat_fails", ["lost", "error"])

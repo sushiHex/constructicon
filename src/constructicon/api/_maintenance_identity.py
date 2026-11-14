@@ -14,7 +14,8 @@ def maintenance_application_revision() -> Digest:
         "sources": {name: hashlib.sha256((root / name).read_bytes()).hexdigest()
                     for name in ("api/plan_manifest_application.py", "api/maintenance_entry.py",
                                  "api/_maintenance_source.py", "api/_maintenance_identity.py",
-                                 "core/maintenance.py", "substrate/executors/maintenance.py",
+                                 "core/maintenance.py", "core/refusal.py",
+                                 "substrate/executors/maintenance.py",
                                  "substrate/executors/qualification.py",
                                  "substrate/gates/channel_reply.py",)},
     })

@@ -20,6 +20,7 @@ from pydantic import ValidationError
 
 from constructicon.api.control import ControlPlane
 from constructicon.api.plan_manifest_application import (
+    INVENTORY_CHECK_NAME,
     MaintenanceResources,
     derive_maintenance_result,
     maintenance_checks,
@@ -47,6 +48,7 @@ from constructicon.core.grants import IsolationProfile, Posture
 from constructicon.core.graph import Graph
 from constructicon.core.identity import digest
 from constructicon.core.maintenance import PlanManifestRequest
+from constructicon.core.refusal import RefusalCode
 from constructicon.core.run import RunStatus
 from constructicon.runtime.context import NodeContext
 from constructicon.runtime.registry import CapabilityDescriptor
@@ -180,8 +182,71 @@ async def test_writer_capture_guards_keep_acceptance_and_first_failure(
             await maintenance_writer(ctx, INPUTS)
         assert str(refusal.value) == message
         assert "private-" not in str(refusal.value)
+        assert refusal.value.refusal == (REFUSALS[message],)
     assert len(executor.calls) == 1
     assert capture_calls == ["constructicon plan-manifest regression vectors"]
+
+
+# Every refusal code, beside the one message its guard raises with it. Each pair
+# must be raised at exactly the sites named, and nowhere else (REFUSAL_CODE.md).
+REFUSALS = {
+    "maintenance requires an asynchronous WRITE workspace": RefusalCode.WRITER_WORKSPACE,
+    "maintenance workspace differs from the pinned base": RefusalCode.WRITER_BASE,
+    "maintenance request carries no instruction digest": RefusalCode.WRITER_INSTRUCTION,
+    "maintenance instruction differs from its pinned digest": RefusalCode.WRITER_INSTRUCTION,
+    "maintenance writer did not positively succeed": RefusalCode.WRITER_NOT_POSITIVE,
+    "maintenance captured candidate differs from capture return": RefusalCode.CAPTURE_RETURN,
+    "maintenance captured candidate equals the pinned base": RefusalCode.CAPTURE_UNCHANGED,
+    "maintenance captured candidate has another repository": RefusalCode.CAPTURE_REPOSITORY,
+    "maintenance captured candidate has path restrictions": RefusalCode.CAPTURE_PATHS,
+    "maintenance captured candidate has another comparison base": RefusalCode.CAPTURE_BASE,
+    "maintenance checker received another candidate or gate": RefusalCode.CHECKER_INPUT,
+}
+CODED_SITES = [
+    ("pinned_instruction", "maintenance request carries no instruction digest"),
+    ("pinned_instruction", "maintenance instruction differs from its pinned digest"),
+    *(("_write_candidate", message) for message in list(REFUSALS)[:2] + list(REFUSALS)[4:10]),
+    ("_check_candidate", "maintenance checker received another candidate or gate"),
+    ("_check_candidate", "maintenance candidate failed its exact gate"),
+    ("_check_candidate", "maintenance candidate failed its exact gate"),
+]
+
+
+def test_every_refusal_code_is_raised_at_its_own_guard_and_nowhere_else():
+    import ast
+    import re
+
+    import constructicon.api.plan_manifest_application as application
+
+    tree = ast.parse(Path(application.__file__).read_text(encoding="utf-8"))
+    found = []
+    for function in tree.body:
+        if not isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        for node in ast.walk(function):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "ContractViolation"):
+                continue
+            keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+            if "refusal" not in keywords:
+                continue
+            value = keywords["refusal"]
+            assert isinstance(value, ast.Tuple) and len(value.elts) == 1
+            code = RefusalCode[ast.unparse(value.elts[0]).removeprefix("RefusalCode.")]
+            found.append((node.lineno, function.name, node.args[0].value, code))
+    found.sort()
+    assert [(name, message) for _, name, message, _ in found] == CODED_SITES
+    codes = [code for *_, code in found]
+    for _, _, message, code in found[:-2]:
+        assert REFUSALS[message] is code
+    # The gate's one message is split by which condition held, failed checks first.
+    assert codes[-2:] == [RefusalCode.GATE_NOT_POSITIVE, RefusalCode.GATE_SUBJECT]
+    assert set(codes) == set(RefusalCode)
+    # Nothing else in the package raises a code yet: later guards arrive with their steps.
+    package = Path(application.__file__).parents[1]
+    users = {path.relative_to(package).as_posix() for path in package.rglob("*.py")
+             if re.search(r"\bRefusalCode\.", path.read_text(encoding="utf-8"))}
+    assert users == {"api/plan_manifest_application.py"}
 
 
 class Gate(ControlledGate):
@@ -378,11 +443,18 @@ def test_exact_trusted_gate_program_accepts_only_one_new_data_file(tmp_path, cha
         source_path.unlink()
     elif change == "weak-vectors":
         vector_path.write_bytes(b'{"version":1,"cases":[{"kind":"plan_path","path":"a.md"}]}')
-    result = subprocess.run((sys.executable, *checks[0].argv[1:]), cwd=tmp_path,
-        stdin=subprocess.DEVNULL, capture_output=True, timeout=30, check=False)
+    results = [subprocess.run((sys.executable, *spec.argv[1:]), cwd=tmp_path,
+                              stdin=subprocess.DEVNULL, capture_output=True, timeout=30,
+                              check=False) for spec in checks]
+    assert [spec.name for spec in checks] == [INVENTORY_CHECK_NAME,
+                                              "plan-manifest-trusted-vectors"]
+    # The inventory answers for every path but the data file; the vectors for that file.
+    failed = [spec.name for spec, done in zip(checks, results, strict=True) if done.returncode]
+    assert failed == ([] if change is None else ["plan-manifest-trusted-vectors"]
+                      if change == "weak-vectors" else [INVENTORY_CHECK_NAME])
+    assert not results[0].stdout and all(not done.stdout for done in results if done.returncode)
     if change is None:
-        assert result.returncode == 0, result.stderr.decode()
-        report = json.loads(result.stdout)
+        report = json.loads(results[1].stdout)
         assert report["passed"] is True
         assert report["input_sha256"] == hashlib.sha256(vector_path.read_bytes()).hexdigest()
         assert len(report["render_sha256"]) == 64
@@ -391,8 +463,6 @@ def test_exact_trusted_gate_program_accepts_only_one_new_data_file(tmp_path, cha
         for mutant in report["mutants"]:
             assert mutant["distinguished"] and mutant["counts"]["failures"] > 0
             assert mutant["counts"]["errors"] == mutant["counts"]["skips"] == 0
-    else:
-        assert result.returncode != 0 and not result.stdout
 
 
 @pytest.mark.parametrize("finish", ["cancel", "restart"])
@@ -573,6 +643,7 @@ class PortableChannelWriter(Writer):
 
         super().__init__()
         self.candidate = CANDIDATE if candidate is None else candidate
+        self.extra = False  # also writes one file outside the task's one path
 
     async def execute(self, task, *, workspace, grants):
         from constructicon.core.maintenance import CHANNEL_TARGET_PATH
@@ -582,6 +653,7 @@ class PortableChannelWriter(Writer):
         program = (
             "from pathlib import Path\n"
             f"Path({CHANNEL_TARGET_PATH!r}).write_bytes({self.candidate!r})\n"
+            + ("Path('README.txt.bak').write_bytes(b'backup\\n')\n" if self.extra else "")
         )
         async with workspace.use() as guard:
             result = await workspace.provider.launcher.run(
@@ -807,7 +879,7 @@ async def test_concrete_assembly_real_git_and_journal_affirm_exact_accepted_resu
     assert resources.authority.parents_of(subject.merge_commit) == (
         resources.request.base_commit, result.candidate.commit,
     )
-    details = json.loads(result.evaluation.checks[0].detail)
+    details = json.loads(result.evaluation.checks[1].detail)
     assert details["input_sha256"] == result.input_sha256
     assert details["render_sha256"] == result.render_sha256
     assert details["baseline"]["tests_run"] == 24
@@ -858,6 +930,7 @@ async def test_concrete_successful_noop_is_refused_after_real_capture(
     assert failures[0].payload == {
         "error_type": "ContractViolation",
         "error": "maintenance captured candidate equals the pinned base",
+        "refusal": ["capture.unchanged"],
     }
     writer_path = failures[0].path
     assert writer_path is not None and writer_path.scope.segments[-1] == "writer"

@@ -481,7 +481,8 @@ if command == "prepare":
     assert int(mask.strip(), 8) == 0o077, mask
 sys.argv = ["constructicon.api.maintenance_entry", *sys.argv[1:]]
 runpy.run_module("constructicon.api.maintenance_entry", run_name="__main__")
-assert len(calls) == (1 if command == "preflight" else 0)
+# Gate creation identifies each check's runtime once: inventory and vectors.
+assert len(calls) == (2 if command == "preflight" else 0)
 if command == "preflight":
     import asyncio
     from constructicon.api._maintenance_source import inspect_source

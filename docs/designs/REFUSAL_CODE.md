@@ -129,7 +129,8 @@ Left out on purpose:
   conversation refusals describe a vendor's wire. Claude's also carry family,
   phase and predicate context (`claude_read.py:203-258`) that one code would
   lose. They stay in their adapters, typed as they are.
-- **`capture-mismatch`.** It has no producer.
+- **`capture-mismatch`.** Correction: production code raised it until eff68fb
+  (#200), and g10's sealed journal holds it, so it stays as a pre-code reader.
 - **The exam's inner reasons.** See "What this does not split" below.
 
 ### What happens to the existing vocabularies

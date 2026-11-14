@@ -87,7 +87,10 @@ def test_contribution_packet_replay_and_unwritten_original(home_state):
     assert set(result) == {"observation", "candidate_commit", "input_sha256", "render_sha256"}
     assert contribution["diagnostic"]["command"] == "accepted"
     assert contribution["diagnostic"]["attempt"]["dispatch"] == "completed"
+    # The installed diagnostic names only the checks its frozen readers know; the
+    # inventory check is "unknown" there until the report schema step.
     assert contribution["diagnostic"]["journal"]["checks"] == [
+        {"name": "unknown", "status": "passed"},
         {"name": "plan-manifest-trusted-vectors", "status": "passed"}]
     assert contribution["attestation"]["observation"] == "recorded"
     assert contribution["attestation"]["ok"] is True

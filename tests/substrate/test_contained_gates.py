@@ -386,9 +386,11 @@ async def test_native_maintenance_recipe_runs_its_fixed_exam_and_refuses_scope(
         assert result.subject is not None
         assert result.subject.candidate == proposed and result.subject.expected_base == base
         assert result.subject.tested_tree == runner.authority.tree_of(proposed)
-        assert len(result.checks) == 1
-        assert result.checks[0].name == "plan-manifest-trusted-vectors"
-        assert result.checks[0].status == ("passed" if case == "accept" else "failed")
+        # An extra file and weak vectors fail different named checks of one exam.
+        assert [(check.name, check.status) for check in result.checks] == [
+            ("maintenance-tree-inventory", "failed" if case == "extra" else "passed"),
+            ("plan-manifest-trusted-vectors", "failed" if case == "weak" else "passed"),
+        ]
         assert result.ok is (case == "accept")
         assert len(journal.drafts) == 1
         lease, draft = journal.drafts[0]
@@ -398,7 +400,7 @@ async def test_native_maintenance_recipe_runs_its_fixed_exam_and_refuses_scope(
         assert result.attestation_id == "test-minted-authority"
         if case == "accept":
             # These facts came from the real contained driver, rather than inferred exit success.
-            report = json.loads(result.checks[0].detail)
+            report = json.loads(result.checks[1].detail)
             assert report["passed"] is True
             assert report["baseline"] == {"tests_run": 24, "failures": 0, "errors": 0, "skips": 0}
             assert tuple(mutant["name"] for mutant in report["mutants"]) == (
@@ -451,6 +453,8 @@ async def test_native_channel_reply_exam_runs_its_stdlib_oracle_and_refuses(laun
     accepted = write({**files, CHANNEL_TARGET_PATH: CANDIDATE}, base, "extraction")
     refused = write({**files, CHANNEL_TARGET_PATH: CANDIDATE.replace(
         b"if max_batch <= 0:", b"if max_batch < 0:")}, base, "extraction plus an edit")
+    extra = write({**files, CHANNEL_TARGET_PATH: CANDIDATE, "README.txt.bak": b"backup\n"},
+                  base, "extraction plus a stray file")
     source = authority._run("show", f"{base}:{CHANNEL_TARGET_PATH}").stdout.encode()
     assert source == BASE
     inventory = authority._run("ls-tree", "-r", "-z", base).stdout.encode()
@@ -459,20 +463,22 @@ async def test_native_channel_reply_exam_runs_its_stdlib_oracle_and_refuses(laun
     runner = await qualify(runner)
     acquired = await started(runner)
     try:
-        for proposed, ok in ((accepted, True), (refused, False)):
+        for proposed, failed in ((accepted, None),
+                                 (refused, "channel-stored-reply-exact-extraction"),
+                                 (extra, "maintenance-tree-inventory")):
             result = await acquired.resource.verify(proposed)
             assert result.subject is not None and result.subject.candidate == proposed
-            assert [check.name for check in result.checks] == [
-                "channel-stored-reply-exact-extraction"]
-            assert result.checks[0].status == ("passed" if ok else "failed")
-            assert result.ok is ok
-            if ok:
-                report = json.loads(result.checks[0].detail)
+            assert [(check.name, check.status) for check in result.checks] == [
+                (name, "failed" if name == failed else "passed") for name in (
+                    "maintenance-tree-inventory", "channel-stored-reply-exact-extraction")]
+            assert result.ok is (failed is None)
+            if failed is None:
+                report = json.loads(result.checks[1].detail)
                 assert report["passed"] is True
                 # The receipt is the contained worker's interpreter, not the host's.
                 assert report["python"].startswith("3.12")
                 assert report["candidate_sha256"] == hashlib.sha256(CANDIDATE).hexdigest()
-        assert len(journal.drafts) == 2
+        assert len(journal.drafts) == 3
         assert all(draft.check_set_hash == runner.check_set_hash for _, draft in journal.drafts)
         assert runner.authority.resolve_ref(runner.target_ref) == base
     finally:
@@ -1076,15 +1082,18 @@ async def test_native_maintenance_operational_entry_captures_checks_closes_and_r
     assert runner.authority.resolve_ref(request.target_ref) == base
     assert any("git('add', '--all'" in arg for command, _ in physical.calls for arg in command)
     assert any(command[:2] == ("/usr/bin/git", "pack-objects") for command, _ in physical.calls)
-    assert sum(gate.checks[0].argv[-1] in command for command, _ in physical.calls) == 1
+    assert all(sum(spec.argv[-1] in command for command, _ in physical.calls) == 1
+               for spec in gate.checks)
     assert len(minted) == 1
     proof = journal.load_attestation(minted[0].attestation_id)
     assert proof == minted[0] and proof.created_by_run == run_id
     assert proof.manifest_hash == manifest.manifest_hash
     assert proof.check_set_hash == request.check_set_hash
     assert proof.subject.candidate == candidate_ref.commit and proof.subject.expected_base == base
-    assert len(proof.checks) == 1 and proof.checks[0].name == "plan-manifest-trusted-vectors"
-    assert proof.checks[0].status == ("passed" if case == "accept" else "failed")
+    assert [(check.name, check.status) for check in proof.checks] == [
+        ("maintenance-tree-inventory", "failed" if case == "extra" else "passed"),
+        ("plan-manifest-trusted-vectors", "failed" if case == "weak" else "passed"),
+    ]
     assert proof.ok is (case == "accept")
     if case == "accept":
         assert result is not None and result.run_id == run_id and result.candidate == candidate_ref
@@ -1093,7 +1102,7 @@ async def test_native_maintenance_operational_entry_captures_checks_closes_and_r
         assert proof.manifest_hash == manifest.manifest_hash
         assert proof.subject == result.evaluation.subject
         assert proof.subject.candidate == candidate_ref.commit
-        report = json.loads(result.evaluation.checks[0].detail)
+        report = json.loads(result.evaluation.checks[1].detail)
         assert report["passed"] is True
         assert report["baseline"] == {"tests_run": 24, "failures": 0, "errors": 0, "skips": 0}
         assert tuple(item["name"] for item in report["mutants"]) == (

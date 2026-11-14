@@ -244,12 +244,13 @@ def test_host_checks_refuse_a_base_with_the_helper_or_a_foreign_target_mode(tmp_
 
 @pytest.mark.parametrize("change", [None, "noop", "second-file", "other-edit", "removed",
                                     "smuggled", "mode"])
-def test_gate_program_pins_inventory_before_the_exact_extraction(tmp_path, change):
+def test_gate_programs_pin_inventory_and_exact_extraction_as_two_checks(tmp_path, change):
     if change == "mode" and os.name != "posix":
         pytest.skip("an executable bit is observable only on POSIX; Linux CI runs this case")
     inventory = _tree(tmp_path, {CHANNEL_TARGET_PATH: BASE, "README.txt": b"unchanged\n"})
     checks = channel_reply_checks(BASE, hashlib.sha256(BASE).hexdigest(), inventory, "sha1")
-    assert [spec.name for spec in checks] == ["channel-stored-reply-exact-extraction"]
+    assert [spec.name for spec in checks] == [
+        "maintenance-tree-inventory", "channel-stored-reply-exact-extraction"]
     target = tmp_path / CHANNEL_TARGET_PATH
     target.write_bytes(CANDIDATE)
     if change == "noop":
@@ -264,12 +265,18 @@ def test_gate_program_pins_inventory_before_the_exact_extraction(tmp_path, chang
         target.write_bytes(REFUSED["unicode-escape-smuggling"]())
     elif change == "mode":
         target.chmod(0o755)
-    result = subprocess.run((sys.executable, *checks[0].argv[1:]), cwd=tmp_path,
-        stdin=subprocess.DEVNULL, capture_output=True, timeout=60, check=False)
+    results = [subprocess.run((sys.executable, *spec.argv[1:]), cwd=tmp_path,
+                              stdin=subprocess.DEVNULL, capture_output=True, timeout=60,
+                              check=False) for spec in checks]
+    # A path beside the target fails the inventory; the target's own bytes, the extraction.
+    failed = [spec.name for spec, done in zip(checks, results, strict=True) if done.returncode]
+    assert failed == {
+        None: [], "noop": ["channel-stored-reply-exact-extraction"],
+        "smuggled": ["channel-stored-reply-exact-extraction"],
+        "mode": ["maintenance-tree-inventory", "channel-stored-reply-exact-extraction"],
+    }.get(change, ["maintenance-tree-inventory"])
+    assert not results[0].stdout and all(not done.stdout for done in results if done.returncode)
     if change is None:
-        assert result.returncode == 0, result.stderr.decode()
-        report = json.loads(result.stdout)
+        report = json.loads(results[1].stdout)
         assert report["passed"] is True and report["python"] == sys.version
         assert report["candidate_sha256"] == hashlib.sha256(CANDIDATE).hexdigest()
-    else:
-        assert result.returncode != 0 and not result.stdout
