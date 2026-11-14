@@ -32,6 +32,7 @@ from constructicon.core.identity import digest
 from constructicon.core.maintenance import ChannelReplyAttemptAuthorization
 from constructicon.core.manifest import source_graph_hash_for
 from constructicon.core.qualification import QualificationAuthorization
+from constructicon.substrate.executors import codex_lane
 from constructicon.substrate.executors import maintenance as maintenance_reader
 from constructicon.substrate.executors import qualification as qualification_reader
 from tests.core import test_maintenance_authorization as plan
@@ -165,26 +166,26 @@ PROVIDER = SimpleNamespace(
 ASSEMBLY = SimpleNamespace(executor=PROVIDER, pins=pins())
 
 
-@pytest.mark.parametrize("main,argv,graph,golden", [
+@pytest.mark.parametrize("main,argv,graph,model,golden", [
     (qualification.main, [*CODEX, "qualification-no-dispatch"],
      lambda: qualification.qualification_graph("codex-operator", "qualification-no-dispatch"),
-     "7a08b51aab51c5a2f1ae1e99b63e38c03abfde571cd9d6ddd9fc143e68b43e03"),
+     None, "7a08b51aab51c5a2f1ae1e99b63e38c03abfde571cd9d6ddd9fc143e68b43e03"),
     (qualification.main, [*CODEX, "qualification-read", *RECORD],
      lambda: qualification.qualification_graph("codex-operator", "qualification-read"),
-     "156d35d57817d306a5fd73dffce87d695ebd32bd34a80152cbb0537198767f14"),
+     codex_lane.PREPARE_MODEL, "0dbc536b25ca1e7848b6ad45f70b6d39487472d800e86fd61cb7353786672d44"),
     (qualification.main, [*CODEX, "qualification-write", *RECORD, "--fixture", "f"],
      lambda: write_graph("codex-operator", ASSEMBLY.pins),
-     "e56464af689582eeb39f13ea1af36e5a7fdf9a06188c36fd87349c279341714a"),
+     codex_lane.PREPARE_MODEL, "3434851dfc7347af6e0a2f087d3cf98382e8dc596127de93637b689bf09abc2c"),
     (claude_qualification.main, ["mint", *FLAGS, *CLAUDE],
      lambda: claude_qualification.graph(claude_qualification.fixed_grants(PROVIDER)),
-     "a572f91a9966fd6f30dff9e1ae0a34589d1bc73cd8efc4ca773e6028ad84244f"),
+     None, "a572f91a9966fd6f30dff9e1ae0a34589d1bc73cd8efc4ca773e6028ad84244f"),
     (claude_write_qualification.main, ["mint", *FLAGS, *CLAUDE],
      lambda: claude_write_qualification.graph(
          claude_write_qualification.fixed_grants(PROVIDER), ASSEMBLY.pins),
-     "174a93986a23099794dd7e1bfc93cd0150992e13b18d0d55e5bd9108b3f4b354"),
+     None, "174a93986a23099794dd7e1bfc93cd0150992e13b18d0d55e5bd9108b3f4b354"),
 ], ids=["no-dispatch", "read", "write", "claude-read", "claude-write"])
-def test_the_three_printed_permits(monkeypatch, capsys, main, argv, graph, golden):
-    """Each command's printed bytes, with its own graph's hash named rather than pinned."""
+def test_the_three_printed_permits(monkeypatch, capsys, main, argv, graph, model, golden):
+    """Each command's printed bytes, with its graph hash and Codex model named, not pinned."""
 
     async def assembled(*_, **__):
         return ASSEMBLY
@@ -199,4 +200,8 @@ def test_the_three_printed_permits(monkeypatch, capsys, main, argv, graph, golde
     assert main(argv) == 0
     out, graph_hash = capsys.readouterr().out, str(source_graph_hash_for(graph()))
     assert out.count(graph_hash) == 1
-    assert sha256(out.replace(graph_hash, "GRAPH")) == golden
+    out = out.replace(graph_hash, "GRAPH")
+    if model is not None:
+        assert out.count(f'"model":"{model}"') == 1
+        out = out.replace(f'"model":"{model}"', '"model":"MODEL"')
+    assert sha256(out) == golden
