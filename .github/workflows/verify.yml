@@ -54,8 +54,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # capture-headroom measures HEAD's whole ancestry.
+          fetch-depth: 0
           persist-credentials: false
       - run: python3 scripts/ci/m8_ci_scope.py docs
+      - run: python3 scripts/ci/m8_ci_scope.py capture-headroom
 
   windows-discovery:
     needs: classify
@@ -102,7 +105,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # capture-headroom and its test measure HEAD's whole ancestry.
+          fetch-depth: 0
           persist-credentials: false
+      - run: python3 scripts/ci/m8_ci_scope.py capture-headroom
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.13.7"
