@@ -54,6 +54,14 @@ MUTANTS = (
         TEST + "test_lossy_archive_cannot_claim_the_original_tree[export-ignore]",
     ),
     (
+        "the snapshot tree is read back through the pump into memory", GATE + "_snapshot",
+        'await git.run("archive", "--format=tar", f"--output={tar}", commit,\n'
+        "                      cwd=self.authority.repository_id, guard=guard)",
+        'tar.write_bytes(await git.run("archive", "--format=tar", commit,\n'
+        "                      cwd=self.authority.repository_id, guard=guard))",
+        TEST + "test_the_snapshot_tree_is_outside_the_memory_bound_and_absent_from_checks",
+    ),
+    (
         "pre-mint control observation is absent", GATE + "_verify",
         "self._control(handle)", "pass",
         TEST + "test_explicit_control_check_immediately_before_mint_is_load_bearing",
