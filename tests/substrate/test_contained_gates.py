@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import threading
 from dataclasses import dataclass, field, fields, replace
@@ -662,6 +663,61 @@ async def test_lossy_archive_cannot_claim_the_original_tree(tmp_path, attribute)
     assert not acquired.resource.paths.payload.exists()
     # No candidate-executing call: the only launch was the mount-free probe.
     assert all(call[1]["workspace"] is None for call in runner.launcher.calls)
+    await runner.close(acquired, "discard")
+
+
+@LINUX
+async def test_the_snapshot_tree_is_outside_the_memory_bound_and_absent_from_checks(tmp_path):
+    runner = await qualify(unqualified(tmp_path))
+    runner.launcher.limits = ProcessLimits(artifact_bytes=8192)
+    sha = candidate(runner, {"large": "x" * 16384})
+    tree = subprocess.run(
+        [runner.authority.git_executable, "archive", "--format=tar", sha],
+        cwd=runner.authority.repository_id, capture_output=True, check=True,
+    ).stdout
+    assert len(tree) > runner.launcher.limits.artifact_bytes
+    original, seen = runner.launcher.run, []
+
+    async def observe(*args, **kwargs):
+        if kwargs["workspace"] is not None:
+            seen.append(sorted(path.name for path in kwargs["workspace"].parent.iterdir()))
+        return await original(*args, **kwargs)
+
+    runner.launcher.run = observe
+    acquired = await started(runner)
+    try:
+        result = await acquired.resource.verify(sha)
+    except ContractViolation as exc:
+        if "materialization bound" not in str(exc):
+            raise
+        pytest.fail("the gate snapshot tree was read into memory under artifact_bytes")
+    assert result.ok and seen == [["snapshot"]]
+    assert not acquired.resource.paths.payload.exists()
+    await runner.close(acquired, "discard")
+
+
+@LINUX
+async def test_an_unwritable_snapshot_archive_refuses_by_name_before_any_check(
+    tmp_path, monkeypatch,
+):
+    from constructicon.substrate.git import process
+
+    # The pump's own file ceiling, lowered below this candidate's tree.
+    ceiling = "(resource.RLIMIT_FSIZE, 128 * 1024 * 1024)"
+    assert ceiling in process._LIMITED_EXEC
+    monkeypatch.setattr(process, "_LIMITED_EXEC", process._LIMITED_EXEC.replace(
+        ceiling, "(resource.RLIMIT_FSIZE, 4096)",
+    ))
+    runner = await qualify(unqualified(tmp_path))
+    acquired = await started(runner)
+    sha = candidate(runner, {"large": "x" * 16384})
+    with pytest.raises(ContractViolation, match=(
+        r"gate snapshot archive failed \(\d+ tar bytes written\): trusted Git archive failed"
+    )):
+        await acquired.resource.verify(sha)
+    assert not runner._journal.drafts
+    assert all(call[1]["workspace"] is None for call in runner.launcher.calls)
+    assert not acquired.resource.paths.payload.exists()
     await runner.close(acquired, "discard")
 
 

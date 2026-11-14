@@ -16,15 +16,14 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
-## The repository tree is at the gate snapshot bound, and CI now says so by name
+## The gate snapshot's archive is written to disk, not through the Git output pump
 
-This repository is its own maintenance base. A contained gate reads `git archive --format=tar` of the whole prepared merge commit into memory under `ProcessLimits.artifact_bytes`, 16 MiB (`substrate/gates/contained.py`, `_snapshot`; `substrate/git/process.py`). At `cf7042f` the tree archives to 16,752,640 bytes and grows about 1 MB a week (#423).
+This repository is its own maintenance base, and a contained gate snapshots the whole prepared merge commit. Until #423 it read `git archive --format=tar` into memory under `ProcessLimits.artifact_bytes`, 16 MiB, and the tree reached it (16,752,640 bytes at `cf7042f`). Owner decision on #423: no new budget and no new limit.
 
-- `scripts/ci/m8_ci_scope.py docs` and `tests/test_tree_materialization_margin.py` refuse with `tree-materialization-margin` when less than one 10,240-byte tar record remains. The docs job runs it because prose grows fastest and skips the full lanes.
-- **A PR that fails this check is not wrong; the tree is full.** Nothing here adds room.
-- `export-ignore` is not a way out: the gate compares the extracted files with the exact tree and refuses an omitted path.
-- The check says this base fits. It does not say every candidate an exam accepts fits: the channel exam admits a 65,536-byte target, and at `cf7042f` the snapshot has room for about 22 KB of growth.
-- The proposed mechanism (a gate snapshot budget of its own, declared by the application, with a refusal before dispatch) moves the gate and application revisions and awaits an owner decision on #423.
+- `_snapshot` (`substrate/gates/contained.py`) has Git write the tar to `snapshot.tar` in the acquisition payload, through the same guarded pump, then extracts it and unlinks it before any check runs. `artifact_bytes` again bounds only what a Git child prints. The tree's ceiling is the pump's existing `RLIMIT_FSIZE`, 128 MiB (`substrate/git/process.py`). A failed archive refuses as `gate snapshot archive failed`, with the tar bytes written and Git's own words. The `finally` in `_verify` removes the payload, tar included. Equality and integrity hashing still read each file whole, so one large blob still costs memory; that is unchanged.
+- `scripts/ci/m8_ci_scope.py docs` and `tests/test_tree_materialization_margin.py` still refuse with `tree-materialization-margin` when less than one 10,240-byte tar record remains, now under that 128 MiB bound.
+- `export-ignore` is still not a way out: the gate compares the extracted files with the exact tree and refuses an omitted path.
+- The contained-gate runtime identity and `check_set_hash` move with this change, because `contained.py` is one of their sources.
 
 ## A maintenance attempt keeps the model's programs and reply as text on the private host
 
