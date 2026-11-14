@@ -56,18 +56,41 @@ MUTANTS = (
     ("maintenance capture diagnoses first comparison before base", WRITER,
      'if candidate.commit != captured:\n'
      '        raise ContractViolation('
-     '"maintenance captured candidate differs from capture return")\n'
+     '"maintenance captured candidate differs from capture return",\n'
+     '                                refusal=(RefusalCode.CAPTURE_RETURN,))\n'
      '    if candidate.commit == request.base_commit:\n'
-     '        raise ContractViolation("maintenance captured candidate equals the pinned base")',
+     '        raise ContractViolation("maintenance captured candidate equals the pinned base",\n'
+     '                                refusal=(RefusalCode.CAPTURE_UNCHANGED,))',
      'if candidate.commit == request.base_commit:\n'
-     '        raise ContractViolation("maintenance captured candidate equals the pinned base")\n'
+     '        raise ContractViolation("maintenance captured candidate equals the pinned base",\n'
+     '                                refusal=(RefusalCode.CAPTURE_UNCHANGED,))\n'
      '    if candidate.commit != captured:\n'
      '        raise ContractViolation('
-     '"maintenance captured candidate differs from capture return")',
+     '"maintenance captured candidate differs from capture return",\n'
+     '                                refusal=(RefusalCode.CAPTURE_RETURN,))',
      WRITER_TESTS + "test_writer_capture_guards_keep_acceptance_and_first_failure[commit-first]"),
+    ("the walker seals the codes a refusal carries", "constructicon.runtime.walker:_failure",
+     "if isinstance(error, ContractViolation) and error.refusal:", "if False:",
+     "tests/runtime/test_refusal_code.py::"
+     "test_a_coded_failure_is_sealed_and_read_back_in_its_order"),
+    ("an uncoded refusal is sealed byte for byte as before", "constructicon.runtime.walker:_failure",
+     "if isinstance(error, ContractViolation) and error.refusal:",
+     "if isinstance(error, ContractViolation):",
+     "tests/runtime/test_refusal_code.py::"
+     "test_an_uncoded_failure_is_sealed_byte_for_byte_as_before"),
+    ("a failed exam is told apart from a mismatched subject",
+     "constructicon.api.plan_manifest_application:_check_candidate",
+     "refusal=(RefusalCode.GATE_NOT_POSITIVE,)", "refusal=(RefusalCode.GATE_SUBJECT,)",
+     "tests/api/test_channel_reply_entry.py::"
+     "test_a_refused_candidate_publishes_nothing[extra-edit-channel-stored-reply]"),
+    ("the inventory check refuses a path beside the target",
+     "constructicon.api.plan_manifest_application:_inventory_check",
+     '"assert actual_hash==expected_hash\\n"', '""',
+     "tests/substrate/test_channel_reply_oracle.py::"
+     "test_gate_programs_pin_inventory_and_exact_extraction_as_two_checks[second-file]"),
     ("maintenance capture diagnosis never includes candidate values", WRITER,
-     'ContractViolation("maintenance captured candidate equals the pinned base")',
-     'ContractViolation(str(candidate))',
+     'ContractViolation("maintenance captured candidate equals the pinned base",',
+     'ContractViolation(str(candidate),',
      WRITER_TESTS + "test_writer_capture_guards_keep_acceptance_and_first_failure[base]"),
     ("VM address requires exact identity", VM_ADDRESS_MODULE + "_parse",
      'if value["name"] != VM_NAME:', "if False:",
@@ -995,6 +1018,7 @@ MUTANTS = (
             ("maintenance-reader", "substrate/executors/maintenance.py"),
             ("root-custody-reader", "substrate/executors/qualification.py"),
             ("channel-oracle", "substrate/gates/channel_reply.py"),
+            ("refusal-names", "core/refusal.py"),
         )
     ),
     (

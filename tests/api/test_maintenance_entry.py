@@ -44,8 +44,10 @@ AUTHORIZATION_LAW_CHANGES = (
     ("substrate/executors/qualification.py", b"info.st_nlink != 1", b"info.st_nlink > 2"),
     ("substrate/gates/channel_reply.py", b'raise ExtractionRefusal("candidate-differs")',
      b"pass"),
+    ("core/refusal.py", b'"capture.unchanged"', b'"capture.base"'),
 )
-LAW_IDS = ("core-law", "maintenance-reader", "root-custody-reader", "channel-oracle")
+LAW_IDS = ("core-law", "maintenance-reader", "root-custody-reader", "channel-oracle",
+           "refusal-names")
 
 
 def change_authorization_law(monkeypatch, relative_path, before, after):

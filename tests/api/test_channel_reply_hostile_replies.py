@@ -3,7 +3,7 @@
 Every maintenance rehearsal feeds the one correct program. These cases feed what
 a model plausibly sends instead (a read and nothing more, an edit that matches
 nothing, a call that raises, a stray file) and pin the result: accepted, or the
-refusal name the diagnostic packet reports.
+refusal codes the guard sealed in its NodeFailed event.
 
 What is real, by tier. Each case asserts which worker launcher it used.
 
@@ -55,6 +55,7 @@ from constructicon.core.maintenance import (
     ChannelReplyResult,
 )
 from constructicon.core.qualification_write import CallbackObservation
+from constructicon.core.refusal import RefusalCode
 from constructicon.substrate.executors.attempt_turn import turn_path
 from constructicon.substrate.executors.codex_protocol import MAX_TOOL_CALLS, TOOL_OUTPUT_BYTES
 from constructicon.substrate.executors.linux import LinuxLauncher
@@ -65,7 +66,6 @@ from constructicon.substrate.gates.channel_reply import (
 )
 from constructicon.substrate.git.capture import ContainedWriteWorkspaceProvider
 from constructicon.substrate.journal import maintenance_diagnostic, maintenance_evidence
-from constructicon.substrate.journal.maintenance_diagnostic import _FAILURES
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.api import test_plan_manifest_application as application_tests
 from tests.api.test_plan_manifest_application import PortableProcessLauncher
@@ -195,6 +195,10 @@ WHERE = (
     "print(sys.version_info[:2], os.path.exists('.git'), shutil.which('git'))\n"
 )
 ACCEPTED = "accepted"
+# Where a refused case ends: the refusal codes its guard sealed in the event.
+UNCHANGED = [RefusalCode.CAPTURE_UNCHANGED]
+NOT_POSITIVE = [RefusalCode.WRITER_NOT_POSITIVE]
+GATE = [RefusalCode.GATE_NOT_POSITIVE]
 
 
 def rewrite(seen: tuple[str, ...]) -> str:
@@ -227,9 +231,9 @@ def case(programs, outcome, *, node=None, started=None, completed=None, workers=
 # were returned to the peer, which is all a model would ever see of a call.
 SHARED = {
     # No tool call at all: the turn succeeds and nothing was written.
-    "text-only": case([], "capture-unchanged", node="writer"),
+    "text-only": case([], UNCHANGED, node="writer"),
     # The generation-18 shape: one successful callback, then the turn ends.
-    "read-then-end": case([READ], "capture-unchanged", node="writer"),
+    "read-then-end": case([READ], UNCHANGED, node="writer"),
     # The natural two steps. The first prints the whole target.
     "read-then-edit": case([READ, EDIT], ACCEPTED),
     # The second program is computed from the first output, as a model's is: a
@@ -237,29 +241,29 @@ SHARED = {
     "rewrite-from-what-it-read": case([READ, rewrite], ACCEPTED),
     # A replace that matches nothing and no assert: a silent rewrite of the same bytes.
     "edit-matches-nothing": case([READ, edit_program(checked=False, misremembered=True)],
-                                 "capture-unchanged", node="writer"),
+                                 UNCHANGED, node="writer"),
     # One uncaught exception ends the attempt; the peer is sent no output for it.
-    "call-raises": case([WRONG_PATH], "writer-not-positive", node="writer",
+    "call-raises": case([WRONG_PATH], NOT_POSITIVE, node="writer",
                         completed=0, workers=["nonzero"], seen=0),
     # A correct write does not survive a later call that raises.
-    "edit-then-raise": case([EDIT, WRONG_PATH], "writer-not-positive", node="writer",
+    "edit-then-raise": case([EDIT, WRONG_PATH], NOT_POSITIVE, node="writer",
                             completed=1, workers=["success", "nonzero"], seen=1),
     # 43,520 hex characters: the worker succeeds, the adapter refuses the output.
-    "output-over-bound": case([HEX_DUMP], "writer-not-positive", node="writer",
+    "output-over-bound": case([HEX_DUMP], NOT_POSITIVE, node="writer",
                               completed=0, workers=["success"], seen=0),
     # The ninth call is never admitted, and the eight completed ones are discarded.
-    "nine-calls": case([PEEK] * (MAX_TOOL_CALLS + 1), "writer-not-positive", node="writer",
+    "nine-calls": case([PEEK] * (MAX_TOOL_CALLS + 1), NOT_POSITIVE, node="writer",
                        started=MAX_TOOL_CALLS, completed=MAX_TOOL_CALLS,
                        workers=["success"] * MAX_TOOL_CALLS, seen=MAX_TOOL_CALLS),
     "edit-plus-backup": case(
         [READ, edit_program(after="Path(str(p) + '.bak').write_bytes(original.encode())")],
-        "gate-not-positive", node="checker"),
+        GATE, node="checker"),
     "helper-docstring": case([READ, edit_program(helper=DOCSTRING_HELPER)],
-                             "gate-not-positive", node="checker"),
+                             GATE, node="checker"),
     "reply-also-rewritten": case([READ, edit_program(also_reply=True)],
-                                 "gate-not-positive", node="checker"),
+                                 GATE, node="checker"),
     "one-caller-only": case([READ, edit_program(acknowledge=False)],
-                            "gate-not-positive", node="checker"),
+                            GATE, node="checker"),
 }
 COMPILE = edit_program(after="import py_compile\npy_compile.compile(str(p), doraise=True)")
 # The portable tier runs every shared case. The contained tier repeats the ones
@@ -273,7 +277,7 @@ CONTAINED = {
     )
 } | {
     # Where a call runs, as the worker itself reports it.
-    "where-am-i": case([WHERE], "capture-unchanged", node="writer"),
+    "where-am-i": case([WHERE], UNCHANGED, node="writer"),
     # The absolute spelling of the bound root.
     "edit-by-workspace-path": case(
         [READ, edit_program(path="/workspace/" + CHANNEL_TARGET_PATH)], ACCEPTED),
@@ -281,7 +285,7 @@ CONTAINED = {
     "edit-plus-py-compile": case([READ, COMPILE], ACCEPTED),
     # The worker's interpreter is isolated: the project is not importable.
     "imports-the-project": case(["import constructicon\nprint(constructicon.__file__)\n"],
-                                "writer-not-positive", node="writer",
+                                NOT_POSITIVE, node="writer",
                                 completed=0, workers=["nonzero"], seen=0),
 }
 
@@ -306,7 +310,7 @@ DIVERGED = {
     # Recorded over another file. The first output differs, so the edit is never sent.
     "another-base": (
         Turn((Call(READ, Seen.of("another file\n")), Call(EDIT, WROTE)), True, "done"),
-        "call 1: recorded Seen", case([READ], "capture-unchanged", node="writer")[1]),
+        "call 1: recorded Seen", case([READ], UNCHANGED, node="writer")[1]),
     # Recorded as seen, but the adapter refuses this output: nothing comes back.
     "output-now-refused": (
         Turn((Call(HEX_DUMP, Seen.of("recorded")), Call(EDIT, WROTE)), True, "done"),
@@ -352,7 +356,7 @@ async def attempt(resources, launch, binding, tmp_path, monkeypatch, seat: Seate
     if result is None:
         failure, = failures
         assert failure.payload["error_type"] == "ContractViolation", failure.payload
-        outcome, node = _FAILURES[failure.payload["error"]], failure.path.scope.segments[-1]
+        outcome, node = failure.payload["refusal"], failure.path.scope.segments[-1]
         assert not (Path(authorization.journal).parent / "maintenance-result.json").exists()
     else:
         assert isinstance(result, ChannelReplyResult) and result.evaluation.ok and not failures

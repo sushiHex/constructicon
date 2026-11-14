@@ -768,6 +768,17 @@ cannot become legacy compatibility, and deleting a fact cannot turn its
 identity back into permission to create. See
 [ADR 0016](adr/0016-positive-durable-facts-and-provenance-eras.md).
 
+A `NodeFailed` event may carry an optional `refusal` key: the closed
+`RefusalCode` members its `ContractViolation` carried, most general first
+(`core/refusal.py`, docs/designs/REFUSAL_CODE.md). It takes no new era or
+schema version, and fits ADR 0016 rather than being exempt from it. The
+ordinary-event projector requires only a JSON object and constrains no
+`NodeFailed` shape. The event's seal covers its exact stored payload bytes, so
+a written key is never removed. Absence means "not recorded" for current
+writers as well as old ones, so the key never selects a historical path. An
+uncoded failure's payload is byte-identical to its earlier form. No decision
+reads a code: codes stay out of checks, attestations, subjects and manifests.
+
 Schema 8 co-commits a positively sealed accounting era with every new run.
 Migration binds each retained run's validated event floor and exact acquisition
 inventory; only a current creation era proves complete history from zero.

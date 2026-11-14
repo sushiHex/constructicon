@@ -307,6 +307,7 @@ async def exercise_task_entry(
         assert len(failures) == 1 and failures[0].payload == {
             "error_type": "ContractViolation",
             "error": "maintenance captured candidate equals the pinned base",
+            "refusal": ["capture.unchanged"],
         }
         assert not any(event.kind == "NodeStarted" and event.path is not None
             and event.path.scope.segments[-1] == "checker" for event in events)
@@ -318,7 +319,7 @@ async def exercise_task_entry(
     attestation = journal.load_attestation(result.evaluation.attestation_id)
     assert attestation.ok and attestation.created_by_run == run_id
     assert attestation.subject == result.evaluation.subject
-    report = json.loads(result.evaluation.checks[0].detail)
+    report = json.loads(result.evaluation.checks[1].detail)
     assert report["baseline"] == {"tests_run": 34, "failures": 0, "errors": 0, "skips": 0}
     assert len(report["mutants"]) == 8
     assert all(item["distinguished"] and item["counts"]["failures"] > 0

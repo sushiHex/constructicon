@@ -8,6 +8,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from constructicon.core.refusal import MAX_REFUSAL_CODES, RefusalCode
+
 if TYPE_CHECKING:
     from constructicon.core.admission import AdmissionFault
 
@@ -17,7 +19,27 @@ class ConstructiconError(Exception):
 
 
 class ContractViolation(ConstructiconError):
-    """A payload failed validation at a boundary — a bug; fail fast."""
+    """A payload failed validation at a boundary — a bug; fail fast.
+
+    ``refusal`` is the guard's own closed reasons, most general first. It is
+    never a causal claim, and the walker seals it beside the message. It is
+    checked once, here, and read-only after, so what is sealed was checked.
+    """
+
+    _refusal: tuple[RefusalCode, ...] = ()
+
+    def __init__(self, *args: object, refusal: Sequence[RefusalCode] = ()) -> None:
+        codes = tuple(refusal)
+        if len(codes) > MAX_REFUSAL_CODES or not all(
+            type(code) is RefusalCode for code in codes
+        ):
+            raise TypeError("refusal is at most twelve RefusalCode members")
+        super().__init__(*args)
+        self._refusal = codes
+
+    @property
+    def refusal(self) -> tuple[RefusalCode, ...]:
+        return self._refusal
 
 
 class AdmissionError(ConstructiconError):

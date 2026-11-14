@@ -55,6 +55,7 @@ from constructicon.core.maintenance import (
 from constructicon.core.manifest import source_graph_hash_for
 from constructicon.core.ports import Port
 from constructicon.core.qualification import QualificationAuthorizing
+from constructicon.core.refusal import RefusalCode
 from constructicon.core.run import RunStatus
 from constructicon.core.workspace import AsyncWriteWorkspace
 from constructicon.runtime.context import NodeContext, NodeImpl
@@ -96,7 +97,8 @@ def pinned_instruction(
 ) -> str:
     """The instruction, only if it is the text the approved request pins."""
     if request.instruction_sha256 is None:
-        raise ContractViolation("maintenance request carries no instruction digest")
+        raise ContractViolation("maintenance request carries no instruction digest",
+                                refusal=(RefusalCode.WRITER_INSTRUCTION,))
     text = instruction if isinstance(instruction, str) else ""
     try:
         raw = text.encode("utf-8")
@@ -104,7 +106,8 @@ def pinned_instruction(
         raw = b""
     # Empty is never an instruction (base_instruction refuses it), so it marks refusal.
     if not raw or hashlib.sha256(raw).hexdigest() != request.instruction_sha256:
-        raise ContractViolation("maintenance instruction differs from its pinned digest")
+        raise ContractViolation("maintenance instruction differs from its pinned digest",
+                                refusal=(RefusalCode.WRITER_INSTRUCTION,))
     return text
 
 
@@ -122,29 +125,37 @@ async def _write_candidate(
     request = task.request_model.model_validate(inputs["request"])
     workspace = ctx.capability("workspace")
     if not isinstance(workspace, AsyncWriteWorkspace):
-        raise ContractViolation("maintenance requires an asynchronous WRITE workspace")
+        raise ContractViolation("maintenance requires an asynchronous WRITE workspace",
+                                refusal=(RefusalCode.WRITER_WORKSPACE,))
     initial = workspace.git_ref()
     if initial.repository != request.repository or initial.commit != request.base_commit:
-        raise ContractViolation("maintenance workspace differs from the pinned base")
+        raise ContractViolation("maintenance workspace differs from the pinned base",
+                                refusal=(RefusalCode.WRITER_BASE,))
     instruction = pinned_instruction(request, inputs.get("instruction"))
     executor = cast(Executor, ctx.capability("executor"))
     outcome = await executor.execute(
         TaskSpec(instruction=instruction), workspace=workspace, grants=ctx.grants,
     )
     if not isinstance(outcome, ExecutorSuccess):
-        raise ContractViolation("maintenance writer did not positively succeed")
+        raise ContractViolation("maintenance writer did not positively succeed",
+                                refusal=(RefusalCode.WRITER_NOT_POSITIVE,))
     captured = await workspace.commit_all(task.capture_message)
     candidate = workspace.git_ref()
     if candidate.commit != captured:
-        raise ContractViolation("maintenance captured candidate differs from capture return")
+        raise ContractViolation("maintenance captured candidate differs from capture return",
+                                refusal=(RefusalCode.CAPTURE_RETURN,))
     if candidate.commit == request.base_commit:
-        raise ContractViolation("maintenance captured candidate equals the pinned base")
+        raise ContractViolation("maintenance captured candidate equals the pinned base",
+                                refusal=(RefusalCode.CAPTURE_UNCHANGED,))
     if candidate.repository != request.repository:
-        raise ContractViolation("maintenance captured candidate has another repository")
+        raise ContractViolation("maintenance captured candidate has another repository",
+                                refusal=(RefusalCode.CAPTURE_REPOSITORY,))
     if candidate.paths:
-        raise ContractViolation("maintenance captured candidate has path restrictions")
+        raise ContractViolation("maintenance captured candidate has path restrictions",
+                                refusal=(RefusalCode.CAPTURE_PATHS,))
     if candidate.diff_against != request.base_commit:
-        raise ContractViolation("maintenance captured candidate has another comparison base")
+        raise ContractViolation("maintenance captured candidate has another comparison base",
+                                refusal=(RefusalCode.CAPTURE_BASE,))
     return {"candidate": candidate.model_dump(mode="json")}
 
 
@@ -167,14 +178,19 @@ async def _check_candidate(
         or candidate.paths or candidate.commit == request.base_commit
         or gate.target_ref != request.target_ref
     ):
-        raise ContractViolation("maintenance checker received another candidate or gate")
+        raise ContractViolation("maintenance checker received another candidate or gate",
+                                refusal=(RefusalCode.CHECKER_INPUT,))
     evaluation = await gate.verify(candidate.commit)
     subject = evaluation.subject
-    if not evaluation.ok or subject is None or (
+    if not evaluation.ok:
+        raise ContractViolation("maintenance candidate failed its exact gate",
+                                refusal=(RefusalCode.GATE_NOT_POSITIVE,))
+    if subject is None or (
         subject.repository != request.repository or subject.target_ref != request.target_ref
         or subject.candidate != candidate.commit or subject.expected_base != request.base_commit
     ):
-        raise ContractViolation("maintenance candidate failed its exact gate")
+        raise ContractViolation("maintenance candidate failed its exact gate",
+                                refusal=(RefusalCode.GATE_SUBJECT,))
     return {"evaluation": evaluation.model_dump(mode="json")}
 
 
@@ -322,10 +338,61 @@ async def _git(authority: GitAuthority, *args: str) -> bytes:
     )
 
 
+INVENTORY_CHECK_NAME = "maintenance-tree-inventory"
+
+
+def _trusted_check(name: str, program: str) -> CheckSpec:
+    if len(program.encode("utf-8")) > 120_000:
+        raise ContractViolation("maintenance trusted check exceeds the fixed argument bound")
+    return CheckSpec(name=name, argv=("/usr/bin/python3", "-I", "-c", program), timeout_s=120)
+
+
+def _inventory_check(
+    inventory: Mapping[str, tuple[str, str]], allowed: str, limit: int, object_format: str,
+) -> CheckSpec:
+    """One inventory program for both tasks, a check apart from the task's content check.
+
+    The gate's already verified immutable tree is the input. Every path except
+    ``allowed`` must be the base's exact blob and mode, and ``allowed`` one
+    regular, non-executable file within ``limit``. It forbids *all* other
+    changed paths and modes before any passing attestation; both checks must pass.
+    """
+    inventory_hash = hashlib.sha256(json.dumps(
+        sorted((name, mode, oid) for name, (mode, oid) in inventory.items()),
+        ensure_ascii=True, separators=(",", ":"),
+    ).encode("ascii")).hexdigest()
+    return _trusted_check(INVENTORY_CHECK_NAME, (
+        "import hashlib,json,os,pathlib\n"
+        f"expected_hash={inventory_hash!r}\n"
+        f"allowed={allowed!r}\nobject_format={object_format!r}\nlimit={limit!r}\n"
+        "found=False\n"
+        "observed=[]\n"
+        "for p in pathlib.Path('.').rglob('*'):\n"
+        " name=p.as_posix()\n"
+        " if p.is_symlink():\n"
+        "  mode='120000';raw=os.fsencode(os.readlink(p))\n"
+        " elif p.is_file():\n"
+        "  if name==allowed: assert p.stat().st_size<=limit\n"
+        "  mode='100755' if p.stat().st_mode & 0o111 else '100644';raw=p.read_bytes()\n"
+        " else:\n"
+        "  continue\n"
+        " if name==allowed:\n"
+        "  assert mode=='100644' and len(raw)<=limit\n"
+        "  found=True\n"
+        "  continue\n"
+        " oid=hashlib.new(object_format,f'blob {len(raw)}\\0'.encode()+raw).hexdigest()\n"
+        " observed.append((name,mode,oid))\n"
+        "actual_hash=hashlib.sha256(json.dumps(sorted(observed),ensure_ascii=True,"
+        "separators=(',',':')).encode('ascii')).hexdigest()\n"
+        "assert actual_hash==expected_hash\n"
+        "assert found\n"
+    ))
+
+
 def maintenance_checks(
     target_source: bytes, target_sha256: str, baseline_inventory: bytes, object_format: str,
 ) -> tuple[CheckSpec, ...]:
-    """The fixed exam embeds trusted code and pins every unchanged base blob."""
+    """The fixed exam: the shared inventory check, then the embedded trusted vectors."""
     from constructicon.substrate.gates import maintenance
 
     if hashlib.sha256(target_source).hexdigest() != target_sha256:
@@ -344,37 +411,14 @@ def maintenance_checks(
         if name == VECTOR_PATH or name in inventory:
             raise ContractViolation("maintenance vector exists or base inventory repeats a path")
         inventory[name] = mode, oid
-    inventory_hash = hashlib.sha256(json.dumps(
-        sorted((name, mode, oid) for name, (mode, oid) in inventory.items()),
-        ensure_ascii=True, separators=(",", ":"),
-    ).encode("ascii")).hexdigest()
     source = Path(maintenance.__file__).read_text(encoding="utf-8")
-    # The gate's already verified immutable tree is the input. This comparison
-    # forbids *all* other changed paths and modes before any passing attestation.
     program = (
-        "import dataclasses,hashlib,json,linecache,os,pathlib,stat,sys,types\n"
-        f"expected_hash={inventory_hash!r}\n"
-        f"allowed={VECTOR_PATH!r}\nobject_format={object_format!r}\n"
-        "observed=[]\n"
-        "for p in pathlib.Path('.').rglob('*'):\n"
-        " name=p.as_posix()\n"
-        " if p.is_symlink():\n"
-        "  mode='120000';raw=os.fsencode(os.readlink(p))\n"
-        " elif p.is_file():\n"
-        "  if name==allowed: assert p.stat().st_size<=32768\n"
-        "  mode='100755' if p.stat().st_mode & 0o111 else '100644';raw=p.read_bytes()\n"
-        " else:\n"
-        "  continue\n"
-        " if name==allowed:\n"
-        "  assert mode=='100644' and len(raw)<=32768\n"
-        "  continue\n"
-        " oid=hashlib.new(object_format,f'blob {len(raw)}\\0'.encode()+raw).hexdigest()\n"
-        " observed.append((name,mode,oid))\n"
-        "actual_hash=hashlib.sha256(json.dumps(sorted(observed),ensure_ascii=True,"
-        "separators=(',',':')).encode('ascii')).hexdigest()\n"
-        "assert actual_hash==expected_hash\n"
-        "p=pathlib.Path(allowed)\n"
+        "import dataclasses,json,linecache,pathlib,stat,sys,types\n"
+        f"p=pathlib.Path({VECTOR_PATH!r})\n"
         "assert stat.S_ISREG(p.lstat().st_mode) and not (p.lstat().st_mode & 0o111)\n"
+        "assert p.lstat().st_size<=32768\n"
+        "raw=p.read_bytes()\n"
+        "assert len(raw)<=32768\n"
         "m=types.ModuleType('trusted_plan_manifest_vectors')\n"
         "sys.modules[m.__name__]=m\n"
         "filename='<trusted-plan-manifest-vectors>'\n"
@@ -382,25 +426,25 @@ def maintenance_checks(
         f"source={source!r}\n"
         "linecache.cache[filename]=(len(source),None,source.splitlines(True),filename)\n"
         "exec(compile(source,filename,'exec'),m.__dict__)\n"
-        f"report=m.run_vectors(p.read_bytes(),{target_source!r},{target_sha256!r})\n"
+        f"report=m.run_vectors(raw,{target_source!r},{target_sha256!r})\n"
         "assert report.passed\n"
         "summary=json.dumps(dataclasses.asdict(report),sort_keys=True,separators=(',',':'))\n"
         "assert len(summary.encode('ascii'))<=4096\n"
         "print(summary)\n"
     )
-    if len(program.encode("utf-8")) > 120_000:
-        raise ContractViolation("maintenance trusted check exceeds the fixed argument bound")
-    return (CheckSpec(name="plan-manifest-trusted-vectors",
-                      argv=("/usr/bin/python3", "-I", "-c", program), timeout_s=120),)
+    return (_inventory_check(inventory, VECTOR_PATH, 32768, object_format),
+            _trusted_check("plan-manifest-trusted-vectors", program))
 
 
 def channel_reply_checks(
     base_source: bytes, base_sha256: str, baseline_inventory: bytes, object_format: str,
 ) -> tuple[CheckSpec, ...]:
-    """The fixed extraction exam embeds the whole stdlib oracle and the pinned base.
+    """The fixed exam: the shared inventory check, then the exact extraction.
 
-    The program pins the base blob and every other path's mode and blob before
-    it parses the candidate; it imports no project module, base or candidate.
+    The extraction embeds the whole stdlib oracle and the pinned base, and
+    parses the candidate's bytes after checking its file's type and bound; it
+    imports no project module, base or candidate. The inventory is its own
+    check, so an extra file and a wrong edit fail different named checks.
     """
     if hashlib.sha256(base_source).hexdigest() != base_sha256:
         raise ContractViolation("maintenance check target digest differs")
@@ -427,42 +471,17 @@ def channel_reply_checks(
     base_oid = hashlib.new(object_format, f"blob {len(base_source)}\0".encode() + base_source)
     if inventory.pop(CHANNEL_TARGET_PATH, None) != ("100644", base_oid.hexdigest()):
         raise ContractViolation("maintenance channel target is not the pinned regular base blob")
-    inventory_hash = hashlib.sha256(json.dumps(
-        sorted((name, mode, oid) for name, (mode, oid) in inventory.items()),
-        ensure_ascii=True, separators=(",", ":"),
-    ).encode("ascii")).hexdigest()
     source = Path(channel_reply.__file__).read_text(encoding="utf-8")
     limit = channel_reply.MAX_SOURCE_BYTES
     program = (
-        "import hashlib,json,linecache,os,pathlib,stat,sys,types\n"
-        f"expected_hash={inventory_hash!r}\n"
-        f"allowed={CHANNEL_TARGET_PATH!r}\nobject_format={object_format!r}\n"
+        "import hashlib,json,linecache,pathlib,stat,sys,types\n"
         f"base={base_source!r}\nbase_sha256={base_sha256!r}\nlimit={limit!r}\n"
         "assert len(base)<=limit and hashlib.sha256(base).hexdigest()==base_sha256\n"
-        "candidate=None\n"
-        "observed=[]\n"
-        "for p in pathlib.Path('.').rglob('*'):\n"
-        " name=p.as_posix()\n"
-        " if p.is_symlink():\n"
-        "  mode='120000';raw=os.fsencode(os.readlink(p))\n"
-        " elif p.is_file():\n"
-        "  if name==allowed: assert p.stat().st_size<=limit\n"
-        "  mode='100755' if p.stat().st_mode & 0o111 else '100644';raw=p.read_bytes()\n"
-        " else:\n"
-        "  continue\n"
-        " if name==allowed:\n"
-        "  assert mode=='100644' and len(raw)<=limit\n"
-        "  candidate=raw\n"
-        "  continue\n"
-        " oid=hashlib.new(object_format,f'blob {len(raw)}\\0'.encode()+raw).hexdigest()\n"
-        " observed.append((name,mode,oid))\n"
-        "actual_hash=hashlib.sha256(json.dumps(sorted(observed),ensure_ascii=True,"
-        "separators=(',',':')).encode('ascii')).hexdigest()\n"
-        "assert actual_hash==expected_hash\n"
-        "p=pathlib.Path(allowed)\n"
-        "assert candidate is not None\n"
+        f"p=pathlib.Path({CHANNEL_TARGET_PATH!r})\n"
         "assert stat.S_ISREG(p.lstat().st_mode) and not (p.lstat().st_mode & 0o111)\n"
-        # Base blob and inventory are pinned above; only now is the candidate parsed.
+        "assert p.lstat().st_size<=limit\n"
+        "candidate=p.read_bytes()\n"
+        "assert len(candidate)<=limit\n"
         "m=types.ModuleType('trusted_channel_stored_reply')\n"
         "sys.modules[m.__name__]=m\n"
         "filename='<trusted-channel-stored-reply>'\n"
@@ -476,10 +495,8 @@ def channel_reply_checks(
         "assert len(summary.encode('ascii'))<=4096\n"
         "print(summary)\n"
     )
-    if len(program.encode("utf-8")) > 120_000:
-        raise ContractViolation("maintenance trusted check exceeds the fixed argument bound")
-    return (CheckSpec(name=channel_reply.CHECK_NAME,
-                      argv=("/usr/bin/python3", "-I", "-c", program), timeout_s=120),)
+    return (_inventory_check(inventory, CHANNEL_TARGET_PATH, limit, object_format),
+            _trusted_check(channel_reply.CHECK_NAME, program))
 
 
 async def require_maintenance_resources(resources: MaintenanceResources) -> None:
