@@ -11474,3 +11474,45 @@ the self-contained handoff rather than a numeric ceiling. A thin pack,
 alternate store or rewritten ancestry would not satisfy that contract; an
 unbounded or global increase would broaden the change. This work neither
 installs a controller nor qualifies or spends another live WRITE attempt.
+
+## Stored-reply WRITE accepted — generation 19 (#407)
+
+Generation 18's one attempt completed normally and was refused at the writer
+as `capture-unchanged`: one callback, 210 output tokens, and a committed tree
+equal to the base
+([outcome record](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6785983613)).
+Reading the source offline gave a likely cause: the instruction never named
+`contained_python`, where it runs, or that its writes are captured. Nothing
+retained what the model had run or said, so that cause was inferred, not
+observed.
+
+#407 changed only the instruction and what an attempt retains. The effort
+setting and the vendor's read-only sandbox were left unchanged; the
+instruction counters the sandbox text instead of overriding it.
+
+- The instruction names the one write tool, its working directory and its
+  capture (#408), and the guards that end an attempt (#411). It is pinned by
+  digest as the target is (#420).
+- The exact first request the model receives was captured offline on the
+  pinned client (#409).
+- An attempt's outcome carries digests and lengths of each callback program,
+  its output and the final reply (#410). The turn itself is kept only on the
+  private host (#419).
+- Model-shaped replies are pinned to their refusals (#412).
+
+The generation-19 window replaced the controller at `cf7042f` and made its one
+attempt, and the application was accepted
+([outcome record](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6872120435)).
+The model made two callbacks. The first printed 21,761 bytes, the target
+file's size, so it was a read. The second was a 2,229-byte program with a
+107-byte output: the edit and its confirmation. The attempt used 28,558 input
+and 703 output tokens. The report was `succeeded-with-acceptance-record` with
+no refusal node. The window then withdrew generation 19, parked the host with
+a fresh Off observation and released custody. Its stop rule was met with no
+retry. The candidate commit and the retained turn's text stay private.
+
+The [acceptance](https://github.com/sushiHex/constructicon/issues/407#issuecomment-6875514855)
+closed #407 and, with it, the M8 milestone. The evidence covers one accepted
+attempt on one fixed task at one recorded revision. It shows that the bounded
+path carries a real model edit to acceptance. It does not measure a success
+rate, and it does not qualify another revision or boot.
