@@ -145,7 +145,7 @@ def classify_changes(entries: tuple[DiffEntry, ...]) -> str:
     return "full"
 
 
-def _git(repository: Path, *arguments: str) -> bytes:
+def _git(repository: Path, *arguments: str, stdin: bytes | None = None) -> bytes:
     environment = os.environ.copy()
     environment.update(
         {
@@ -160,7 +160,8 @@ def _git(repository: Path, *arguments: str) -> bytes:
             ["git", "--no-replace-objects", *arguments],
             cwd=repository,
             env=environment,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL if stdin is None else None,
+            input=stdin,
             capture_output=True,
             check=False,
             timeout=30,
@@ -349,6 +350,53 @@ def verify_tree_margin(repository: Path, bound: int = GATE_SNAPSHOT_BOUND) -> in
     return margin
 
 
+# The maintenance WRITE capture exports its base's whole ancestry, and assembly
+# refuses a pinned base_commit that leaves no room under MAINTENANCE_PACK_LIMITS
+# (ContainedWriteWorkspaceProvider.require_capture_headroom). That guard still
+# decides for the actual pin. This measures HEAD as the next candidate base. The
+# bounds are restated here; tests/test_capture_headroom_margin.py pins them and
+# drives that guard on HEAD. History only grows, so no cleanup restores room:
+# the margins give warning while the remedy, an ADR on capturing the contribution
+# rather than the ancestry, is designed. Each margin is about forty captures:
+CAPTURE_OBJECT_BOUND = 100_000
+CAPTURE_EXPANDED_BOUND = 192 * 1024 * 1024
+# A capture adds one commit, the trees on one path and one edited target.
+# About 25 KB for the larger target at aaf9920; forty is about one MiB.
+REQUIRED_CAPTURE_MARGIN = 1024 * 1024
+# Those are 3 to 10 objects; forty captures of ten is 400.
+REQUIRED_CAPTURE_OBJECTS = 400
+
+
+def verify_capture_headroom(
+    repository: Path, bound: int = CAPTURE_EXPANDED_BOUND,
+    object_bound: int = CAPTURE_OBJECT_BOUND,
+) -> tuple[int, int]:
+    """Return the next candidate base's expanded size and object count, or refuse."""
+    # These read stored objects, as the guard does, so no line-ending filter
+    # applies. A shallow clone hides ancestry and would overstate the headroom.
+    if _git(repository, "rev-parse", "--is-shallow-repository").strip() != b"false":
+        raise ScopeError("capture-headroom-margin: HEAD's history is shallow; fetch all of it")
+    objects = _git(repository, "rev-list", "--objects", "--no-object-names", "HEAD")
+    count = len(objects.splitlines())
+    if count == 0 or object_bound - count < REQUIRED_CAPTURE_OBJECTS:
+        raise ScopeError(
+            f"capture-headroom-margin: the next candidate base (HEAD) has {count} objects, "
+            f"{object_bound - count} below the {object_bound}-object capture bound; "
+            f"{REQUIRED_CAPTURE_OBJECTS} are required (issue #423)"
+        )
+    rows = _git(repository, "cat-file", "--batch-check=%(objectsize)", stdin=objects).splitlines()
+    if len(rows) != count or not all(row.isdigit() for row in rows):
+        raise ScopeError("capture-headroom-margin: Git's object sizes contradict HEAD's objects")
+    size = sum(int(row) for row in rows)
+    if bound - size < REQUIRED_CAPTURE_MARGIN:
+        raise ScopeError(
+            f"capture-headroom-margin: the next candidate base (HEAD) expands to {size} "
+            f"bytes, {bound - size} below the {bound}-byte capture bound; "
+            f"{REQUIRED_CAPTURE_MARGIN} are required. History only grows (issue #423)"
+        )
+    return size, count
+
+
 def gate_allows(scope: str, classification: str, docs: str, proofs: str) -> bool:
     """Accept only the two complete job-state shapes produced by the workflow."""
 
@@ -374,6 +422,11 @@ def _parser() -> argparse.ArgumentParser:
     docs = subparsers.add_parser("docs", help="verify documentation links and archive")
     docs.add_argument("--repository", type=Path, default=Path.cwd())
 
+    capture = subparsers.add_parser(
+        "capture-headroom", help="measure the next candidate base under the capture bounds",
+    )
+    capture.add_argument("--repository", type=Path, default=Path.cwd())
+
     gate = subparsers.add_parser("gate", help="validate the aggregate workflow result")
     gate.add_argument("--scope", required=True)
     gate.add_argument("--classification", required=True)
@@ -392,6 +445,12 @@ def main(argv: list[str] | None = None) -> int:
             verify_docs(arguments.repository)
             # Prose is where this tree grows fastest, and prose skips the full lanes.
             print(f"tree margin: {verify_tree_margin(arguments.repository)} bytes")
+            return 0
+        if arguments.command == "capture-headroom":
+            size, count = verify_capture_headroom(arguments.repository)
+            print(f"next candidate base (HEAD): {size} of {CAPTURE_EXPANDED_BOUND} expanded "
+                  f"bytes, {CAPTURE_EXPANDED_BOUND - size} to spare; {count} of "
+                  f"{CAPTURE_OBJECT_BOUND} objects, {CAPTURE_OBJECT_BOUND - count} to spare")
             return 0
         if arguments.command == "gate":
             allowed = gate_allows(

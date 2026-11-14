@@ -158,7 +158,7 @@ def test_docs_command_checks_merge_tree_when_base_deleted_a_link_target(
     completed, emitted = _run_classifier(repository, base, head, tmp_path)
     assert completed.returncode == 0 and emitted == "scope=docs\n"
     _run_git(repository, "merge", "--no-commit", "--no-ff", head)
-    command = _job("docs").split("      - run: ", 1)[1].strip()
+    command = _job("docs").split("      - run: ", 1)[1].split("\n", 1)[0]
     command = 'python3() { "$TEST_PYTHON" "$@"; }\n' + command
     checked = subprocess.run(
         [str(_bash()), "-c", command], cwd=repository, stdin=subprocess.DEVNULL,
