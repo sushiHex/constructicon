@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import io
 import math
 import os
 import shutil
@@ -318,15 +317,24 @@ class ContainedGateRunner:
             "ls-tree", "-r", "-z", "--full-tree", commit,
             cwd=self.authority.repository_id, guard=guard,
         )
-        content = await git.run(
-            "archive", "--format=tar", commit, cwd=self.authority.repository_id, guard=guard,
-        )
-        snapshot = handle.paths.payload / "snapshot"
+        # Git writes the tree beside the snapshot, under the pump's RLIMIT_FSIZE.
+        # artifact_bytes bounds what a Git child prints into memory, not a tree.
+        snapshot, tar = handle.paths.payload / "snapshot", handle.paths.payload / "snapshot.tar"
+        handle.paths.payload.mkdir(parents=True, exist_ok=True)
+        try:
+            await git.run("archive", "--format=tar", f"--output={tar}", commit,
+                          cwd=self.authority.repository_id, guard=guard)
+        except ContractViolation as exc:
+            written = f"{tar.stat().st_size} tar bytes" if tar.exists() else "no tar file"
+            raise ContractViolation(
+                f"gate snapshot archive failed ({written} written): {exc}",
+            ) from exc
 
         def extract() -> None:
-            snapshot.mkdir(parents=True, exist_ok=False)
-            with tarfile.open(fileobj=io.BytesIO(content)) as archive:
+            snapshot.mkdir(exist_ok=False)
+            with tarfile.open(tar) as archive:
                 archive.extractall(snapshot, filter="data")
+            tar.unlink()  # Checks see the snapshot directory alone.
             # Archive attributes may omit or substitute content. Compare actual
             # exported blobs/modes with the exact Git tree before running code.
             # Unsupported gitlinks or lossy exports fail closed, never attest a

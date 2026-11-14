@@ -322,12 +322,13 @@ def verify_docs(repository: Path) -> None:
     verify_markdown_links(repository)
 
 
-# A contained gate reads `git archive --format=tar` of a whole commit into memory
-# under ProcessLimits.artifact_bytes, restated here because this script imports
-# nothing; tests/test_tree_materialization_margin.py pins the two equal. This
-# repository is its own maintenance base, so its tree must stay under that bound
-# with room for a contribution. One tar record is all #423 found left to require.
-GATE_SNAPSHOT_BOUND = 16 * 1024 * 1024
+# A contained gate has Git write `git archive --format=tar` of a whole commit to
+# a file in its payload, under the RLIMIT_FSIZE that substrate/git/process.py
+# sets on every trusted Git child. It is restated here because this script
+# imports nothing; tests/test_tree_materialization_margin.py pins the two equal.
+# This repository is its own maintenance base, so its tree must stay under that
+# bound with room for a contribution. One tar record is the room required.
+GATE_SNAPSHOT_BOUND = 128 * 1024 * 1024
 TAR_RECORD = 10_240
 REQUIRED_TREE_MARGIN = TAR_RECORD
 

@@ -1,21 +1,24 @@
 """This repository is its own maintenance base, and a gate snapshots it whole (#423).
 
-``ContainedGateRunner._snapshot`` reads ``git archive --format=tar`` of the prepared
-merge commit into memory under ``ProcessLimits.artifact_bytes``. Past the bound every
-full-tree gate refuses with "trusted Git output exceeds artifact materialization
-bound". The check lives in the CI scope script so prose-only changes run it too.
+``ContainedGateRunner._snapshot`` has Git write ``git archive --format=tar`` of the
+prepared merge commit to a file in its payload, under the ``RLIMIT_FSIZE`` that
+``substrate/git/process.py`` sets on every trusted Git child. Past the bound every
+full-tree gate refuses with "gate snapshot archive failed". The check lives in the
+CI scope script so prose-only changes run it too.
 
 It says this base fits with one tar record to spare. It does not say every candidate
 an exam accepts fits, nor that a snapshot finishes in time on a given host.
 """
 
+import math
+import re
 import shutil
 from pathlib import Path
 
 import pytest
 from scripts.ci import m8_ci_scope as scope
 
-from constructicon.substrate.executors.linux import ProcessLimits
+from constructicon.substrate.git import process
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECKOUT = pytest.mark.skipif(
@@ -25,7 +28,8 @@ CHECKOUT = pytest.mark.skipif(
 
 
 def test_the_scope_script_restates_the_gate_snapshot_bound_exactly():
-    assert ProcessLimits().artifact_bytes == scope.GATE_SNAPSHOT_BOUND
+    (factors,) = re.findall(r"\(resource\.RLIMIT_FSIZE, ([\d *]+)\)", process._LIMITED_EXEC)
+    assert math.prod(int(factor) for factor in factors.split("*")) == scope.GATE_SNAPSHOT_BOUND
     assert scope.REQUIRED_TREE_MARGIN >= scope.TAR_RECORD
 
 
