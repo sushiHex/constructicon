@@ -100,3 +100,6 @@ def test_a_code_is_a_member_and_the_list_is_bounded(refusal) -> None:
     at_bound = ContractViolation(MESSAGE, refusal=(RefusalCode.GATE_SUBJECT,) * MAX_REFUSAL_CODES)
     assert len(at_bound.refusal) == MAX_REFUSAL_CODES and str(at_bound) == MESSAGE
     assert ContractViolation(MESSAGE).refusal == ()
+    # Checked once and read-only after: nothing unchecked can reach the seal.
+    with pytest.raises(AttributeError):
+        at_bound.refusal = ("not-a-member",) * (MAX_REFUSAL_CODES + 1)  # type: ignore[misc]
