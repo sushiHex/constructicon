@@ -11493,8 +11493,9 @@ instruction counters the sandbox text instead of overriding it.
 - The instruction names the one write tool, its working directory and its
   capture (#408), and the guards that end an attempt (#411). It is pinned by
   digest as the target is (#420).
-- The exact first request the model receives was captured offline on the
-  pinned client (#409).
+- The first request the pinned client emits was captured offline, under a
+  fake provider and a substituted catalog path (#409). Production's provider
+  and authentication may change vendor-authored text.
 - An attempt's outcome carries digests and lengths of each callback program,
   its output and the final reply (#410). The turn itself is kept only on the
   private host (#419).
@@ -11503,9 +11504,12 @@ instruction counters the sandbox text instead of overriding it.
 The generation-19 window replaced the controller at `cf7042f` and made its one
 attempt, and the application was accepted
 ([outcome record](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6872120435)).
-The model made two callbacks. The first printed 21,761 bytes, the target
-file's size, so it was a read. The second was a 2,229-byte program with a
-107-byte output: the edit and its confirmation. The attempt used 28,558 input
+The model made two callbacks, both successful. The first was a 156-byte
+program whose output was 21,761 bytes, one byte more than the 21,760-byte
+target. The second was a 2,229-byte program with a 107-byte output. These are
+lengths only: they are consistent with a read followed by an edit, but a
+length cannot show what a program did. The acceptance is the evidence that
+the target changed. The attempt used 28,558 input
 and 703 output tokens. The report was `succeeded-with-acceptance-record` with
 no refusal node. The window then withdrew generation 19, parked the host with
 a fresh Off observation and released custody. Its stop rule was met with no

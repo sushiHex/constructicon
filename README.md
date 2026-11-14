@@ -406,12 +406,13 @@ or sandbox settings:
   turn itself only on the private host
   ([#419](https://github.com/sushiHex/constructicon/pull/419));
 - model-shaped replies are pinned to their refusals
-  ([#412](https://github.com/sushiHex/constructicon/pull/412)), and every
-  maintenance refusal now carries one typed code
+  ([#412](https://github.com/sushiHex/constructicon/pull/412)), and the
+  application's writer, capture, checker and gate guards record a typed
+  refusal code in their journal events
   ([#428](https://github.com/sushiHex/constructicon/pull/428)).
 
-In generation 19 the model read the target in one callback and wrote the edit
-in a second, and the application was **accepted**; the window then withdrew
+In generation 19 the model made two callbacks, and the application was
+**accepted**. The window then withdrew
 its generation, parked the host and released custody
 ([outcome record](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6872120435)).
 That closed #407 and the M8 milestone. It is one accepted attempt on one fixed
