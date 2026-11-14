@@ -307,6 +307,7 @@ async def exercise_task_entry(
         assert len(failures) == 1 and failures[0].payload == {
             "error_type": "ContractViolation",
             "error": "maintenance captured candidate equals the pinned base",
+            "refusal": ["capture.unchanged"],
         }
         assert not any(event.kind == "NodeStarted" and event.path is not None
             and event.path.scope.segments[-1] == "checker" for event in events)

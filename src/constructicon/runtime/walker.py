@@ -110,6 +110,14 @@ def _is_hard_death(error: BaseException) -> bool:
     return not isinstance(error, (Exception, asyncio.CancelledError))
 
 
+def _failure(error: BaseException) -> dict[str, JsonValue]:
+    """A NodeFailed payload; the codes only that very exception carries, never mined."""
+    payload: dict[str, JsonValue] = {"error": str(error), "error_type": type(error).__name__}
+    if isinstance(error, ContractViolation) and error.refusal:
+        payload["refusal"] = [str(code) for code in error.refusal]
+    return payload
+
+
 def _cleanup_error(errors: list[BaseException]) -> BaseException | None:
     """Combine known cleanup results, counting a shared release failure once."""
     unique: list[BaseException] = []
@@ -1797,7 +1805,7 @@ class Walker:
                     try:
                         self._journal.append_event(
                             lease, "NodeFailed", path=path,
-                            payload={"error": str(original), "error_type": type(original).__name__},
+                            payload=_failure(original),
                         )
                     except OwnershipLost as loss:
                         raise loss from cleanup.error
@@ -1831,7 +1839,7 @@ class Walker:
                     lease,
                     "NodeFailed",
                     path=path,
-                    payload={"error": str(exc), "error_type": type(exc).__name__},
+                    payload=_failure(exc),
                 )
                 return f"{type(exc).__name__}: {exc}"
         self._publish_atomic_outputs(instance, outputs, values)
