@@ -16,11 +16,11 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
-## The gate snapshot is written to disk, not held in memory
+## The gate snapshot's archive is written to disk, not through the Git output pump
 
 This repository is its own maintenance base, and a contained gate snapshots the whole prepared merge commit. Until #423 it read `git archive --format=tar` into memory under `ProcessLimits.artifact_bytes`, 16 MiB, and the tree reached it (16,752,640 bytes at `cf7042f`). Owner decision on #423: no new budget and no new limit.
 
-- `_snapshot` (`substrate/gates/contained.py`) has Git write the tar to `snapshot.tar` in the acquisition payload, through the same guarded pump, then extracts it and unlinks it before any check runs. `artifact_bytes` again bounds only what a Git child prints. The tree's ceiling is the pump's existing `RLIMIT_FSIZE`, 128 MiB (`substrate/git/process.py`). A failed archive refuses as `gate snapshot archive failed`, with the tar bytes written and Git's own words. The `finally` in `_verify` removes the payload, tar included.
+- `_snapshot` (`substrate/gates/contained.py`) has Git write the tar to `snapshot.tar` in the acquisition payload, through the same guarded pump, then extracts it and unlinks it before any check runs. `artifact_bytes` again bounds only what a Git child prints. The tree's ceiling is the pump's existing `RLIMIT_FSIZE`, 128 MiB (`substrate/git/process.py`). A failed archive refuses as `gate snapshot archive failed`, with the tar bytes written and Git's own words. The `finally` in `_verify` removes the payload, tar included. Equality and integrity hashing still read each file whole, so one large blob still costs memory; that is unchanged.
 - `scripts/ci/m8_ci_scope.py docs` and `tests/test_tree_materialization_margin.py` still refuse with `tree-materialization-margin` when less than one 10,240-byte tar record remains, now under that 128 MiB bound.
 - `export-ignore` is still not a way out: the gate compares the extracted files with the exact tree and refuses an omitted path.
 - The contained-gate runtime identity and `check_set_hash` move with this change, because `contained.py` is one of their sources.
