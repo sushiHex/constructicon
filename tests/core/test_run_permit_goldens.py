@@ -7,8 +7,8 @@ behaviour changes no golden. The owner has decided that a later
 requalification adopts the tighter epoch and read rules; that change edits the
 two divergence tests below, by name.
 
-Every expected value was observed from the unmodified source at aaf9920, never
-derived by reading it. Long wires are pinned by SHA-256 to keep the tree small
+Every expected value was observed from the unmodified source at aaf9920 or
+7fc6a79, never derived by reading it. Long wires are pinned by SHA-256 to keep the tree small
 (#423); sentences are pinned in full.
 """
 
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -58,14 +58,30 @@ def test_the_schemas_and_the_unpinned_wires_are_unchanged():
         == "84a8ec671b86ef1608cafb200c588348dfd66f42204f99709bfa16ba6409284d"
 
 
-# One acquisition wrong in every respect: each permit answers with all its sentences, in order.
-OTHER = {
-    "run_id": run_id_for_command(command_id_for("other", "runs_start", "other")),
-    "path": ExecutionPath(scope=ScopePath(segments=("other",))), "binding": "other",
-    "source_graph_hash": None, "capability_id": "other", "revision": "other",
-    "operator_binding_digest": digest("other", 1, "other"), "epoch": 2,
-    "now": datetime(2100, 1, 1, tzinfo=UTC),
-}
+def exact(permit) -> dict:
+    """The one acquisition this permit admits."""
+    return {
+        "run_id": permit.run_id, "path": ExecutionPath(scope=permit.scope),
+        "binding": permit.binding, "source_graph_hash": permit.source_graph_hash,
+        "capability_id": permit.capability_id, "revision": permit.revision,
+        "operator_binding_digest": permit.operator_binding_digest,
+        "grants": permit.grants or stage.GRANTS, "epoch": 1,
+        "now": permit.not_after - timedelta(seconds=1),
+    }
+
+
+def wrong(permit) -> dict:
+    """An acquisition wrong in all ten respects, keyed in the order the checks run."""
+    return {
+        "run_id": run_id_for_command(command_id_for("other", "runs_start", "other")),
+        "path": ExecutionPath(scope=ScopePath(segments=("other",))), "binding": "other",
+        "source_graph_hash": None, "capability_id": "other", "revision": "other",
+        "operator_binding_digest": digest("other", 1, "other"),
+        "grants": exact(permit)["grants"].model_copy(update={"timeout_s": 1}), "epoch": 2,
+        "now": datetime(2100, 1, 1, tzinfo=UTC),
+    }
+
+
 SHARED = (
     "a different run", "a different invocation", "a different binding",
     "a different source graph", "a different capability", "a different adapter revision",
@@ -85,15 +101,31 @@ MAINTENANCE = (
 )
 
 
-@pytest.mark.parametrize("permit,grants,faults", [
-    (stage.read, plan.GRANTS, QUALIFICATION),
+# The five purposes, each with the sentence each check gives; None is a check that holds.
+PURPOSES = {
     # Divergence kept by the design: absent pinned grants match (qualification.py:158).
-    (stage.authorization, plan.GRANTS, tuple(f for f in QUALIFICATION if "grants" not in f)),
-    (plan.authorization, stage.GRANTS, MAINTENANCE),
-    (channel_authorization, stage.GRANTS, MAINTENANCE),
-], ids=["read", "no-dispatch", "plan-manifest", "channel-reply"])
-def test_every_acquisition_refusal_sentence(permit, grants, faults):
-    assert permit().acquisition_faults(**OTHER, grants=grants) == faults
+    "no-dispatch": (stage.authorization, (*QUALIFICATION[:7], None, *QUALIFICATION[8:])),
+    "read": (stage.read, QUALIFICATION),
+    "write": (write, QUALIFICATION),
+    "plan-manifest": (plan.authorization, MAINTENANCE),
+    "channel-reply": (channel_authorization, MAINTENANCE),
+}
+
+
+@pytest.mark.parametrize("purpose", PURPOSES)
+def test_every_acquisition_refusal_sentence_in_order(purpose):
+    make, faults = PURPOSES[purpose]
+    assert make().acquisition_faults(**exact(make())) == ()
+    assert make().acquisition_faults(**wrong(make())) == tuple(f for f in faults if f)
+
+
+@pytest.mark.parametrize("check", range(10), ids=list(wrong(write())))
+@pytest.mark.parametrize("purpose", PURPOSES)
+def test_each_acquisition_check_refuses_alone(purpose, check):
+    make, faults = PURPOSES[purpose]
+    key = list(wrong(make()))[check]
+    refused = make().acquisition_faults(**{**exact(make()), key: wrong(make())[key]})
+    assert refused == ((faults[check],) if faults[check] else ())
 
 
 @pytest.mark.parametrize("make,change,sentence", [
@@ -110,6 +142,15 @@ def test_every_acquisition_refusal_sentence(permit, grants, faults):
     (plan.authorization, {"max_epoch": 2}, "maintenance authorizes exactly epoch one"),
     (plan.authorization, {"grants": stage.GRANTS},
      "maintenance requires the bounded WRITE grant shape"),
+    # Two invalidities at once: which refusal wins (validator order, RUN_PERMIT.md:97-99).
+    (stage.authorization, {"write": None, "grants": stage.GRANTS},
+     "only a WRITE authorization carries WRITE pins"),
+    (write, {"attempt_record": None, "write": None},
+     "a write authorization pins its grants, its attempt record and exactly one epoch"),
+    (write, {"write": None, "grants": stage.GRANTS},
+     "a WRITE authorization requires its assembly pins"),
+    (plan.authorization, {"max_epoch": 2, "grants": stage.GRANTS},
+     "maintenance authorizes exactly epoch one"),
 ])
 def test_every_shape_refusal_sentence(make, change, sentence):
     with pytest.raises(ValidationError) as refused:
@@ -120,16 +161,14 @@ def test_every_shape_refusal_sentence(make, change, sentence):
 # Divergence: qualification admits any epoch <= max_epoch (qualification.py:171);
 # maintenance admits exactly the integer one (maintenance.py:232). The
 # requalification adopts maintenance's rule (RUN_PERMIT.md, "Three tightenings", 1).
-@pytest.mark.parametrize("epoch,qualification_admits,maintenance_admits", [
-    (0, True, False), (-1, True, False), (True, True, False), (0.5, True, False),
-    (1, True, True), (2, False, False),
+@pytest.mark.parametrize("epoch,qualification_faults,maintenance_faults", [
+    (0, (), MAINTENANCE[8:9]), (-1, (), MAINTENANCE[8:9]), (True, (), MAINTENANCE[8:9]),
+    (0.5, (), MAINTENANCE[8:9]), (1, (), ()), (2, QUALIFICATION[8:9], MAINTENANCE[8:9]),
 ])
-def test_the_two_epoch_rules(epoch, qualification_admits, maintenance_admits):
-    read = stage.read()
-    faults = read.acquisition_faults(**{**stage.acquisition(run_id=read.run_id), "epoch": epoch})
-    assert (faults == ()) is qualification_admits
-    faults = plan.authorization().acquisition_faults(**{**plan.acquisition(), "epoch": epoch})
-    assert (faults == ()) is maintenance_admits
+def test_the_two_epoch_rules(epoch, qualification_faults, maintenance_faults):
+    for permit, faults in ((stage.read(), qualification_faults),
+                           (plan.authorization(), maintenance_faults)):
+        assert permit.acquisition_faults(**{**exact(permit), "epoch": epoch}) == faults
 
 
 # Divergence: the qualification reader keeps a repeated key's last value; the
@@ -148,6 +187,25 @@ def test_the_two_readers_on_a_repeated_key(monkeypatch):
             as refused:
         maintenance_reader.read_maintenance_authorization(None)
     assert str(refused.value.__cause__) == "canonical JSON object repeats key 'actor_id'"
+
+
+# Kept as it is (RUN_PERMIT.md:148-151): a maintenance file with no purpose is read as
+# a plan-manifest permit, so a channel-reply file without one is refused.
+@pytest.mark.parametrize("wire,read", [
+    (GOLDEN_WIRE, "MaintenanceAttemptAuthorization"),
+    (channel_authorization().model_dump_json(),
+     "the maintenance authorization is unavailable: MaintenanceAttemptAuthorization"),
+], ids=["plan-manifest", "channel-reply"])
+def test_the_maintenance_reader_on_an_omitted_purpose(monkeypatch, wire, read):
+    record = json.loads(wire)
+    del record["purpose"]
+    raw = json.dumps(record).encode()
+    monkeypatch.setattr(maintenance_reader, "_read_authorization_bytes", lambda _: raw)
+    try:
+        outcome = type(maintenance_reader.read_maintenance_authorization(None)).__name__
+    except ContractViolation as refused:
+        outcome = f"{refused}: {refused.__cause__.title}"
+    assert outcome == read
 
 
 FLAGS = ["--store-key", "k", "--sealed", "g", "--qualification", "q", "--authorization-id", "a",
