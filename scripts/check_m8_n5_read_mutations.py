@@ -65,8 +65,9 @@ MUTANTS = (
      "if False:", EXPIRED),
     ("expiry is checked again after the intent is durable",
      HANDLE + "_intend",
-     "return self._expired() or self.attempt.intend() or self._expired()",
-     "return self._expired() or self.attempt.intend()",
+     "if refusal := self.attempt.intend():\n        return refusal\n"
+     "    if refusal := self._expired():",
+     "if refusal := self.attempt.intend():\n        return refusal\n    if False:",
      READ_TEST
      + "test_an_authorization_that_expires_while_its_intent_is_written_dispatches_nothing"),
     ("a turn whose write began counts as sent",
