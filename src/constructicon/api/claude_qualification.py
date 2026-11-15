@@ -77,8 +77,11 @@ async def read_node(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[str,
                   if isinstance(result, ExecutorFailure) and result.error.kind == "exit"
                   else None)
         if detail is not None:
-            raise ContractViolation(detail)
-        raise ContractViolation("Claude qualification did not complete its fixed READ")
+            raise ContractViolation(detail, refusal=result.error.refusal
+                                    if isinstance(result, ExecutorFailure) else ())
+        raise ContractViolation("Claude qualification did not complete its fixed READ",
+                                refusal=result.error.refusal
+                                if isinstance(result, ExecutorFailure) else ())
     # The provider requires one completed callback and its joined process before
     # success. The fixed fixture contains no private repository data.
     return {REPORT.name: {"read_completed": True, "answer_bytes": len(result.raw_reply.encode())}}

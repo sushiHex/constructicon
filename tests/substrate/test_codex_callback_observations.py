@@ -421,3 +421,97 @@ def test_a_failing_digest_never_fails_the_callback_or_the_settlement(
         owner._program_stdin("secret-program")
         monkeypatch.setattr(codex, "_content_digest", broken)
     assert owner._content_digests(ExecutorSuccess(output="done")) == "unrecordable"
+
+
+@pytest.mark.parametrize("result,expected", [
+    (ProcessResult(1, b"", b"", 0, payload_returncode=1), "callback.worker.nonzero"),
+    (ProcessResult(0, b"", b"", 0, timed_out=True), "callback.worker.timeout"),
+    (ProcessResult(0, b"", b"", 0, bound_exceeded="stdout"), "callback.worker.output_bound"),
+    (ProcessResult(0, b"", b"", 0), "callback.worker.incomplete"),
+    (ProcessResult(0, b"\xff", b"", 0, payload_returncode=0), "callback.worker.invalid_utf8"),
+    (ProcessResult(0, b"x" * 32769, b"", 0, payload_returncode=0), "callback.tool_output_bound"),
+])
+async def test_callback_guard_code_survives_worker_and_conversation_to_executor(
+    tmp_path, monkeypatch, result, expected,
+):
+    from constructicon.substrate.executors.codex_protocol import unavailable_outcome
+
+    owner, record, _, worker = handle(tmp_path, monkeypatch, result)
+    conversation = CodexConversation(
+        task=TaskSpec(instruction="fake"), grants=WRITE_GRANTS, expected=EXPECTED,
+        input_limit=1 << 20, catalog=CONTAINED_PYTHON_CATALOG, worker=worker,
+        deadline=asyncio.get_running_loop().time() + 5, observe_callbacks=owner._observe_callbacks,
+    )
+    conversation.thread_id, conversation.turn_id = "thread-n2", "turn-n2"
+    async def read(io):
+        await asyncio.Event().wait()
+    monkeypatch.setattr(conversation, "_read", read)
+    assert await conversation._dispatch_tool(
+        object(), WriteNative._callback_for("request", "call", "pass"),
+    ) is False
+    outcome = unavailable_outcome(conversation.faults, conversation.observation, result,
+                                  requested_model=None, refusal=conversation.refusal)
+    assert [code.value for code in outcome.error.refusal] == [expected]
+    assert outcome.error.model_dump(mode="json")["refusal"] == [expected]
+    category = json.loads(record.path.read_text())["callbacks"]["worker_results"][0]
+    assert category == ("success" if expected == "callback.tool_output_bound"
+                        else expected.removeprefix("callback.worker."))
+
+
+@pytest.mark.parametrize("after_intent", [False, True])
+def test_predispatch_expiry_is_named_at_both_direct_guards(monkeypatch, after_intent):
+    from datetime import UTC, datetime, timedelta
+
+    from constructicon.core.refusal import RefusalCode
+
+    authorization = SimpleNamespace(not_after=datetime.now(UTC) + timedelta(days=1)
+                                    if after_intent else datetime.now(UTC) - timedelta(days=1))
+    owner = object.__new__(CodexOperatorHandle)
+    owner.provider = SimpleNamespace(qualification=authorization, maintenance=None)
+    calls = []
+    def intend():
+        calls.append("intend")
+        authorization.not_after = datetime.now(UTC) - timedelta(days=1)
+    owner._meter = SimpleNamespace(intend=intend, check_dispatch=lambda: calls.append("check"))
+    monkeypatch.setattr(CodexOperatorHandle, "_require_open_sync", lambda self: None)
+    with pytest.raises(ContractViolation) as refused:
+        owner._before_task_write()
+    assert refused.value.refusal == (RefusalCode.PERMIT_EXPIRED,)
+    assert str(refused.value) == "qualification refuses an expired authorization"
+    assert calls == (["intend", "check"] if after_intent else [])
+
+
+@pytest.mark.parametrize("seam", ["before", "after", "record-refusal"])
+async def test_request_preserves_actual_preintent_expiry_without_coding_record_refusal(seam):
+    from datetime import UTC, datetime, timedelta
+
+    from constructicon.core.refusal import RefusalCode
+
+    authorization = SimpleNamespace(not_after=datetime.now(UTC) + timedelta(days=1)
+                                    if seam != "before" else
+                                    datetime.now(UTC) - timedelta(days=1))
+    owner = object.__new__(CodexOperatorHandle)
+    owner.provider = SimpleNamespace(qualification=authorization, maintenance=None)
+    writes = []
+    def intend():
+        writes.append("intent")
+        authorization.not_after = datetime.now(UTC) - timedelta(days=1)
+        return "record already spent" if seam == "record-refusal" else None
+    owner.attempt = SimpleNamespace(intend=intend)
+    conversation = CodexConversation(
+        task=TaskSpec(instruction="fake"), grants=WRITE_GRANTS, expected=EXPECTED,
+        input_limit=1 << 20, before_turn=owner._intend,
+        catalog=CONTAINED_PYTHON_CATALOG, worker=lambda program: pytest.fail("unexpected worker"),
+        deadline=asyncio.get_running_loop().time() + 5,
+    )
+    class IO:
+        async def write(self, data):
+            pytest.fail("refused pre-intent must not write to the native transport")
+    result = await conversation._request(IO(), {"id": 1, "method": "turn/start", "params": {}})
+    assert result is None and not conversation.turn_sent
+    assert writes == ([] if seam == "before" else ["intent"])
+    if seam == "record-refusal":
+        assert conversation.refusal == () and conversation.faults == ("record already spent",)
+    else:
+        assert conversation.refusal == (RefusalCode.PERMIT_EXPIRED,)
+        assert conversation.faults == ("qualification refuses an expired authorization",)

@@ -89,7 +89,7 @@ def test_older_schema_store_is_refused_never_migrated_or_opened(layout, capsys, 
     monkeypatch.setattr(packet_module, "SqliteJournal", forbidden)
     code, packet, text = run_main(root, out, capsys)
     assert code == 1
-    assert packet == {"schema_version": 1, "complete": False, "stage": "journal",
+    assert packet == {"schema_version": 2, "complete": False, "stage": "journal",
                       "error": "maintenance report refused or incomplete",
                       "journal": "unsupported-schema", "journal_schema_version": 10,
                       "supported_journal_schema_version": 11}
@@ -129,7 +129,7 @@ def test_hostile_records_yield_bounded_private_safe_packet_and_originals_unchang
     assert code == 0 and packet["complete"] is True, packet
     assert packet["status"] == "failed" and packet["outcome"] == "refused"
     assert packet["refusal"] == {"node": "writer", "cause": "unknown",
-                                 "source": "diagnostic-producer-mapped-node-failure"}
+                                 "source": "diagnostic-producer-mapped-node-failure", "refusal": []}
     assert packet["result"] == {"observation": "missing"}
     assert packet["attestation"] == {"observation": "missing"}
     assert packet["leases"]["summary"] == "none-recorded"
@@ -189,7 +189,7 @@ def test_stored_acceptance_beside_a_failed_journal_is_a_named_contradiction(layo
     assert packet["result"]["observation"] == "historical-acceptance-observed"
     assert packet["outcome"] == "contradictory-evidence"
     assert packet["refusal"] == {"node": "writer", "cause": "capture-unchanged",
-                                 "source": "diagnostic-producer-mapped-node-failure"}
+                                 "source": "diagnostic-producer-mapped-node-failure", "refusal": []}
     assert tree(root) == before
 
 
@@ -412,3 +412,41 @@ def test_capture_refusal_is_closed(tmp_path, capsys):
     code, packet, text = run_main(root, tmp_path / "captured", capsys)
     assert code == 1
     assert_closed_refusal(packet, text, "capture")
+
+
+
+def test_schema_two_packet_retains_all_failure_codes_and_maximal_content(layout, capsys):
+    from constructicon.core.address import ExecutionPath, ScopePath
+    from constructicon.core.refusal import MAX_REFUSAL_CODES, RefusalCode
+    from tests.substrate.journal.test_maintenance_diagnostic import _content
+
+    root, out = layout
+    journal = _world(root)
+    root.chmod(0o700)
+    lease = start_test_run(journal, RUN, owner_id="fixture")
+    code = max(RefusalCode, key=lambda value: len(value.value)).value
+    codes = [code] * MAX_REFUSAL_CODES
+    for name in ("writer", "checker"):
+        path = ExecutionPath(scope=ScopePath(segments=(diagnostic.GRAPH, name)))
+        for _ in range(8):
+            journal.append_event(lease, "NodeFailed", path=path, payload={
+                "error_type": "ContractViolation", "error": HOSTILE, "refusal": codes})
+    journal.transition_run(lease, expected=frozenset({RunStatus.RUNNING}),
+        target=RunStatus.FAILED, event_kind="RunFailed", payload={"error": "failed"})
+    _attempt(root, dispatch="completed", status="success")
+    path = root / "maintenance-attempt.json"
+    record = json.loads(path.read_text())
+    content = _content()
+    record.update(callbacks={"schema_version": 1, "admitted_started": 8,
+                             "admitted_completed": 8, "worker_results": ["success"] * 8})
+    record["facts"].update(content_digests=content, answer_bytes=content["reply"]["bytes"])
+    path.write_text(json.dumps(record), encoding="utf-8")
+    code, packet, text = run_main(root, out, capsys)
+    assert code == 0 and packet["complete"] is True and packet["schema_version"] == 2, packet
+    for node in packet["diagnostic"]["journal"]["nodes"].values():
+        assert len(node["failures"]) == 8
+        assert all(failure["refusal"] == codes for failure in node["failures"])
+    assert packet["diagnostic"]["attempt"]["content_digests"] == content
+    assert 8192 < len(text.encode()) <= packet_module.MAX_PACKET_BYTES == 16384
+    assert len(json.dumps(packet["diagnostic"]).encode()) <= diagnostic.MAX_REPORT_BYTES == 16384
+    assert HOSTILE not in text

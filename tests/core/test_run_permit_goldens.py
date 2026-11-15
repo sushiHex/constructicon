@@ -1,11 +1,10 @@
-"""The run permit's current law, pinned before it is folded (RUN_PERMIT.md, step 1).
+"""The run permit's retained wire and sentences (RUN_PERMIT.md, steps 1â€“4).
 
 docs/designs/RUN_PERMIT.md proposes one law for the two copies in
 core/qualification.py and core/maintenance.py. These goldens record what each
-copy does today, including where the two differ, so a fold that changes no
-behaviour changes no golden. The owner has decided that a later
-requalification adopts the tighter epoch and read rules; that change edits the
-two divergence tests below, by name.
+copy did before folding. The two named divergence tests now assert the owner's
+approved positive-integer epoch and duplicate-refusing reader rules. The
+retained wire, schemas, printed permits and refusal sentences stay unchanged.
 
 Every expected value was observed from the unmodified source at aaf9920 or
 7fc6a79, never derived by reading it. Long wires are pinned by SHA-256 to keep the tree small
@@ -38,7 +37,7 @@ from constructicon.substrate.executors import qualification as qualification_rea
 from tests.core import test_maintenance_authorization as plan
 from tests.core import test_qualification as stage
 from tests.core.test_maintenance_channel_authorization import GOLDEN_WIRE, channel_authorization
-from tests.core.test_qualification_write import NO_DISPATCH_GOLDEN, pins, write
+from tests.core.test_qualification_write import pins, write
 
 
 def sha256(text: str) -> str:
@@ -158,35 +157,40 @@ def test_every_shape_refusal_sentence(make, change, sentence):
     assert [error["msg"] for error in refused.value.errors()] == [f"Value error, {sentence}"]
 
 
-# Divergence: qualification admits any epoch <= max_epoch (qualification.py:171);
-# maintenance admits exactly the integer one (maintenance.py:232). The
-# requalification adopts maintenance's rule (RUN_PERMIT.md, "Three tightenings", 1).
-@pytest.mark.parametrize("epoch,qualification_faults,maintenance_faults", [
-    (0, (), MAINTENANCE[8:9]), (-1, (), MAINTENANCE[8:9]), (True, (), MAINTENANCE[8:9]),
-    (0.5, (), MAINTENANCE[8:9]), (1, (), ()), (2, QUALIFICATION[8:9], MAINTENANCE[8:9]),
-])
-def test_the_two_epoch_rules(epoch, qualification_faults, maintenance_faults):
-    for permit, faults in ((stage.read(), qualification_faults),
-                           (plan.authorization(), maintenance_faults)):
+# Adopted common law: positive integer epochs only, retaining each sentence.
+@pytest.mark.parametrize("epoch", [0, -1, True, False, 0.5, 1.0, 1, 2])
+def test_the_two_epoch_rules(epoch):
+    for permit, sentence in ((stage.read(), QUALIFICATION[8:9]),
+                             (plan.authorization(), MAINTENANCE[8:9])):
+        faults = () if type(epoch) is int and epoch == 1 else sentence
         assert permit.acquisition_faults(**{**exact(permit), "epoch": epoch}) == faults
 
 
-# Divergence: the qualification reader keeps a repeated key's last value; the
-# maintenance reader refuses it. The requalification adopts maintenance's rule
-# (RUN_PERMIT.md, "Three tightenings", 2).
-def test_the_two_readers_on_a_repeated_key(monkeypatch):
-    repeated = NO_DISPATCH_GOLDEN.replace('{"authorization_id"', '{"authorization_id":"x",'
-                                          '"authorization_id"', 1)
-    monkeypatch.setattr(qualification_reader, "_read_authorization_bytes",
-                        lambda _: repeated.encode())
-    assert qualification_reader.read_authorization(None).authorization_id == "ci-fixture"
-    repeated = GOLDEN_WIRE.replace('{"actor_id"', '{"actor_id":"x","actor_id"', 1)
-    monkeypatch.setattr(maintenance_reader, "_read_authorization_bytes",
-                        lambda _: repeated.encode())
-    with pytest.raises(ContractViolation, match="the maintenance authorization is unavailable") \
-            as refused:
-        maintenance_reader.read_maintenance_authorization(None)
-    assert str(refused.value.__cause__) == "canonical JSON object repeats key 'actor_id'"
+# Both readers refuse repeated keys, including repetitions under a grant pin.
+@pytest.mark.parametrize("nested", [False, True], ids=["root", "nested"])
+def test_the_two_readers_on_a_repeated_key(monkeypatch, nested):
+    for reader, name, permit, prefix in (
+        (qualification_reader, "read_authorization", stage.read(), "qualification"),
+        (maintenance_reader, "read_maintenance_authorization", plan.authorization(), "maintenance"),
+    ):
+        wire = permit.model_dump_json()
+        key = "posture" if nested else "actor_id"
+        repeated = wire.replace(f'"{key}":', f'"{key}":"x","{key}":', 1)
+        raw = repeated.encode()
+        monkeypatch.setattr(reader, "_read_authorization_bytes", lambda _, raw=raw: raw)
+        with pytest.raises(ContractViolation, match=f"the {prefix} authorization is unavailable") \
+                as refused:
+            getattr(reader, name)(None)
+        assert str(refused.value.__cause__) == f"canonical JSON object repeats key {key!r}"
+
+
+@pytest.mark.parametrize("purpose", ["no-dispatch", "read", "write"])
+def test_the_qualification_reader_accepts_each_unambiguous_stage(monkeypatch, purpose):
+    make, _ = PURPOSES[purpose]
+    permit = make()
+    raw = permit.model_dump_json().encode()
+    monkeypatch.setattr(qualification_reader, "_read_authorization_bytes", lambda _: raw)
+    assert qualification_reader.read_authorization(None) == permit
 
 
 # Kept as it is (RUN_PERMIT.md:148-151): a maintenance file with no purpose is read as

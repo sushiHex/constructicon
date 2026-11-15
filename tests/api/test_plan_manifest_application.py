@@ -214,7 +214,6 @@ CODED_SITES = [
 
 def test_every_refusal_code_is_raised_at_its_own_guard_and_nowhere_else():
     import ast
-    import re
 
     import constructicon.api.plan_manifest_application as application
 
@@ -231,6 +230,10 @@ def test_every_refusal_code_is_raised_at_its_own_guard_and_nowhere_else():
             if "refusal" not in keywords:
                 continue
             value = keywords["refusal"]
+            if isinstance(value, ast.IfExp):
+                # The writer keeps its own guard first and appends executor codes.
+                assert function.name == "_write_candidate"
+                value = value.orelse
             assert isinstance(value, ast.Tuple) and len(value.elts) == 1
             code = RefusalCode[ast.unparse(value.elts[0]).removeprefix("RefusalCode.")]
             found.append((node.lineno, function.name, node.args[0].value, code))
@@ -241,12 +244,9 @@ def test_every_refusal_code_is_raised_at_its_own_guard_and_nowhere_else():
         assert REFUSALS[message] is code
     # The gate's one message is split by which condition held, failed checks first.
     assert codes[-2:] == [RefusalCode.GATE_NOT_POSITIVE, RefusalCode.GATE_SUBJECT]
-    assert set(codes) == set(RefusalCode)
-    # Nothing else in the package raises a code yet: later guards arrive with their steps.
-    package = Path(application.__file__).parents[1]
-    users = {path.relative_to(package).as_posix() for path in package.rglob("*.py")
-             if re.search(r"\bRefusalCode\.", path.read_text(encoding="utf-8"))}
-    assert users == {"api/plan_manifest_application.py"}
+    assert set(codes) == {code for code in RefusalCode
+                          if code.value.split(".")[0] in {"writer", "capture", "checker", "gate"}}
+
 
 
 class Gate(ControlledGate):
@@ -1057,5 +1057,34 @@ def test_every_write_instruction_names_its_one_tool_where_it_runs_and_what_is_ca
     assert "must stay unchanged" not in WRITE_INSTRUCTION
     # The bounded WRITE grant admits exactly this one tool.
     root = Path(__file__).resolve().parents[2]
-    source = (root / "src/constructicon/core/maintenance.py").read_text(encoding="utf-8")
+    source = (root / "src/constructicon/core/permit.py").read_text(encoding="utf-8")
     assert 'grants.allowed_tools != ("contained_python",)' in source
+
+
+@pytest.mark.parametrize("count", [1, 11])
+async def test_executor_callback_code_reaches_sealed_writer_node_failure(
+    concrete_application, completed_concrete_attempt, count,
+):
+    from constructicon.core.executor import ExecutorError, ExecutorFailure
+
+    resources, executor, _system, control, _launch = concrete_application
+    class RefusedWriter(Writer):
+        async def execute(self, task, *, workspace, grants):
+            return ExecutorFailure(error=ExecutorError(
+                kind="unavailable", detail="bounded",
+                refusal=(RefusalCode.CALLBACK_WORKER_NONZERO,) * count))
+    executor.executor = RefusedWriter()
+    graph = await register(control)
+    submitted = await control.runs_start(RUN_ACTOR, proposal=graph,
+        inputs=resources.inputs, idempotency_key="callback-refusal")
+    assert isinstance(submitted, RunSubmission), submitted
+    result = await completed_concrete_attempt(submitted.run_id)
+    assert result.status is RunStatus.FAILED
+    failures = [event for event in resources.journal.events(submitted.run_id, limit=100)
+                if event.kind == "NodeFailed"]
+    assert len(failures) == 1
+    assert failures[0].payload == {
+        "error_type": "ContractViolation", "error": "maintenance writer did not positively succeed",
+        "refusal": ["writer.not_positive", *(["callback.worker.nonzero"] * count)],
+    }
+    assert resources.journal.checkpoint(submitted.run_id, failures[0].path) is None

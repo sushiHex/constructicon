@@ -16,6 +16,29 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## The live-run permits share a law and retain their refusal evidence
+
+The two permit models retain their wire fields, JSON schemas, run identities,
+printed bytes and refusal sentences. Their shared `core/permit.py` law is
+explicitly covered by the maintenance application and Claude adapter source
+identities. Qualification now refuses non-integer or nonpositive acquisition
+epochs and repeated JSON keys; no-dispatch permits still carry no pinned grant.
+
+Permit and callback guards record closed codes at their producer. Executor
+errors omit the optional code field when unrecorded; a writer adds its own
+guard before the executor's code chain. A separately failing cleanup or an
+exception group is not mined for a primary code. Uncoded node-event payloads
+remain unchanged. The protocol, adapter, application and diagnostic source
+changes require fresh qualification before live use; this delivery is not
+installation or qualification evidence.
+
+Maintenance diagnostics and reports now emit schema 2, prefer sealed failure
+codes, and use exact historical sentences only for uncoded events. Their
+16 KiB whole-packet bound accommodates the tested maximum failure/code and
+callback-content observations without dropping a section. Historical frozen
+operator readers do not thereby accept the new schema; a successor package
+must pin the new source and output contract.
+
 ## The gate snapshot's archive is written to disk, not through the Git output pump
 
 This repository is its own maintenance base, and a contained gate snapshots the whole prepared merge commit. Until #423 it read `git archive --format=tar` into memory under `ProcessLimits.artifact_bytes`, 16 MiB, and the tree reached it (16,752,640 bytes at `cf7042f`). Owner decision on #423: no new budget and no new limit.

@@ -123,7 +123,7 @@ def test_selected_failure_facts_and_attempt_are_private_and_originals_unchanged(
     assert report["journal"] == {"observation": "selected-facts-validated", "status": "failed",
         "command_origin": "unrecorded", "events_checked": 4, "nodes": {
             "writer": {"started": "observed", "checkpoint": "missing", "failures": [
-                {"type": "ContractViolation", "cause": "writer-not-positive"}]},
+                {"type": "ContractViolation", "cause": "writer-not-positive", "refusal": []}]},
             "checker": {"started": "unrecorded", "checkpoint": "missing", "failures": []}},
         "checks": []}
     assert report["attempt"] == {"observation": "identity-matched", "phase": "outcome",
@@ -155,7 +155,7 @@ def test_real_committed_wal_only_failure_is_observed(tmp_path: Path) -> None:
         assert isinstance(world, dict)
         assert world["status"] == "running"
         assert world["nodes"]["writer"]["failures"] == [
-            {"type": "ContractViolation", "cause": "capture-mismatch"}]
+            {"type": "ContractViolation", "cause": "capture-mismatch", "refusal": []}]
         # Positive sentinel: a main-DB-only view demonstrably lacks the committed fact.
         bare = tmp_path / "bare.sqlite"
         bare.write_bytes((snapshot / "maintenance.sqlite").read_bytes())
@@ -186,7 +186,7 @@ def test_reader_keeps_grouped_history_and_classifies_only_exact_capture_reasons(
     report = diagnostic.analyze_snapshot(snapshot, RUN, AUTH)
     assert report["complete"] is True
     assert report["journal"]["nodes"]["writer"]["failures"] == [
-        {"type": "ContractViolation", "cause": cause}]
+        {"type": "ContractViolation", "cause": cause, "refusal": []}]
     assert PRIVATE not in json.dumps(report) and message not in json.dumps(report)
 
 
@@ -216,7 +216,7 @@ def test_writer_checkpoint_and_failed_gate_attestation_are_distinct(tmp_path: Pa
     assert world["nodes"]["writer"]["checkpoint"] == "validated"
     assert world["nodes"]["checker"]["checkpoint"] == "missing"
     assert world["nodes"]["checker"]["failures"] == [
-        {"type": "ContractViolation", "cause": "gate-not-positive"}]
+        {"type": "ContractViolation", "cause": "gate-not-positive", "refusal": []}]
     assert world["checks"] == [{"name": "plan-manifest-trusted-vectors", "status": "failed"}]
     assert PRIVATE not in json.dumps(report)
 
@@ -280,7 +280,7 @@ def test_journal_damage_or_bound_exhaustion_refuses_instead_of_reporting_missing
     elif fault == "event-bound":
         monkeypatch.setattr(diagnostic, "MAX_EVENTS", 1)
     report = diagnostic.analyze_snapshot(_snapshot(source, tmp_path / "capture"), RUN, AUTH)
-    assert report == {"schema_version": 1, "complete": False, "stage": "journal",
+    assert report == {"schema_version": 2, "complete": False, "stage": "journal",
                       "error": "diagnostic refused or incomplete"}
 
 
@@ -339,7 +339,8 @@ async def test_actual_application_fake_first_lifecycle_is_diagnosed(
         "validated" if fault is None else "missing")
     if fault == "partial":
         assert recorded["nodes"]["writer"]["failures"] == [
-            {"type": "ContractViolation", "cause": "writer-not-positive"}]
+            {"type": "ContractViolation", "cause": "writer.not_positive",
+             "refusal": ["writer.not_positive"]}]
     else:
         assert recorded["checks"] == [{"name": "unknown",
                                         "status": "passed" if fault is None else "failed"}]
@@ -405,7 +406,8 @@ def test_unknown_failure_text_never_crosses_closed_output(tmp_path: Path) -> Non
     assert report["complete"] is True
     world = report["journal"]
     assert isinstance(world, dict)
-    assert world["nodes"]["writer"]["failures"] == [{"type": "unknown", "cause": "unknown"}]
+    assert world["nodes"]["writer"]["failures"] == [
+        {"type": "unknown", "cause": "unknown", "refusal": []}]
 
     allowed = {RUN, "selected-historical-facts-only", "selected-facts-validated", "running",
                "unrecorded", "missing", "unknown"}
@@ -526,7 +528,7 @@ def test_real_capture_analysis_and_cli_preserve_wal_fact_and_originals(
             report = diagnostic.analyze_snapshot(capture, RUN, AUTH)
             assert report["complete"] is True
             assert report["journal"]["nodes"]["writer"]["failures"] == [
-                {"type": "ContractViolation", "cause": "writer-not-positive"}]
+                {"type": "ContractViolation", "cause": "writer-not-positive", "refusal": []}]
             assert diagnostic.main(["--root", str(source), "--out", str(parent / "cli-capture"),
                 "--command-report", str(command), "--run-id", RUN, "--authorization-id", AUTH]) == 0
             output = capsys.readouterr()
@@ -709,5 +711,42 @@ def test_malformed_content_digests_refuse_the_attempt_closed(tmp_path: Path, nam
     path.write_text(json.dumps(record), encoding="utf-8")
     report = diagnostic.analyze_snapshot(_snapshot(tmp_path / "source", tmp_path / "capture"),
                                          RUN, AUTH)
-    assert report == {"schema_version": 1, "complete": False, "stage": "attempt",
+    assert report == {"schema_version": 2, "complete": False, "stage": "attempt",
                       "error": "diagnostic refused or incomplete"}
+
+
+@pytest.mark.parametrize("codes,expected", [
+    (["writer.not_positive", "callback.worker.nonzero"],
+     ["writer.not_positive", "callback.worker.nonzero"]),
+    (["private text"], ["unknown"]), (None, ["unknown"]),
+    ([], ["unknown"]), (["callback.worker.nonzero"] * 13, ["unknown"]),
+])
+def test_sealed_explicit_codes_override_historical_sentence_without_echoing_unknown(
+    tmp_path, codes, expected,
+):
+    source = tmp_path / "source"
+    journal = _world(source)
+    lease = start_test_run(journal, RUN, owner_id="fixture")
+    journal.append_event(lease, "NodeFailed", path=WRITER, payload={
+        "error_type": "ContractViolation",
+        "error": "maintenance captured candidate equals the pinned base", "refusal": codes})
+    result = diagnostic.analyze_snapshot(_snapshot(source, tmp_path / "capture"), RUN, AUTH)
+    assert result["schema_version"] == 2 and result["complete"] is True
+    failure = result["journal"]["nodes"]["writer"]["failures"][0]
+    assert failure == {"type": "ContractViolation", "cause": expected[0], "refusal": expected}
+    assert "private text" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("error_type", ["ContractViolation", "OSError", "ValueError", "forged"])
+def test_only_recorded_contract_violation_can_carry_affirmative_guard_codes(tmp_path, error_type):
+    source = tmp_path / "source"
+    journal = _world(source)
+    lease = start_test_run(journal, RUN, owner_id="fixture")
+    journal.append_event(lease, "NodeFailed", path=WRITER, payload={
+        "error_type": error_type, "error": "maintenance captured candidate equals the pinned base",
+        "refusal": ["callback.worker.nonzero"]})
+    result = diagnostic.analyze_snapshot(_snapshot(source, tmp_path / "capture"), RUN, AUTH)
+    assert result["complete"] is True
+    expected = ["callback.worker.nonzero"] if error_type == "ContractViolation" else ["unknown"]
+    failure = result["journal"]["nodes"]["writer"]["failures"][0]
+    assert failure["refusal"] == expected and failure["cause"] == expected[0]

@@ -35,7 +35,13 @@ from constructicon.core.address import RunId, ScopePath
 from constructicon.core.component import CapabilityRequirement, ComponentDef, PythonRef
 from constructicon.core.envelope import GitRef
 from constructicon.core.errors import ContractViolation
-from constructicon.core.executor import Executor, ExecutorProvider, ExecutorSuccess, TaskSpec
+from constructicon.core.executor import (
+    Executor,
+    ExecutorFailure,
+    ExecutorProvider,
+    ExecutorSuccess,
+    TaskSpec,
+)
 from constructicon.core.gates import MergeEvaluation, MergeGate
 from constructicon.core.grants import EffectiveGrants, GrantRequest, Posture
 from constructicon.core.graph import Connection, Graph, GraphNode, Ref
@@ -138,7 +144,9 @@ async def _write_candidate(
     )
     if not isinstance(outcome, ExecutorSuccess):
         raise ContractViolation("maintenance writer did not positively succeed",
-                                refusal=(RefusalCode.WRITER_NOT_POSITIVE,))
+                                refusal=(RefusalCode.WRITER_NOT_POSITIVE, *outcome.error.refusal)
+                                if isinstance(outcome, ExecutorFailure) else
+                                (RefusalCode.WRITER_NOT_POSITIVE,))
     captured = await workspace.commit_all(task.capture_message)
     candidate = workspace.git_ref()
     if candidate.commit != captured:

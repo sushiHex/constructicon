@@ -38,7 +38,7 @@ from constructicon.core.control import (
 )
 from constructicon.core.envelope import utc_now
 from constructicon.core.errors import ContractViolation
-from constructicon.core.executor import ExecutorSuccess, TaskSpec
+from constructicon.core.executor import ExecutorFailure, ExecutorSuccess, TaskSpec
 from constructicon.core.grants import EffectiveGrants, Posture
 from constructicon.core.graph import Graph, GraphNode, Ref
 from constructicon.core.identity import Digest, digest
@@ -99,7 +99,9 @@ async def qualification_read_node(
     outcome = await executor.execute(task, workspace=None, grants=ctx.grants)
     answer = outcome.output
     if not isinstance(outcome, ExecutorSuccess) or not isinstance(answer, str) or not answer:
-        raise ContractViolation(f"the READ turn ended {outcome.status}")
+        raise ContractViolation(f"the READ turn ended {outcome.status}",
+                                refusal=outcome.error.refusal
+                                if isinstance(outcome, ExecutorFailure) else ())
     return {REPORT.name: {"answer_bytes": len(answer.encode("utf-8"))}}
 
 

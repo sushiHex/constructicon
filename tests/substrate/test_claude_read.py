@@ -3061,3 +3061,32 @@ async def test_wait_progress_during_worker_never_hides_failure_or_cancellation(e
         outcome, _ = await pending
         assert isinstance(outcome, ExecutorFailure) and outcome.raw_reply is None
     assert peer.callback_replies == 0 and launcher.joined
+
+
+@pytest.mark.parametrize("seam", ["direct", "wrapped", "group"])
+async def test_direct_worker_code_survives_joined_launcher_wrap_only(seam):
+    from constructicon.core.errors import ContractViolation
+    from constructicon.core.refusal import RefusalCode
+
+    async def worker(path, remaining):
+        error = ContractViolation("private worker detail", refusal=(
+            RefusalCode.CALLBACK_WORKER_NONZERO,))
+        if seam == "group":
+            raise ExceptionGroup("opaque cleanup", [error])
+        raise error
+
+    class JoinedLauncher(Launcher):
+        async def exchange(self, command, **kwargs):
+            try:
+                return await super().exchange(command, **kwargs)
+            except claude_read._Refused as error:
+                if seam == "wrapped":
+                    raise ProcessExchangeError(self.result) from error
+                raise
+
+    launcher = JoinedLauncher(Peer())
+    outcome, _ = await run(launcher, worker=worker)
+    assert isinstance(outcome, ExecutorFailure) and launcher.joined
+    assert outcome.error.refusal == (() if seam == "group" else (
+        RefusalCode.CALLBACK_WORKER_NONZERO,))
+    assert "private worker detail" not in outcome.error.detail

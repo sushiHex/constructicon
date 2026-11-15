@@ -21,6 +21,7 @@ from constructicon.core.claude_read_observation import (
     ClaudeReadRefusalFamily as ClaudeReadRefusalFamily,
 )
 from constructicon.core.claude_read_observation import read_system_observation_family
+from constructicon.core.errors import ContractViolation
 from constructicon.core.executor import (
     ExecutorError,
     ExecutorFailure,
@@ -33,6 +34,7 @@ from constructicon.core.executor import (
 from constructicon.core.grants import Posture
 from constructicon.core.identity import parse_json_value
 from constructicon.core.process import ProcessIO
+from constructicon.core.refusal import RefusalCode
 from constructicon.substrate.executors.claude_initialize import _cancelled, _clean
 from constructicon.substrate.executors.claude_maintenance_mode import (
     INPUT_BYTES as MODE_INPUT_BYTES,
@@ -264,8 +266,10 @@ class _Refused(Exception):
     """Private static refusal; context binds this failure before any cleanup await."""
 
     def __init__(self, code: ClaudeReadRefusalCode | None = None, *,
-                 context: ClaudeReadRefusalContext | None = None) -> None:
+                 context: ClaudeReadRefusalContext | None = None,
+                 refusal: tuple[RefusalCode, ...] = ()) -> None:
         super().__init__()
+        self.refusal = refusal
         self.code, self.context = code, context
 
 
@@ -274,7 +278,7 @@ def _known_primary_refusal(error: BaseException) -> _Refused | None:
     if (type(error) is ProcessExchangeError and error.result.timed_out is False
             and type(error.__cause__) is _Refused):
         error = error.__cause__
-    if type(error) is _Refused and type(error.code) is ClaudeReadRefusalCode:
+    if type(error) is _Refused and (type(error.code) is ClaudeReadRefusalCode or error.refusal):
         return error
     return None
 
@@ -507,6 +511,7 @@ class ClaudeReadTransaction:
     def _refused(
         self, code: ClaudeReadRefusalCode, value: dict[str, object] | None = None, *,
         predicate: ClaudeReadRefusalPredicate = ClaudeReadRefusalPredicate.GUARD,
+        refusal: tuple[RefusalCode, ...] = (),
     ) -> _Refused:
         family = (ClaudeReadRefusalFamily.UNPARSED if value is None
                   else read_system_observation_family(value))
@@ -517,7 +522,7 @@ class ClaudeReadTransaction:
                      else ClaudeReadReceivePhase.BODY_BEFORE_CALLBACK)
         return _Refused(code, context=ClaudeReadRefusalContext(
             code, family, phase, predicate, self._terminal_result_accepted,
-        ))
+        ), refusal=refusal)
 
     def _parse(self, raw: bytes) -> dict[str, object]:
         try:
@@ -646,7 +651,8 @@ class ClaudeReadTransaction:
                                 predicate=ClaudeReadRefusalPredicate.EXPLICIT_NEGATIVE)
         if state == "completed":
             if self._calls != self._calls_completed:
-                raise self._refused(ClaudeReadRefusalCode.LIFECYCLE, value)
+                raise self._refused(ClaudeReadRefusalCode.LIFECYCLE, value,
+                                    refusal=(RefusalCode.CALLBACK_UNANSWERED,))
             self._command_completed = True
         return True
 
@@ -957,7 +963,8 @@ class ClaudeReadTransaction:
             assert isinstance(identifier, (int, str))
             key = (type(identifier), identifier)
             if key in self._rpc_ids:
-                raise self._refused(ClaudeReadRefusalCode.MCP_ENVELOPE, value)
+                raise self._refused(ClaudeReadRefusalCode.MCP_ENVELOPE, value,
+                                    refusal=(RefusalCode.CALLBACK_REPEATED_ID,))
             self._rpc_ids.add(key)
         result: dict[str, object]
         if handshake:
@@ -992,7 +999,11 @@ class ClaudeReadTransaction:
                 raise self._refused(ClaudeReadRefusalCode.LIFECYCLE, value)
             if (self._state != "dispatched" or self._session is None
                     or method != "tools/call" or self._calls >= self._recipe.call_limit):
-                raise self._refused(ClaudeReadRefusalCode.MCP_CALL, value)
+                code = (RefusalCode.CALLBACK_CALL_CEILING
+                        if self._calls >= self._recipe.call_limit else
+                        RefusalCode.CALLBACK_NOT_OPEN if self._state != "dispatched"
+                        or self._session is None else RefusalCode.CALLBACK_MALFORMED)
+                raise self._refused(ClaudeReadRefusalCode.MCP_CALL, value, refusal=(code,))
             params = message.get("params")
             # Native MCP metadata is open JSON, discarded under the existing record budget.
             if (type(params) is not dict
@@ -1002,12 +1013,14 @@ class ClaudeReadTransaction:
                 raise self._refused(ClaudeReadRefusalCode.MCP_CALL, value)
             arguments = params["arguments"]
             if type(arguments) is not dict or set(arguments) != {self._recipe.argument_name}:
-                raise self._refused(ClaudeReadRefusalCode.MCP_ARGUMENTS, value)
+                raise self._refused(ClaudeReadRefusalCode.MCP_ARGUMENTS, value,
+                                    refusal=(RefusalCode.CALLBACK_MALFORMED,))
             path = arguments[self._recipe.argument_name]
             valid = (validate_read_path(path) if self._recipe is ClaudeNativeRecipe.STREAM_JSON
                      else validate_write_program(path))
             if not valid:
-                raise self._refused(ClaudeReadRefusalCode.MCP_ARGUMENTS, value)
+                raise self._refused(ClaudeReadRefusalCode.MCP_ARGUMENTS, value,
+                                    refusal=(RefusalCode.CALLBACK_MALFORMED,))
             assert isinstance(path, str)
             captured_stdout = await self._callback_barrier()
             if self._command_completed:
@@ -1030,7 +1043,8 @@ class ClaudeReadTransaction:
                 self._progress("started")
             text = await self._read_worker(path)
             if not _text(text, output_limit):
-                raise self._refused(ClaudeReadRefusalCode.MCP_CALL, value)
+                raise self._refused(ClaudeReadRefusalCode.MCP_CALL, value,
+                                    refusal=(RefusalCode.CALLBACK_TOOL_OUTPUT_BOUND,))
             if self._progress is not None:
                 self._progress("worker_success")
             result = {"content": [{"type": "text", "text": text}], "isError": False}
@@ -1062,6 +1076,8 @@ class ClaudeReadTransaction:
                 if cleanup is not error:
                     raise BaseExceptionGroup("Claude READ worker failed",
                                              [error, cleanup]) from None
+            if type(error) is ContractViolation and error.refusal:
+                raise _Refused(refusal=error.refusal) from None
             raise
 
     async def _body(self) -> None:
@@ -1308,6 +1324,8 @@ async def run_read_transaction(
                            usage=conversation._usage, elapsed_s=elapsed_s,
                            rate_limit=conversation._rate_limit,
                            error=ExecutorError(kind="timeout" if timed_out else "exit",
+                                               refusal=(known_refusal.refusal
+                                                        if known_refusal is not None else ()),
                                                detail=(_initialization_detail(
                                                    conversation.initialize_observation,
                                                ) if initialization_refused

@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from constructicon.core import claude_read_observation
+from constructicon.core import claude_read_observation, permit
 from constructicon.core import qualification as qualification_law
 from constructicon.core.address import GitSha
 from constructicon.core.errors import ContractViolation
@@ -37,6 +37,7 @@ from constructicon.core.native_operator import (
     NativeOperatorExecutorProfileV3,
     NativeOperatorLaunchIdentityV3,
 )
+from constructicon.core.permit import faults as permit_faults
 from constructicon.core.qualification import QualificationAuthorization
 from constructicon.core.qualification_write import CallbackObservation, WorkerResultCategory
 from constructicon.core.run import OwnershipLost
@@ -319,7 +320,8 @@ class ClaudeOperatorProvider:
         authorization = self.qualification
         if authorization is None:
             raise ContractViolation("an unavailable Claude READ provider cannot acquire")
-        faults = authorization.acquisition_faults(
+        faults = permit_faults(
+            authorization,
             run_id=context.run_lease.run_id, path=context.path, binding=context.binding.binding,
             source_graph_hash=context.source_graph_hash,
             capability_id=context.binding.capability_id,
@@ -327,9 +329,13 @@ class ClaudeOperatorProvider:
             operator_binding_digest=self.identity.store.operator_binding_digest,
             grants=context.binding.effective_grants, epoch=context.run_lease.epoch,
             now=datetime.now(UTC),
-        ) + self._grant_faults(context.binding.effective_grants)
-        if faults:
-            raise ContractViolation("Claude READ qualification acquisition refused")
+        )
+        grant_faults = self._grant_faults(context.binding.effective_grants)
+        if faults or grant_faults:
+            raise ContractViolation(
+                "Claude READ qualification acquisition refused",
+                refusal=tuple(fault.refusal for fault in faults),
+            )
         if context.check_control is None:
             raise ContractViolation("Claude READ requires invocation control")
         context.check_control()
@@ -878,8 +884,15 @@ def _protocol_revision() -> Digest:
 
 
 PROTOCOL_REVISION = _protocol_revision()
-ADAPTER_REVISION = digest("claude-read-owned-adapter", 3, {
-    module.__name__: inspect.getsource(module)
-    for module in (sys.modules[__name__], claude_read_worker, claude_write_worker, claude_native,
-                   attempt_record, qualification_law)
-})
+
+
+def _adapter_revision() -> Digest:
+    """The explicit source closure, including the shared permit law."""
+    return digest("claude-read-owned-adapter", 3, {
+        module.__name__: inspect.getsource(module)
+        for module in (sys.modules[__name__], claude_read_worker, claude_write_worker,
+                       claude_native, attempt_record, qualification_law, permit)
+    })
+
+
+ADAPTER_REVISION = _adapter_revision()

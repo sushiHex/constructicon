@@ -27,6 +27,19 @@ WRITER = "constructicon.api.plan_manifest_application:_write_candidate"
 WRITER_TESTS = "tests/api/test_plan_manifest_application.py::"
 
 MUTANTS = (
+    ("writer retains executor guard codes after its own refusal", WRITER,
+     "*outcome.error.refusal", "*()",
+     WRITER_TESTS + "test_executor_callback_code_reaches_sealed_writer_node_failure[1]"),
+    ("explicit sealed refusal codes outrank coincidental historical text",
+     DIAGNOSTIC_MODULE + "_journal", "codes[0] if codes else", "codes[0] if False else",
+     DIAGNOSTIC_TESTS
+     + "test_sealed_explicit_codes_override_historical_sentence_without_echoing_unknown"),
+    ("unknown recorded code text never crosses the diagnostic surface",
+     DIAGNOSTIC_MODULE + "_refusal_codes", 'else "unknown" for code in value',
+     "else code for code in value",
+     DIAGNOSTIC_TESTS
+     + "test_sealed_explicit_codes_override_historical_sentence_without_echoing_unknown"),
+
     *(
         ("installed diagnostic recognizes " + reason, DIAGNOSTIC_MODULE + "_journal",
          '_FAILURES.get(error, "unknown")',
@@ -367,29 +380,29 @@ MUTANTS = (
     ),
     (
         "maintenance retains the fixed native deadline",
-        "constructicon.core.maintenance:MaintenanceAttemptAuthorization._write_grants",
+        "constructicon.core.permit:fixed_write_grants",
         "or grants.timeout_s != 300", "or False",
         "tests/core/test_maintenance_authorization.py::test_grants_keep_the_bounded_write_shape",
     ),
     *(
         (
             "maintenance acquisition proves " + label,
-            "constructicon.core.maintenance:MaintenanceAttemptAuthorization.acquisition_faults",
+            "constructicon.core.permit:faults",
             before,
             after,
             "tests/core/test_maintenance_authorization.py::test_every_other_acquisition_refuses",
         )
         for label, before, after in (
-            ("run", "run_id == self.run_id", "True"),
-            ("invocation", "path == ExecutionPath(scope=self.scope)", "True"),
-            ("binding", "binding == self.binding", "True"),
-            ("graph", "source_graph_hash == self.source_graph_hash", "True"),
-            ("capability", "capability_id == self.capability_id", "True"),
-            ("revision", "revision == self.revision", "True"),
-            ("store", "operator_binding_digest == self.operator_binding_digest", "True"),
-            ("grants", "canonical_json(grants) == canonical_json(self.grants)", "True"),
-            ("epoch", "type(epoch) is int and epoch == 1", "True"),
-            ("expiry", "now < self.not_after", "True"),
+            ("run", "run_id == permit.run_id", "True"),
+            ("invocation", "path == ExecutionPath(scope=permit.scope)", "True"),
+            ("binding", "binding == permit.binding", "True"),
+            ("graph", "source_graph_hash == permit.source_graph_hash", "True"),
+            ("capability", "capability_id == permit.capability_id", "True"),
+            ("revision", "revision == permit.revision", "True"),
+            ("store", "operator_binding_digest == permit.operator_binding_digest", "True"),
+            ("grants", "canonical_json(grants) == canonical_json(permit.grants)", "True"),
+            ("epoch", "type(epoch) is int and 1 <= epoch <= permit.max_epoch", "True"),
+            ("expiry", "now < permit.not_after", "True"),
         )
     ),
     (
@@ -1014,7 +1027,8 @@ MUTANTS = (
             "test_application_revision_pins_each_authorization_law[" + label + "]",
         )
         for label, source in (
-            ("core-law", "core/maintenance.py"),
+            ("shared-core-law", "core/permit.py"),
+            ("core-wire-model", "core/maintenance.py"),
             ("maintenance-reader", "substrate/executors/maintenance.py"),
             ("root-custody-reader", "substrate/executors/qualification.py"),
             ("channel-oracle", "substrate/gates/channel_reply.py"),

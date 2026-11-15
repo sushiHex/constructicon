@@ -37,8 +37,10 @@ from tests.substrate.test_codex_adapter import portable_binding as portable_bind
 concrete_application = application_tests.concrete_application
 
 AUTHORIZATION_LAW_CHANGES = (
-    ("core/maintenance.py", b"type(epoch) is int and epoch == 1",
-     b"type(epoch) is int and epoch <= 2"),
+    ("core/permit.py", b"type(epoch) is int and 1 <= epoch <= permit.max_epoch",
+     b"type(epoch) is int and epoch <= permit.max_epoch"),
+    ("core/maintenance.py", b"type(value) is not int or value != 1",
+     b"type(value) is not int or value != 2"),
     ("substrate/executors/maintenance.py", b"record = parse_json_value(",
      b"record = dict("),
     ("substrate/executors/qualification.py", b"info.st_nlink != 1", b"info.st_nlink > 2"),
@@ -46,8 +48,8 @@ AUTHORIZATION_LAW_CHANGES = (
      b"pass"),
     ("core/refusal.py", b'"capture.unchanged"', b'"capture.base"'),
 )
-LAW_IDS = ("core-law", "maintenance-reader", "root-custody-reader", "channel-oracle",
-           "refusal-names")
+LAW_IDS = ("shared-core-law", "core-wire-model", "maintenance-reader", "root-custody-reader",
+           "channel-oracle", "refusal-names")
 
 
 def change_authorization_law(monkeypatch, relative_path, before, after):

@@ -18,6 +18,7 @@ from typing import ClassVar
 
 from constructicon.core.errors import ContractViolation
 from constructicon.core.grants import Posture
+from constructicon.core.refusal import RefusalCode
 from constructicon.core.workspace import LeaseContext, WorkspaceView
 from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.executors.linux import LinuxLauncher, ProcessLimits, ProcessResult
@@ -139,7 +140,8 @@ class _ClaudeWorkspaceWorker:
         # the authority transfer itself must not contain another await.
         self._provider.closure.require_open(owned.paths)
         if asyncio.get_running_loop().time() >= deadline:
-            raise ContractViolation(f"{self._name} worker deadline expired")
+            raise ContractViolation(f"{self._name} worker deadline expired",
+                                    refusal=(RefusalCode.CALLBACK_DEADLINE,))
 
     def _input(self, argument: str) -> tuple[tuple[str, ...], bytes]:
         raise NotImplementedError
@@ -185,12 +187,14 @@ class _ClaudeWorkspaceWorker:
     async def __call__(self, path: str, remaining_s: float) -> str:
         if self._active or self._poisoned:
             self._poisoned = True
-            raise ContractViolation(f"{self._name} callbacks must remain sequential")
+            raise ContractViolation(f"{self._name} callbacks must remain sequential",
+                                    refusal=(RefusalCode.CALLBACK_ORDER,))
         self._active = True  # Reentry is visible before the first await.
         try:
             if (type(remaining_s) not in (int, float)
                     or not math.isfinite(remaining_s) or remaining_s <= 0):
-                raise ContractViolation(f"{self._name} worker arguments refused")
+                raise ContractViolation(f"{self._name} worker arguments refused",
+                                        refusal=(RefusalCode.CALLBACK_DEADLINE,))
             command, stdin = self._input(path)
             deadline = asyncio.get_running_loop().time() + remaining_s
             owned = self._owned()
@@ -213,11 +217,31 @@ class _ClaudeWorkspaceWorker:
                         or len(result.stdout) > self._limits.stdout_bytes
                         or type(result.stderr) is not bytes
                         or len(result.stderr) > self._limits.stderr_bytes):
-                    raise ContractViolation(f"{self._name} worker process refused")
+                    if type(result) is not ProcessResult:
+                        code = RefusalCode.CALLBACK_WORKER_INCOMPLETE
+                    elif result.timed_out:
+                        code = RefusalCode.CALLBACK_WORKER_TIMEOUT
+                    elif (result.bound_exceeded is not None
+                          or (type(result.stdout) is bytes
+                              and len(result.stdout) > self._limits.stdout_bytes)
+                          or (type(result.stderr) is bytes
+                              and len(result.stderr) > self._limits.stderr_bytes)):
+                        code = RefusalCode.CALLBACK_WORKER_OUTPUT_BOUND
+                    elif (type(result.returncode) is not int
+                          or result.timed_out is not False
+                          or type(result.payload_returncode) is not int
+                          or result.payload_returncode != result.returncode
+                          or type(result.stdout) is not bytes or type(result.stderr) is not bytes):
+                        code = RefusalCode.CALLBACK_WORKER_INCOMPLETE
+                    else:
+                        code = RefusalCode.CALLBACK_WORKER_NONZERO
+                    raise ContractViolation(f"{self._name} worker process refused", refusal=(code,))
                 try:
                     text = result.stdout.decode("utf-8", errors="strict")
                 except UnicodeError:
-                    raise ContractViolation(f"{self._name} worker output refused") from None
+                    raise ContractViolation(f"{self._name} worker output refused",
+                                            refusal=(RefusalCode.CALLBACK_WORKER_INVALID_UTF8,),
+                                            ) from None
             # A guard-release await can observe closure/reentry after a clean
             # worker. Recheck before returning any workspace bytes.
             await self._open(owned, deadline)

@@ -18,6 +18,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from constructicon.core.errors import ContractViolation
+from constructicon.core.identity import canonical_json, parse_json_value
 from constructicon.core.qualification import QualificationAuthorization
 from constructicon.substrate.executors import operator_store
 
@@ -32,8 +33,9 @@ def read_authorization(path: Path) -> QualificationAuthorization:
     """The owner's authorization, or a refusal that discloses nothing about why."""
 
     try:
-        return QualificationAuthorization.model_validate_json(_read_authorization_bytes(path))
-    except (ContractViolation, OSError, ValidationError, ValueError) as exc:
+        record = parse_json_value(_read_authorization_bytes(path).decode("utf-8"))
+        return QualificationAuthorization.model_validate_json(canonical_json(record))
+    except (ContractViolation, OSError, ValidationError, ValueError, RecursionError) as exc:
         raise ContractViolation(_UNAVAILABLE) from exc
 
 

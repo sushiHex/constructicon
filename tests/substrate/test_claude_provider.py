@@ -611,6 +611,23 @@ def test_protocol_revision_covers_the_closed_observation_law():
     assert expected == claude_provider.PROTOCOL_REVISION
 
 
+def test_adapter_revision_covers_the_extracted_permit_law(monkeypatch):
+    from constructicon.core import permit
+    from constructicon.substrate.executors import claude_provider
+
+    original = claude_provider._adapter_revision()
+    source = claude_provider.inspect.getsource
+
+    def changed(module):
+        raw = source(module)
+        return raw + "\n# changed permit law\n" if module is permit else raw
+
+    monkeypatch.setattr(claude_provider.inspect, "getsource", changed)
+    assert claude_provider._adapter_revision() != original
+    # The adapter's published value is the source observed when it was loaded.
+    assert original == claude_provider.ADAPTER_REVISION
+
+
 def test_write_callback_progress_retains_only_completed_response(tmp_path):
     from constructicon.substrate.executors.attempt_record import AttemptRecord
 

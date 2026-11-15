@@ -256,6 +256,13 @@ expiry. A permit that dispatches also pins its grants and names its attempt
 record; the no-dispatch stage carries neither. Admission's question is timeless: is this graph authorized for
 this executor? Expiry, the run and the epoch are refused at acquisition.
 
+The models keep their own wire fields and validators; `core/permit.py` shares
+their run identity, admission, acquisition checks and bounded WRITE grant law.
+Qualification epochs are exact positive integers, and both custody readers
+refuse repeated JSON keys. Unpinned grants still match for no-dispatch permits.
+Permit refusals are selected from the actual failed checks, never recovered
+from their sentences.
+
 **The attempt budget.** Two records of intent are written before a turn is
 dispatched:
 
@@ -778,6 +785,16 @@ a written key is never removed. Absence means "not recorded" for current
 writers as well as old ones, so the key never selects a historical path. An
 uncoded failure's payload is byte-identical to its earlier form. No decision
 reads a code: codes stay out of checks, attestations, subjects and manifests.
+
+Executor errors carry optional closed refusal codes, omitted on the wire when
+unrecorded. Callback guards preserve their primary code through the executor
+and writer; an independent cleanup failure or exception group stays opaque.
+Current maintenance diagnostic/report output is schema 2: it prefers codes
+sealed in a failed-node event and uses the historical sentence mapping only
+when no code was recorded. The complete packet is bounded at 16 KiB, including
+all failure-code and callback-content observations. New operator packages must
+select this output contract explicitly; historical frozen readers remain tied
+to their reviewed controller and schema.
 
 Schema 8 co-commits a positively sealed accounting era with every new run.
 Migration binds each retained run's validated event floor and exact acquisition

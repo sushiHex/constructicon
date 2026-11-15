@@ -128,8 +128,18 @@ async def test_process_completion_bounds_and_utf8_are_affirmative(
         return result
 
     monkeypatch.setattr(LinuxLauncher, "run", run)
-    with pytest.raises(ContractViolation):
+    with pytest.raises(ContractViolation) as refused:
         await reader(custody)("calc.py", 30)
+    if field == "timed_out" and value is True:
+        expected = "callback.worker.timeout"
+    elif (field == "bound_exceeded" or field == "stderr"
+          or (field == "stdout" and type(value) is bytes and len(value) > 65536)):
+        expected = "callback.worker.output_bound"
+    elif field == "stdout" and value == b"\xff":
+        expected = "callback.worker.invalid_utf8"
+    else:
+        expected = "callback.worker.incomplete"
+    assert [code.value for code in refused.value.refusal] == [expected]
     assert custody[-1]["held"] == 0
 
 
