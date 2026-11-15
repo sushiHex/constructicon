@@ -89,6 +89,7 @@ jobs:
         lane: [foundation, lifecycle, combined, mediation]
     runs-on: ubuntu-24.04
     # Isolated runners shorten the critical path; physical tests stay serial.
+    # Common containment shares combined's headroom instead of the store lane.
     # Keep headroom separate from unchanged per-invocation deadlines/budgets.
     timeout-minutes: 30
     env:
@@ -184,7 +185,7 @@ jobs:
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             M8_PI_STARTUP_REQUIRED=1 M8_PI_STARTUP_ROOT=/var/lib/constructicon-m8-launch/pi-startup-runtime \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_real_pi_startup.py tests/substrate/test_real_pi_fixed_peer.py -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
+            "$PWD/.venv/bin/python" -u -m pytest tests/substrate/test_real_pi_startup.py tests/substrate/test_real_pi_fixed_peer.py -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
       - name: Prove standalone fake no-further-exec feasibility
         if: matrix.lane == 'foundation'
         shell: bash
@@ -278,7 +279,7 @@ jobs:
           sudo chmod 0444 /var/lib/constructicon-m8-claude-host-proof/profiles-before
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_CLAUDE_HOST_PROOF_REQUIRED=1 \
-            "$PWD/.venv/bin/python" -m pytest \
+            "$PWD/.venv/bin/python" -u -m pytest \
               tests/substrate/test_claude_host_installation.py::test_stage_and_judge_synthetic_host_runtime \
               -v --tb=short --durations=10 -p no:cacheprovider </dev/null
           sudo cp -a -- /var/lib/constructicon-m8-claude-host-proof/staging/constructicon-m8-claude \
@@ -315,7 +316,7 @@ jobs:
             sudo apparmor_parser --replace --skip-cache /etc/apparmor.d/constructicon-m8-claude
             sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
               M8_CLAUDE_HOST_PROOF_REQUIRED=1 M8_CLAUDE_GIT_RULE_MISSING="$component" \
-              "$PWD/.venv/bin/python" -m pytest \
+              "$PWD/.venv/bin/python" -u -m pytest \
                 tests/substrate/test_claude_host_installation.py::test_missing_git_rule_refuses_real_write_population \
                 -v --tb=short --durations=10 -p no:cacheprovider </dev/null
             sudo install -o root -g root -m 0444 \
@@ -324,7 +325,7 @@ jobs:
           done
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_CLAUDE_HOST_PROOF_REQUIRED=1 \
-            "$PWD/.venv/bin/python" -m pytest \
+            "$PWD/.venv/bin/python" -u -m pytest \
               tests/substrate/test_claude_host_installation.py::test_verified_install_launches_joined_fake_peer \
               -v --tb=short --durations=10 -p no:cacheprovider </dev/null
       - name: Prove the fake Claude native final transition and bounded layout
@@ -338,7 +339,7 @@ jobs:
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             M8_CLAUDE_COMPOSITION_REQUIRED=1 M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_claude_native_containment.py \
+            "$PWD/.venv/bin/python" -u -m pytest tests/substrate/test_claude_native_containment.py \
               tests/substrate/test_claude_native_read.py \
               tests/substrate/test_claude_provider_physical.py \
               -v --tb=short --durations=10 -p no:cacheprovider </dev/null
@@ -366,7 +367,7 @@ jobs:
             M8_CLAUDE_COMPOSITION_REQUIRED=1 M8_CLAUDE_STARTUP_REQUIRED=1 \
             RUNNER_ENVIRONMENT=github-hosted \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_claude_native_startup.py \
+            "$PWD/.venv/bin/python" -u -m pytest tests/substrate/test_claude_native_startup.py \
               -k 'not test_pinned_credential_free_startup_has_only_a_noauth_observation' \
               -v --tb=short --durations=10 -p no:cacheprovider </dev/null
           # Real vendor execution follows successful nonvendor controls only.
@@ -374,7 +375,7 @@ jobs:
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             M8_CLAUDE_COMPOSITION_REQUIRED=1 M8_CLAUDE_STARTUP_REQUIRED=1 \
             RUNNER_ENVIRONMENT=github-hosted M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
-            "$PWD/.venv/bin/python" -m pytest \
+            "$PWD/.venv/bin/python" -u -m pytest \
               tests/substrate/test_claude_native_startup.py::test_pinned_credential_free_startup_has_only_a_noauth_observation \
               -v --tb=short --durations=10 -p no:cacheprovider </dev/null
       - name: Observe separate pinned Claude settings policy presence without credentials
@@ -385,13 +386,13 @@ jobs:
           # Separate invocation: preserve the existing single-initialize observer.
           # No user message, credentials, provider connection or model call.
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_claude_native_settings.py \
+            "$PWD/.venv/bin/python" -u -m pytest tests/substrate/test_claude_native_settings.py \
               -k 'not test_pinned_credential_free_settings_diagnostic_has_closed_output' \
               -v --tb=short --durations=10 -p no:cacheprovider </dev/null
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             RUNNER_ENVIRONMENT=github-hosted M8_CLAUDE_SETTINGS_REQUIRED=1 \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
-            "$PWD/.venv/bin/python" -m pytest \
+            "$PWD/.venv/bin/python" -u -m pytest \
               tests/substrate/test_claude_native_settings.py::test_pinned_credential_free_settings_diagnostic_has_closed_output \
               -v --tb=short --durations=10 -p no:cacheprovider </dev/null
       - name: Observe frozen P2 stock-utility diagnostics on Ubuntu 24.04
@@ -402,7 +403,7 @@ jobs:
           # Unprivileged disposable files, exact historical command, no vendor.
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_STOCK_UTILITIES_REQUIRED=1 M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
-            "$PWD/.venv/bin/python" -m pytest \
+            "$PWD/.venv/bin/python" -u -m pytest \
               tests/test_m8_stock_utility_diagnostics.py::test_ubuntu_stock_cp_preserves_bytes_but_fails_clean_diagnostics \
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
       - name: Prove N3a protected descriptors and native-only store custody
@@ -412,7 +413,7 @@ jobs:
           set -euo pipefail
           sudo env RUNNER_ENVIRONMENT=github-hosted M8_STORE_PROVISION_REQUIRED=1 \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_operator_store_restart.py \
+            "$PWD/.venv/bin/python" -u -m pytest tests/substrate/test_operator_store_restart.py \
               tests/substrate/test_operator_store_publication.py \
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" \
@@ -424,7 +425,7 @@ jobs:
             M8_OPERATOR_STORE_REQUIRED=1 \
             M8_OPERATOR_STORE_ROOT=/var/lib/constructicon-m8-launch/operator-stores \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_operator_store_containment.py \
+            "$PWD/.venv/bin/python" -u -m pytest tests/substrate/test_operator_store_containment.py \
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           uv run python scripts/check_m8_n3a_mutations.py
       - name: Prove N5 Stage 1 qualification on the real store and guard
@@ -471,7 +472,7 @@ jobs:
           stat -c '%a %h %U %G %N' "$q"/*.json "$launch"/qualification-*/accepted.json \
             "$launch/qualification-alias"
           as_service M8_QUALIFICATION_REQUIRED=1 M8_QUALIFICATION_AUTHORIZATIONS="$launch/qualification" \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_qualification_linux.py \
+            "$PWD/.venv/bin/python" -u -m pytest tests/substrate/test_qualification_linux.py \
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           as_service M8_QUALIFICATION_REQUIRED=1 M8_QUALIFICATION_AUTHORIZATIONS="$launch/qualification" \
             "$PWD/.venv/bin/python" scripts/check_m8_n5_stage1_linux_mutations.py
@@ -488,7 +489,7 @@ jobs:
             M8_OPERATOR_STORE_ROOT=/var/lib/constructicon-m8-launch/operator-stores \
             M8_EGRESS_REQUIRED=1 \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_native_egress_containment.py \
+            "$PWD/.venv/bin/python" -u -m pytest tests/substrate/test_native_egress_containment.py \
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           uv run python scripts/check_m8_n3b_mutations.py
       - name: Prove N3c protected-root maintenance and packaged qualification
@@ -502,7 +503,7 @@ jobs:
           # The existing isolated runner overlaps its real holds with that lane.
           sudo env RUNNER_ENVIRONMENT=github-hosted M8_STORE_PROVISION_REQUIRED=1 \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_operator_store_maintenance_restart.py \
+            "$PWD/.venv/bin/python" -u -m pytest tests/substrate/test_operator_store_maintenance_restart.py \
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
       - name: Prove N3c persistence, refresh and non-widening
         if: matrix.lane == 'foundation'
@@ -516,7 +517,7 @@ jobs:
             M8_OPERATOR_STORE_ROOT=/var/lib/constructicon-m8-launch/operator-stores \
             M8_EGRESS_REQUIRED=1 \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_operator_store_persistence.py \
+            "$PWD/.venv/bin/python" -u -m pytest tests/substrate/test_operator_store_persistence.py \
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           uv run python scripts/check_m8_n3c_mutations.py
       - name: Read the pinned Codex archive cache identity
@@ -609,7 +610,7 @@ jobs:
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_OPERATOR_STORE_ROOT=/var/lib/constructicon-m8-launch/operator-stores \
             M8_HOST_ASSEMBLY_REQUIRED=1 \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_codex_host.py \
+            "$PWD/.venv/bin/python" -u -m pytest tests/substrate/test_codex_host.py \
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_OPERATOR_STORE_ROOT=/var/lib/constructicon-m8-launch/operator-stores \
@@ -624,7 +625,7 @@ jobs:
           # N3a fixture under a synthetic g4 and a logged-out credential: the
           # startup gate must refuse at account/read, before turn/start, with no
           # connection. Nothing after account/read can be rehearsed here.
-          M8_READ_REHEARSAL_REQUIRED=1 "$PWD/.venv/bin/python" -m pytest \
+          M8_READ_REHEARSAL_REQUIRED=1 "$PWD/.venv/bin/python" -u -m pytest \
             tests/test_m8_n5_read_rehearsal.py \
             tests/test_m8_n5_write_rehearsal.py \
             -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
@@ -636,7 +637,7 @@ jobs:
           # The packaged q12 physical preflight through the q12 transport, with real
           # sudo, the service user, the lane CLI and the launch root. Its portable
           # cases run in verify; nothing here touches the fixture store.
-          M8_READ_REHEARSAL_REQUIRED=1 "$PWD/.venv/bin/python" -m pytest \
+          M8_READ_REHEARSAL_REQUIRED=1 "$PWD/.venv/bin/python" -u -m pytest \
             tests/test_m8_maintenance_q12_rehearsal.py \
             -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
       - name: Prove the host plans the package CI installed
@@ -647,7 +648,7 @@ jobs:
           # CI unpacks with tar; the host plans with its stricter archive rules.
           # A release must pass both, identically, before any host retires its old one.
           M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
-            M8_CODEX_TARBALL="$RUNNER_TEMP/codex.tar.gz" "$PWD/.venv/bin/python" -m pytest \
+            M8_CODEX_TARBALL="$RUNNER_TEMP/codex.tar.gz" "$PWD/.venv/bin/python" -u -m pytest \
             tests/test_m8_host_runtime.py \
             -k "test_the_host_planner_accepts_the_package_ci_installed or test_the_sealed_model_and_effort_are_the_installed_catalogs_choice" \
             -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
@@ -684,7 +685,7 @@ jobs:
             M8_TRUST_ROOT=/var/lib/constructicon-m8-launch/trust-runtime \
             M8_TRUST_PKI=/var/lib/constructicon-m8-launch/trust-pki \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_native_egress_bridge.py \
+            "$PWD/.venv/bin/python" -u -m pytest tests/substrate/test_native_egress_bridge.py \
               tests/substrate/test_egress_bridge.py::test_isolated_forwarder_reports_its_own_closed_descriptor_set \
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           uv run python scripts/check_m8_n4_bridge_mutations.py
@@ -711,7 +712,7 @@ jobs:
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             M8_STARTUP_REQUIRED=1 M8_STARTUP_ROOT=/var/lib/constructicon-m8-launch/startup-runtime \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_native_startup.py -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
+            "$PWD/.venv/bin/python" -u -m pytest tests/substrate/test_native_startup.py -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             M8_STARTUP_REQUIRED=1 M8_STARTUP_ROOT=/var/lib/constructicon-m8-launch/startup-runtime \
@@ -737,7 +738,7 @@ jobs:
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             M8_PLACEMENT_REQUIRED=1 M8_PLACEMENT_ROOT=/var/lib/constructicon-m8-launch/placement-runtime \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_provider_placement.py \
+            "$PWD/.venv/bin/python" -u -m pytest tests/substrate/test_provider_placement.py \
               tests/test_native_provider.py tests/test_provider_placement.py -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           uv run python scripts/check_m8_placement_mutations.py
       - name: Prove journal-owned native fixture recovery
@@ -749,7 +750,7 @@ jobs:
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             M8_PLACEMENT_REQUIRED=1 M8_PLACEMENT_ROOT=/var/lib/constructicon-m8-launch/placement-runtime \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_native_recovery.py \
+            "$PWD/.venv/bin/python" -u -m pytest tests/substrate/test_native_recovery.py \
               tests/substrate/test_pi_recovery.py \
               tests/test_native_lifecycle.py -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           uv run python scripts/check_m8_native_recovery_mutations.py
@@ -765,7 +766,7 @@ jobs:
             M8_PLACEMENT_REQUIRED=1 M8_PLACEMENT_ROOT=/var/lib/constructicon-m8-launch/placement-runtime \
             M8_CODEX_CATALOG=/var/lib/constructicon-m8-launch/codex-models.json \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_native_combined.py \
+            "$PWD/.venv/bin/python" -u -m pytest tests/substrate/test_native_combined.py \
               tests/substrate/test_combined_startup_origins.py tests/test_native_combined.py \
               tests/substrate/test_combined_sender.py tests/substrate/test_codex_native.py \
               tests/substrate/test_qualification_write_linux.py \
@@ -792,7 +793,7 @@ jobs:
               M8_CODEX_BINARY=/var/lib/constructicon-m8-launch/native-codex/bin/codex \
               M8_CODEX_CATALOG=/var/lib/constructicon-m8-launch/codex-models.json \
               M8_EVIDENCE_DIRECTORY="$2" \
-              "$1/.venv/bin/python" -m pytest tests/substrate/test_native_codex_mediation.py \
+              "$1/.venv/bin/python" -u -m pytest tests/substrate/test_native_codex_mediation.py \
                 -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           ' sh "$PWD" "$M8_EVIDENCE"
           uv run python scripts/check_native_codex_probe_mutations.py
@@ -806,23 +807,23 @@ jobs:
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_contained_capture.py \
+            "$PWD/.venv/bin/python" -u -m pytest tests/substrate/test_contained_capture.py \
               tests/substrate/test_capture_lifecycle.py \
               tests/substrate/test_contained_gates.py tests/substrate/test_gate_lifecycle.py \
               tests/api/test_channel_reply_hostile_replies.py \
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
       - name: Prove containment as the non-sudo service user
-        if: matrix.lane == 'foundation'
+        # Common-runtime proofs own their Git/journal roots; no store or relay.
+        if: matrix.lane == 'combined'
         shell: bash
         run: |
           set -euo pipefail
+          # Unbuffered verbose pytest leaves the active node id on cancellation.
           cat "$RUNNER_TEMP/m8-host.txt"
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
-            M8_OPERATOR_STORE_REQUIRED=1 \
-            M8_OPERATOR_STORE_ROOT=/var/lib/constructicon-m8-launch/operator-stores \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_linux_containment.py \
+            "$PWD/.venv/bin/python" -u -m pytest tests/substrate/test_linux_containment.py \
               tests/substrate/test_contained_workspace.py tests/substrate/test_acquisition_closure.py \
               tests/substrate/test_acquisition_namespace.py \
               tests/substrate/test_recorded_executor.py \
@@ -884,7 +885,7 @@ jobs:
             -m tests.substrate._claude_read_rehearsal_host provision
           M8_CLAUDE_REHEARSAL_REQUIRED=1 \
             M8_CLAUDE_REHEARSAL_BINDINGS=/var/lib/constructicon-m8-claude-read-rehearsal/bindings.json \
-            "$PWD/.venv/bin/python" -m pytest tests/test_claude_read_linux_rehearsal.py \
+            "$PWD/.venv/bin/python" -u -m pytest tests/test_claude_read_linux_rehearsal.py \
             -v --tb=short --durations=10 -p no:cacheprovider
       - name: Preserve exact runtime and observed boundary evidence
         if: always()
