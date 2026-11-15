@@ -56,7 +56,7 @@ messages as unknown; the new reader recognizes them explicitly. This is a
 prospective diagnostic change, not a reinterpretation of the completed g10
 capture or evidence that g10 made no change.
 
-Current source-byte checks (LF required):
+Schema-9 source-byte checks (LF required; historical field names retained):
 
 ```text
 CURRENT_EVIDENCE_SHA256=2f654a218fcb55eee65a59c1c8ae63bc8a761db3fe71143f41dff69e22a1b578
@@ -64,6 +64,25 @@ CURRENT_DIAGNOSTIC_SHA256=421790bb5f850627f2828179efcc28bbd346134a35ccb5097356b3
 ```
 
 The tests separately pin the frozen procedure's historical literals and these
-current helper bytes. They do not need Git ancestry in shallow CI. The actual
+schema-9 helper bytes. They do not need Git ancestry in shallow CI. The actual
 controller verification, exact session pins and host evidence remain separate
 requirements; a local hash comparison does not establish an installation.
+
+## Schema-2 refusal-code successor
+
+The refusal-code change in [#435](https://github.com/sushiHex/constructicon/pull/435)
+advances current diagnostic output to schema 2. It projects the sealed refusal
+chain when present and preserves the legacy uncoded cause map. The earlier
+schema-9, schema-10, channel, content-digest and instruction-binding source pins
+remain records of their own bytes; none is a digest of the current helper.
+The evidence helper is unchanged and still matches `CURRENT_EVIDENCE_SHA256`.
+The current diagnostic's LF bytes are:
+
+```text
+REFUSAL_CODES_DIAGNOSTIC_SHA256=a1a408ce26f14403881f82d938936e35f8cb1bf03a9344169d2b5bd0fcc5304f
+```
+
+`tests/test_m8_maintenance_diagnosis.py` preserves every earlier era pin and
+compares the current diagnostic with this successor. A later package must pin
+these successor bytes and accept schema 2; this source record supplies no host
+procedure, installation evidence or execution authorization.

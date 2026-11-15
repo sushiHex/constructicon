@@ -358,6 +358,7 @@ async def attempt(resources, launch, binding, tmp_path, monkeypatch, seat: Seate
     if result is None:
         failure, = failures
         assert failure.payload["error_type"] == "ContractViolation", failure.payload
+        assert isinstance(failure.payload.get("refusal"), list), failure.payload
         outcome, node = failure.payload["refusal"], failure.path.scope.segments[-1]
         assert not (Path(authorization.journal).parent / "maintenance-result.json").exists()
     else:
