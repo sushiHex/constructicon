@@ -800,3 +800,50 @@ async def test_write_provider_run_retains_actual_worker_and_eight_completed_resp
     assert saved["callbacks"]["admitted_completed"] == 8
     assert saved["callbacks"]["worker_results"] == ["success"] * 8
     assert commands == [ClaudeNativeRecipe.STREAM_JSON_WRITE.command(launcher.claude)]
+
+
+@pytest.mark.parametrize("fault", ["worker-nonzero", "relay-denial", "none"])
+async def test_assembled_provider_preserves_worker_refusal_through_callback_normalization(
+    assembled, monkeypatch, fault,
+):
+    from constructicon.core.refusal import RefusalCode
+
+    a = assembled
+    # Real Git custody checks can exceed the fixture's usual 30s on Windows.
+    # Assemble the same closed recipe under an explicit larger test grant.
+    a.grants = a.grants.model_copy(update={"timeout_s": 120})
+    a.executor = native.ClaudeOperatorProvider(**{
+        **a.kwargs,
+        "qualification": a.kwargs["qualification"].model_copy(update={"grants": a.grants}),
+    })
+    a.context = replace(a.context, binding=a.context.binding.model_copy(
+        update={"effective_grants": a.grants}))
+    original = LinuxLauncher.run
+    async def run(self, command, **kwargs):
+        result = await original(self, command, **kwargs)
+        if fault == "worker-nonzero":
+            return replace(result, returncode=1, payload_returncode=1)
+        return result
+    monkeypatch.setattr(LinuxLauncher, "run", run)
+    if fault == "relay-denial":
+        a.state.denied["denied:fixture"] = 1
+    acquired = await acquire_ready(a)
+    try:
+        outcome = await execute(a, acquired)
+        saved = record(a)
+    finally:
+        await a.executor.close(acquired, "discard")
+    assert len(a.state.workers) == len(a.state.exchanges) == 1
+    assert a.state.native_joined and a.state.closed
+    assert a.state.guards == a.state.locks == 0
+    if fault == "none":
+        assert isinstance(outcome, ExecutorSuccess)
+        assert outcome.raw_reply == "task output"
+        assert saved["facts"]["callback_completed"] == 1
+    else:
+        assert isinstance(outcome, ExecutorFailure)
+        expected = ((RefusalCode.CALLBACK_WORKER_NONZERO,) if fault == "worker-nonzero" else ())
+        assert outcome.error.refusal == expected
+        assert saved["facts"]["callback_started"] == 1
+        assert saved["facts"]["callback_completed"] == (0 if fault == "worker-nonzero" else 1)
+        assert outcome.raw_reply is None and outcome.output is None

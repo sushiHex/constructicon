@@ -780,7 +780,9 @@ class ClaudeOperatorHandle:
             return ExecutorFailure(
                 requested_model=outcome.requested_model, served_model=outcome.served_model,
                 usage=outcome.usage, rate_limit=outcome.rate_limit, elapsed_s=outcome.elapsed_s,
-                error=ExecutorError(kind="exit", detail=detail or "Claude READ refused"),
+                error=ExecutorError(kind="exit", detail=detail or "Claude READ refused",
+                                    refusal=outcome.error.refusal
+                                    if isinstance(outcome, ExecutorFailure) else ()),
             )
         return outcome
 

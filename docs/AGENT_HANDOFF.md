@@ -28,8 +28,11 @@ Permit and callback guards record closed codes at their producer. Executor
 errors omit the optional code field when unrecorded; a writer adds its own
 guard before the executor's code chain. A separately failing cleanup or an
 exception group is not mined for a primary code. Uncoded node-event payloads
-remain unchanged. The protocol, adapter, application and diagnostic source
-changes require fresh qualification before live use; this delivery is not
+remain unchanged. The assembled Claude provider preserves an actual worker
+failure's codes when callback normalization rebuilds its error; an independent
+relay denial does not inherit or invent a worker code. Hostile and replay tests
+assert the complete writer-plus-worker refusal chain. The protocol, adapter,
+application and diagnostic source changes require fresh qualification before live use; this delivery is not
 installation or qualification evidence.
 
 Maintenance diagnostics and reports now emit schema 2, prefer sealed failure

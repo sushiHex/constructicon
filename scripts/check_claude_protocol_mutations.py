@@ -2604,5 +2604,14 @@ MUTANTS += (
      WRITE_PINS_TEST + "test_main_pins_reports_actual_metadata_without_enrollment_or_dispatch"),
 )
 
+MUTANTS += (
+    ("Claude provider normalization preserves the actual callback worker guard",
+     "constructicon.substrate.executors.claude_provider:ClaudeOperatorHandle._run",
+     "refusal=outcome.error.refusal", "refusal=()",
+     "tests/substrate/test_claude_provider.py::"
+     "test_assembled_provider_preserves_worker_refusal_through_callback_normalization"
+     "[worker-nonzero]"),
+)
+
 if __name__ == "__main__":
     raise SystemExit(run(MUTANTS))
