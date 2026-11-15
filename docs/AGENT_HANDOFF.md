@@ -1,5 +1,23 @@
 # Agent handoff
 
+## Containment proof lanes keep measured foundation headroom
+
+The common-runtime containment group now runs in the combined lane, once and
+as the same non-sudo service user. Controller-death recovery stays in a named
+foundation step with the required operator store: its imported fixture and
+subprocess helper both consume that environment. The initial claim that all
+of the group was store-independent was wrong; review caught a silent skip.
+Recent foundation passes took 27m58s and 26m33s; the original common group took
+3m44s and 3m41s, including recovery. These measurements justify rebalancing,
+but subtraction is an estimate, not a measured runtime for the new workflow.
+All four lanes, proof membership and existing deadlines remain enforced.
+
+Direct physical pytest commands use unbuffered verbose output so a cancelled
+job retains its active test name. The earlier cancelled log did contain
+completed test progress; the missing fact was the next active test, not all
+pytest output. Local routing/source checks and an abrupt subprocess-stop
+experiment support this correction; Linux workflow execution remains CI evidence.
+
 Durable rules live in [`AGENTS.md`](../AGENTS.md) and
 [`INVARIANTS.md`](INVARIANTS.md). Per-slice evidence lives in the living
 implementation records under [`plans/handoffs/`](plans/handoffs/). Current work,

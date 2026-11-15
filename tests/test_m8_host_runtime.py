@@ -768,7 +768,7 @@ def test_ci_builds_the_runtime_from_the_shared_plan() -> None:
     assert "ldd" not in builder and "copytree" not in builder and "shutil" not in builder
 
 
-def test_the_foundation_lane_runs_the_parity_tests_as_the_service_user() -> None:
+def test_the_combined_lane_runs_the_parity_tests_as_the_service_user() -> None:
     workflow = (REPOSITORY / ".github/workflows/m8-containment.yml").read_text(encoding="utf-8")
     for test in (
         "tests/test_m8_host_runtime.py::test_the_host_writer_reproduces_the_ci_runtime",
@@ -777,6 +777,7 @@ def test_the_foundation_lane_runs_the_parity_tests_as_the_service_user() -> None
         assert workflow.count(test) == 1, test
     step = workflow.split("name: Prove containment as the non-sudo service user", 1)[1]
     step = step.split("\n      - name:", 1)[0]
+    assert "if: matrix.lane == 'combined'" in step
     assert "tests/test_m8_host_runtime.py::test_the_host_writer" in step
     assert "M8_CONTAINMENT_REQUIRED=1" in step and "sudo -u m8-service" in step
 
@@ -1913,7 +1914,7 @@ def test_a_host_source_that_resolves_outside_the_root_refuses(
         plan(root)
 
 
-# --- CI's installed runtime (foundation lane, as m8-service) ------------------
+# --- CI's installed runtime (containment lanes, as m8-service) ------------------
 
 
 @pytest.fixture
