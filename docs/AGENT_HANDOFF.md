@@ -1,5 +1,21 @@
 # Agent handoff
 
+Durable rules live in [`AGENTS.md`](../AGENTS.md) and
+[`INVARIANTS.md`](INVARIANTS.md). Per-slice evidence lives in the living
+implementation records under [`plans/handoffs/`](plans/handoffs/). Current work,
+ownership and acceptance live in
+[GitHub Issues](https://github.com/sushiHex/constructicon/issues), and
+[`WORK_TRACKING.md`](WORK_TRACKING.md) governs how a paused slice hands over —
+in an issue comment, not here. Query the issues before resuming.
+
+**This document is context, not a parallel task ledger.** It carries what
+outlives a single issue: what a slice actually established, what it deliberately
+did not, and which reported facts turned out to be wrong. An entry is added when
+a slice merges, newest first; prepare it in the delivery PR rather than opening
+a second PR just to record the merge. Nothing here authorizes work.
+
+---
+
 ## Containment proof lanes keep measured foundation headroom
 
 The common-runtime containment group now runs in the combined lane, once and
@@ -18,22 +34,6 @@ completed test progress; the missing fact was the next active test, not all
 pytest output. Local routing/source checks and an abrupt subprocess-stop
 experiment support this correction; Linux workflow execution remains CI evidence.
 
-Durable rules live in [`AGENTS.md`](../AGENTS.md) and
-[`INVARIANTS.md`](INVARIANTS.md). Per-slice evidence lives in the living
-implementation records under [`plans/handoffs/`](plans/handoffs/). Current work,
-ownership and acceptance live in
-[GitHub Issues](https://github.com/sushiHex/constructicon/issues), and
-[`WORK_TRACKING.md`](WORK_TRACKING.md) governs how a paused slice hands over —
-in an issue comment, not here. Query the issues before resuming.
-
-**This document is context, not a parallel task ledger.** It carries what
-outlives a single issue: what a slice actually established, what it deliberately
-did not, and which reported facts turned out to be wrong. An entry is added when
-a slice merges, newest first; prepare it in the delivery PR rather than opening
-a second PR just to record the merge. Nothing here authorizes work.
-
----
-
 ## The live-run permits share a law and retain their refusal evidence
 
 The two permit models retain their wire fields, JSON schemas, run identities,
@@ -50,8 +50,8 @@ remain unchanged. The assembled Claude provider preserves an actual worker
 failure's codes when callback normalization rebuilds its error; an independent
 relay denial does not inherit or invent a worker code. Hostile and replay tests
 assert the complete writer-plus-worker refusal chain. The protocol, adapter,
-application and diagnostic source changes require fresh qualification before live use; this delivery is not
-installation or qualification evidence.
+application and diagnostic source changes require fresh qualification before
+live use; this delivery is not installation or qualification evidence.
 
 Maintenance diagnostics and reports now emit schema 2, prefer sealed failure
 codes, and use exact historical sentences only for uncoded events. Their
@@ -59,6 +59,27 @@ codes, and use exact historical sentences only for uncoded events. Their
 callback-content observations without dropping a section. Historical frozen
 operator readers do not thereby accept the new schema; a successor package
 must pin the new source and output contract.
+
+## Two verified snapshot exports share disk extraction
+
+[#432](https://github.com/sushiHex/constructicon/issues/432) gives the contained
+gate and legacy `read_snapshot` one `GitAuthority.extract_exact` operation:
+fresh destination, data-filtered disk tar extraction, tar removal before exact
+path/type/blob/mode verification, and cleanup on refusal. Legacy Git now writes
+an absolute `--output` file, including with relative workspace roots, instead of
+returning tar bytes on stdout. Its synchronous runner and Windows mode
+normalization remain; the gate keeps guarded `GitProcess` and joined extraction.
+
+The third READ workspace exporter in `substrate/git/contained.py` is unchanged:
+its 16 MiB tar-output bound and absent exact comparison need a separate behavioral
+slice. Legacy snapshots do not acquire the Linux pump's 128 MiB file ceiling;
+equality hashing still reads each blob whole. Existing source inventories cover
+the shared implementation: gate/check-set and WRITE workspace revisions change;
+maintenance application and executor adapter sources stay unchanged. Portable
+real-Git tests substitute only Windows guard inheritance, not extraction or
+verification. This Windows account cannot create symlinks, so native symlink
+acceptance and Linux containment remain unproven locally. No host qualification
+or vendor run is implied.
 
 ## The gate snapshot's archive is written to disk, not through the Git output pump
 
