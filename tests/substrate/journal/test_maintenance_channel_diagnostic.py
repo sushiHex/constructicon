@@ -89,7 +89,7 @@ def test_a_journal_outside_the_two_cases_is_refused(tmp_path, graph, request_mod
     source = tmp_path / "source"
     _journal(source, graph, REQUEST if request_model == "plan" else CHANNEL_REQUEST)
     report = diagnostic.analyze_snapshot(_snapshot(source, tmp_path / "capture"), RUN, AUTH)
-    assert report == {"schema_version": 1, "complete": False, "stage": stage,
+    assert report == {"schema_version": 2, "complete": False, "stage": stage,
                       "error": "diagnostic refused or incomplete"}
 
 
@@ -128,7 +128,7 @@ def test_sections_naming_different_tasks_are_refused_as_one_task(tmp_path, secti
         else:
             _result(source, purpose="channel-stored-reply")
     report = diagnostic.analyze_snapshot(_snapshot(source, tmp_path / "capture"), RUN, AUTH)
-    assert report == {"schema_version": 1, "complete": False, "stage": "task",
+    assert report == {"schema_version": 2, "complete": False, "stage": "task",
                       "error": "diagnostic refused or incomplete"}
 
 

@@ -27,7 +27,7 @@ from constructicon.core.address import ExecutionPath
 from constructicon.core.control import ADMIN_SCOPE, READ_SCOPE, AuthenticatedActor
 from constructicon.core.envelope import utc_now
 from constructicon.core.errors import ContractViolation
-from constructicon.core.executor import ExecutorSuccess, TaskSpec
+from constructicon.core.executor import ExecutorFailure, ExecutorSuccess, TaskSpec
 from constructicon.core.grants import EffectiveGrants, GrantRequest, ModelSelection, Posture
 from constructicon.core.graph import Connection, Graph, GraphNode, Ref
 from constructicon.core.identity import Digest, canonical_json, digest
@@ -80,7 +80,9 @@ async def write_writer(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[s
         "followed by a newline. Change no other files."
     )), workspace=workspace, grants=ctx.grants)
     if not isinstance(outcome, ExecutorSuccess):
-        raise ContractViolation(f"the WRITE turn ended {outcome.status}")
+        raise ContractViolation(f"the WRITE turn ended {outcome.status}",
+                                refusal=outcome.error.refusal
+                                if isinstance(outcome, ExecutorFailure) else ())
     return await fixed.capture_changed_candidate(workspace, request)
 
 

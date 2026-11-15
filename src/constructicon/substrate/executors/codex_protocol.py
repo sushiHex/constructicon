@@ -89,6 +89,7 @@ from constructicon.core.executor import (
 )
 from constructicon.core.grants import EffectiveGrants
 from constructicon.core.identity import Digest, digest, parse_json_value
+from constructicon.core.refusal import RefusalCode
 
 READ_WINDOW = 8192
 """The launcher's hard per-read ceiling; ``read`` accepts only 1 through this."""
@@ -409,15 +410,18 @@ def parse_tool_call(
     """
 
     if set(record) != {"id", "method", "params"}:
-        raise ContractViolation("the callback request has an unknown top-level field")
+        raise ContractViolation("the callback request has an unknown top-level field",
+                                refusal=(RefusalCode.CALLBACK_MALFORMED,))
     request_id = record["id"]
     if not (
         type(request_id) is int
         or (type(request_id) is str and _bounded_wire_name(request_id))
     ):
-        raise ContractViolation("the callback request has an invalid request id")
+        raise ContractViolation("the callback request has an invalid request id",
+                                refusal=(RefusalCode.CALLBACK_MALFORMED,))
     if record["method"] != "item/tool/call":
-        raise ContractViolation("the native client requested an unauthorized operation")
+        raise ContractViolation("the native client requested an unauthorized operation",
+                                refusal=(RefusalCode.CALLBACK_MALFORMED,))
     params = record["params"]
     required = {"threadId", "turnId", "callId", "tool", "arguments"}
     allowed = required | {"namespace"}
@@ -427,24 +431,32 @@ def parse_tool_call(
         or set(params) - allowed
         or params.get("namespace") is not None
     ):
-        raise ContractViolation("the callback request has an invalid parameter shape")
+        raise ContractViolation("the callback request has an invalid parameter shape",
+                                refusal=(RefusalCode.CALLBACK_MALFORMED,))
     if params["threadId"] != thread_id:
-        raise ContractViolation("the callback request belongs to another thread")
+        raise ContractViolation("the callback request belongs to another thread",
+                                refusal=(RefusalCode.CALLBACK_MALFORMED,))
     if turn_id is not None and params["turnId"] != turn_id:
-        raise ContractViolation("the callback request belongs to another turn")
+        raise ContractViolation("the callback request belongs to another turn",
+                                refusal=(RefusalCode.CALLBACK_MALFORMED,))
     if not _bounded_wire_name(params["turnId"]):
-        raise ContractViolation("the callback request has an invalid turn id")
+        raise ContractViolation("the callback request has an invalid turn id",
+                                refusal=(RefusalCode.CALLBACK_MALFORMED,))
     if params["tool"] != CONTAINED_PYTHON:
-        raise ContractViolation("the callback request names an unauthorized tool")
+        raise ContractViolation("the callback request names an unauthorized tool",
+                                refusal=(RefusalCode.CALLBACK_MALFORMED,))
     call_id = params["callId"]
     if not _bounded_wire_name(call_id):
-        raise ContractViolation("the callback request has an invalid call id")
+        raise ContractViolation("the callback request has an invalid call id",
+                                refusal=(RefusalCode.CALLBACK_MALFORMED,))
     arguments = params["arguments"]
     if not isinstance(arguments, dict) or set(arguments) != {"program"}:
-        raise ContractViolation("the callback request has invalid tool arguments")
+        raise ContractViolation("the callback request has invalid tool arguments",
+                                refusal=(RefusalCode.CALLBACK_MALFORMED,))
     program = arguments["program"]
     if not isinstance(program, str) or len(program.encode("utf-8")) > TOOL_PROGRAM_BYTES:
-        raise ContractViolation("the callback program exceeds its closed input bound")
+        raise ContractViolation("the callback program exceeds its closed input bound",
+                                refusal=(RefusalCode.CALLBACK_PROGRAM_BOUND,))
     return ToolCall(
         request_id=request_id,
         thread_id=params["threadId"],
@@ -458,7 +470,8 @@ def tool_call_response(call: ToolCall, output: str) -> dict[str, Any]:
     """Build the only response to a server request this adapter can send."""
 
     if not isinstance(output, str) or len(output.encode("utf-8")) > TOOL_OUTPUT_BYTES:
-        raise ContractViolation("the callback output exceeds its closed output bound")
+        raise ContractViolation("the callback output exceeds its closed output bound",
+                                refusal=(RefusalCode.CALLBACK_TOOL_OUTPUT_BOUND,))
     return {
         "id": call.request_id,
         "result": {
@@ -1670,7 +1683,7 @@ def decode_turn(
 
 def unavailable_outcome(
     faults: Sequence[str], observation: TurnObservation, process: ProcessFacts, *,
-    requested_model: str | None,
+    requested_model: str | None, refusal: tuple[RefusalCode, ...] = (),
 ) -> ExecutorFailure:
     """A refused gate discards the turn's result rather than reporting it.
 
@@ -1685,6 +1698,7 @@ def unavailable_outcome(
         error=ExecutorError(
             kind="unavailable",
             detail=_bounded("; ".join(faults), DETAIL_CHARS),
+            refusal=refusal,
             produced_output=observation.terminal,
         ),
     )

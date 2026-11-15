@@ -30,6 +30,7 @@ from constructicon.core.maintenance import (
     PlanManifestResult,
 )
 from constructicon.core.qualification_write import CallbackObservation
+from constructicon.core.refusal import MAX_REFUSAL_CODES, RefusalCode
 from constructicon.core.workspace import acquisition_id_for, lease_id_for
 from constructicon.substrate.journal._sqlite_attestations import attestation_for_id
 from constructicon.substrate.journal._sqlite_base import (
@@ -64,7 +65,8 @@ MAX_JSON_BYTES = 1024 * 1024
 MAX_EVENTS = 256
 MAX_ATTESTATIONS = 32
 MAX_SQL_STEPS = 2_000_000
-MAX_REPORT_BYTES = 8192
+MAX_REPORT_BYTES = 16384
+REPORT_SCHEMA_VERSION = 2
 _FAILURES = {
     "maintenance requires an asynchronous WRITE workspace": "writer-workspace",
     "maintenance workspace differs from the pinned base": "writer-base",
@@ -82,6 +84,18 @@ _FAILURES = {
 }
 _ERROR_TYPES = frozenset({"ContractViolation", "JournalDamaged", "OSError", "ValueError"})
 
+
+
+def _refusal_codes(value: object) -> list[str]:
+    """Decode sealed codes without echoing arbitrary persisted text.
+
+    Absence is unrecorded. An explicitly malformed value remains unknown rather
+    than letting a coincidental historical sentence supply a positive cause.
+    """
+    if not isinstance(value, list) or not 1 <= len(value) <= MAX_REFUSAL_CODES:
+        return ["unknown"]
+    return [RefusalCode(code).value if type(code) is str and code in RefusalCode._value2member_map_
+            else "unknown" for code in value]
 
 class _Refused(Exception):
     pass
@@ -323,11 +337,16 @@ def _journal(path: Path, run_id: RunId, purposes: list[str]) -> dict[str, object
                             raise _Refused
                         error_type = payload.get("error_type")
                         error = payload.get("error")
+                        codes = []
+                        if "refusal" in payload:
+                            codes = (_refusal_codes(payload["refusal"])
+                                     if error_type == "ContractViolation" else ["unknown"])
                         nodes[name]["failures"].append({
                             "type": error_type if error_type in _ERROR_TYPES else "unknown",
-                            "cause": _FAILURES.get(error, "unknown") if (
+                            "cause": codes[0] if codes else _FAILURES.get(error, "unknown") if (
                                 error_type == "ContractViolation" and isinstance(error, str)
                             ) else "unknown",
+                            "refusal": codes,
                         })
                         _require(len(nodes[name]["failures"]) <= 8)
             candidate = None
@@ -381,7 +400,7 @@ def analyze_snapshot(snapshot_dir: Path, run_id: RunId,
         with tempfile.TemporaryDirectory(prefix="maintenance-analysis-") as temporary:
             scratch = Path(temporary)
             present = _copy_snapshot(snapshot_dir, scratch)
-            report: dict[str, object] = {"schema_version": 1, "complete": True,
+            report: dict[str, object] = {"schema_version": REPORT_SCHEMA_VERSION, "complete": True,
                 "meaning": "selected-historical-facts-only", "run_id": str(run_id),
                 "journal": {"observation": "missing"},
                 "attempt": {"observation": "missing"}, "pending_attempt": "missing",
@@ -413,7 +432,7 @@ def analyze_snapshot(snapshot_dir: Path, run_id: RunId,
             _require(len(json.dumps(report).encode("utf-8")) <= MAX_REPORT_BYTES)
             return report
     except Exception:
-        return {"schema_version": 1, "complete": False, "stage": stage,
+        return {"schema_version": REPORT_SCHEMA_VERSION, "complete": False, "stage": stage,
                 "error": "diagnostic refused or incomplete"}
 
 
@@ -435,7 +454,7 @@ def main(argv: list[str] | None = None) -> int:
                                     command_report=Path(args.command_report))
         report = analyze_snapshot(snapshot, RunId(args.run_id), args.authorization_id)
     except Exception:
-        report = {"schema_version": 1, "complete": False, "stage": "capture",
+        report = {"schema_version": REPORT_SCHEMA_VERSION, "complete": False, "stage": "capture",
                   "error": "diagnostic refused or incomplete"}
     print(json.dumps(report, sort_keys=True, separators=(",", ":")))
     return 0 if report["complete"] is True else 1

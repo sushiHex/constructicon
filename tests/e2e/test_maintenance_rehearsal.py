@@ -133,8 +133,10 @@ def test_noop_packet_names_the_producer_mapped_refusal(home_state):
     assert files(state) == before
     assert_private_safe(text, state)
     assert noop["status"] == "failed" and noop["outcome"] == "refused"
-    assert noop["refusal"] == {"node": "writer", "cause": "capture-unchanged",
-                               "source": "diagnostic-producer-mapped-node-failure"}
+    assert noop["schema_version"] == 2
+    assert noop["refusal"] == {"node": "writer", "cause": "capture.unchanged",
+                               "source": "diagnostic-producer-mapped-node-failure",
+                               "refusal": ["capture.unchanged"]}
     assert noop["diagnostic"]["command"] == "normal-nonacceptance"
     assert noop["result"] == {"observation": "missing"}
     assert noop["attestation"] == {"observation": "missing"}

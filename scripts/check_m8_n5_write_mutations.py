@@ -12,6 +12,7 @@ TEST = "tests/core/test_qualification_write.py::"
 ENTRY = "constructicon.api.qualification:"
 ENTRY_TEST = "tests/api/test_qualification_write_entry.py::"
 GRANTS = TEST + "test_write_authorization_refuses_other_grant_shapes"
+FIXED_GRANTS = "constructicon.core.permit:fixed_write_grants"
 ASSEMBLY = "constructicon.api._qualification_write_assembly:"
 ASSEMBLY_TEST = "tests/api/test_qualification_write_assembly.py::"
 HOST = "constructicon.substrate.executors.codex_host:_operator_provider"
@@ -23,6 +24,10 @@ CALLBACK = "constructicon.substrate.executors.codex:"
 ATTEMPT = "constructicon.substrate.executors.attempt_record:AttemptRecord."
 
 MUTANTS = (
+    ("conversation retains a directly observed callback guard code",
+     CALLBACK + "CodexConversation._refuse", "self.refusal = refusal", "self.refusal = ()",
+     CALLBACK_TEST + "test_callback_guard_code_survives_worker_and_conversation_to_executor"),
+
     ("WRITE dispatches through the retained provider interface",
      AUTH + "dispatches",
      'return self.stage in ("qualification-read", "qualification-write")',
@@ -46,21 +51,21 @@ MUTANTS = (
      AUTH + "_stage_shape", "if self.write is None:", "if False:",
      TEST + "test_write_requires_its_grants_record_one_epoch_and_assembly_pins"),
     ("WRITE requires WRITE posture",
-     AUTH + "_stage_shape", "grants.posture is not Posture.WRITE", "False", GRANTS),
+     FIXED_GRANTS, "grants.posture is not Posture.WRITE", "False", GRANTS),
     ("WRITE names its explicit prepared model",
-     AUTH + "_stage_shape", 'grants.model_selection.kind != "explicit"', "False", GRANTS),
+     FIXED_GRANTS, 'grants.model_selection.kind != "explicit"', "False", GRANTS),
     ("WRITE cannot pin an empty model",
-     AUTH + "_stage_shape", 'or not (grants.model_selection.model or "").strip()', "", GRANTS),
+     FIXED_GRANTS, 'or not (grants.model_selection.model or "").strip()', "", GRANTS),
     ("WRITE pins a nonempty explicit effort",
-     AUTH + "_stage_shape", 'or not (grants.effort or "").strip()', "", GRANTS),
+     FIXED_GRANTS, 'or not (grants.effort or "").strip()', "", GRANTS),
     ("WRITE permits only the fixed contained Python callback",
-     AUTH + "_stage_shape", 'or grants.allowed_tools != ("contained_python",)', "", GRANTS),
+     FIXED_GRANTS, 'or grants.allowed_tools != ("contained_python",)', "", GRANTS),
     ("WRITE inherits no environment",
-     AUTH + "_stage_shape", "or grants.env_allowlist != ()", "", GRANTS),
+     FIXED_GRANTS, "or grants.env_allowlist != ()", "", GRANTS),
     ("WRITE grants vendor-session network access",
-     AUTH + "_stage_shape", 'or grants.network != "allow"', "", GRANTS),
+     FIXED_GRANTS, 'or grants.network != "allow"', "", GRANTS),
     ("WRITE has the accepted 300-second phase grant",
-     AUTH + "_stage_shape", "or grants.timeout_s != 300", "", GRANTS),
+     FIXED_GRANTS, "or grants.timeout_s != 300", "", GRANTS),
     ("fixture and request bind exact Git object identities",
      CORE + "_git_object",
      'if len(value) not in (40, 64) or any(char not in "0123456789abcdef" for char in value):',
@@ -203,22 +208,22 @@ MUTANTS = (
      CALLBACK + "CodexOperatorHandle._run_worker", "result = task.result()", "pass",
      CALLBACK_TEST + "test_worker_result_survives_read_response_and_cancellation_races"),
     ("observed timeout has precedence over other worker flags",
-     CALLBACK + "CodexOperatorHandle._observe_worker", "if result.timed_out:", "if False:",
+     CALLBACK + "_worker_category", "if result.timed_out:", "if False:",
      CALLBACK_TEST + "test_worker_terminal_facts_are_observed_before_later_rejection[timeout-priority]"),
     ("observed output overflow is not a complete worker exit",
-     CALLBACK + "CodexOperatorHandle._observe_worker",
+     CALLBACK + "_worker_category",
      "elif result.bound_exceeded is not None:", "elif False:",
      CALLBACK_TEST + "test_worker_terminal_facts_are_observed_before_later_rejection[bound-priority]"),
     ("absent or mismatched payload exit remains incomplete",
-     CALLBACK + "CodexOperatorHandle._observe_worker",
+     CALLBACK + "_worker_category",
      "result.payload_returncode is None or result.payload_returncode != result.returncode", "False",
      CALLBACK_TEST + "test_worker_terminal_facts_are_observed_before_later_rejection[incomplete]"),
     ("observed nonzero worker exit is not success",
-     CALLBACK + "CodexOperatorHandle._observe_worker",
+     CALLBACK + "_worker_category",
      "elif result.returncode != 0:", "elif False:",
      CALLBACK_TEST + "test_worker_terminal_facts_are_observed_before_later_rejection[nonzero]"),
     ("invalid worker UTF8 remains a finite refusal category",
-     CALLBACK + "CodexOperatorHandle._observe_worker",
+     CALLBACK + "_worker_category",
      'category = "invalid_utf8"', 'category = "success"',
      CALLBACK_TEST + "test_worker_terminal_facts_are_observed_before_later_rejection[utf8]"),
     ("WRITE projection keeps observed callback facts rather than invented unknown",

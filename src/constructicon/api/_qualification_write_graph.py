@@ -14,7 +14,7 @@ from constructicon.core.address import ScopePath
 from constructicon.core.component import CapabilityRequirement, ComponentDef, PythonRef
 from constructicon.core.envelope import GitRef
 from constructicon.core.errors import ContractViolation
-from constructicon.core.executor import ExecutorSuccess, TaskSpec
+from constructicon.core.executor import ExecutorFailure, ExecutorSuccess, TaskSpec
 from constructicon.core.gates import MergeEvaluation
 from constructicon.core.grants import EffectiveGrants, GrantRequest, Posture
 from constructicon.core.graph import Connection, Graph, GraphNode, Ref
@@ -94,7 +94,9 @@ async def write_writer(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[s
     ))
     outcome = await executor.execute(task, workspace=workspace, grants=ctx.grants)
     if not isinstance(outcome, ExecutorSuccess):
-        raise ContractViolation(f"the WRITE turn ended {outcome.status}")
+        raise ContractViolation(f"the WRITE turn ended {outcome.status}",
+                                refusal=outcome.error.refusal
+                                if isinstance(outcome, ExecutorFailure) else ())
     return await capture_changed_candidate(workspace, request)
 
 

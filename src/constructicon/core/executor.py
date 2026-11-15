@@ -27,6 +27,7 @@ from pydantic import (
 from constructicon.core.envelope import ArtifactRef, GitRef, TextContext
 from constructicon.core.grants import EffectiveGrants, IsolationProfile, ModelSelection, Posture
 from constructicon.core.identity import Digest, digest
+from constructicon.core.refusal import MAX_REFUSAL_CODES, RefusalCode
 from constructicon.core.workspace import LeasedCapability, WorkspaceView
 
 if TYPE_CHECKING:  # ADR 0021's schema-3 records; the v1 closure below never reads them.
@@ -74,6 +75,22 @@ class ExecutorError(BaseModel):
     exit_code: int | None = None
     timed_out_after_s: float | None = None
     produced_output: bool | None = None
+    refusal: tuple[RefusalCode, ...] = ()
+
+    @field_validator("refusal")
+    @classmethod
+    def _bounded_refusal(cls, value: tuple[RefusalCode, ...]) -> tuple[RefusalCode, ...]:
+        # One outer node guard (the maintenance writer) prefixes these facts.
+        if len(value) >= MAX_REFUSAL_CODES:
+            raise ValueError("executor refusal reserves one of twelve codes for its node guard")
+        return value
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        value: dict[str, Any] = handler(self)
+        if not self.refusal:
+            value.pop("refusal", None)
+        return value
 
 
 class ExecutorObservation(BaseModel):

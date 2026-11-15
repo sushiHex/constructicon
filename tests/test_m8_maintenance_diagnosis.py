@@ -206,7 +206,15 @@ def test_historical_helper_pins_and_successor_source_are_distinct():
             bound = re.search(r"^INSTRUCTION_BINDING_DIAGNOSTIC_SHA256=([0-9a-f]{64})$",
                               binding, re.M)
             assert bound is not None and bound.group(1) != digests.group(1)
-            current = bound
+            assert bound.group(1) == (
+                "6e34e61291431447a2164c4a0043f65cff88baef89f2a10ba34244b5215e2697"
+            )
+            # Schema 2 projects the sealed refusal chain. Its successor pin
+            # names current bytes without rewriting any earlier era's digest.
+            coded = re.search(r"^REFUSAL_CODES_DIAGNOSTIC_SHA256=([0-9a-f]{64})$",
+                              successor, re.M)
+            assert coded is not None and coded.group(1) != bound.group(1)
+            current = coded
         assert hashlib.sha256(raw).hexdigest() == current.group(1)
 
 

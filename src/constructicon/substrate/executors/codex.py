@@ -89,8 +89,12 @@ from constructicon.core.native_operator import (
     NativeOperatorLaunchIdentityV3,
     NativeOperatorStoreIdentityV1,
 )
+from constructicon.core.permit import fault_sentences
+from constructicon.core.permit import faults as permit_faults
 from constructicon.core.process import ProcessIO
 from constructicon.core.qualification import QualificationAuthorization
+from constructicon.core.qualification_write import WorkerResultCategory
+from constructicon.core.refusal import RefusalCode
 from constructicon.core.run import OwnershipLost
 from constructicon.core.workspace import (
     AcquiredCapability,
@@ -235,6 +239,26 @@ UNQUALIFIED_PREREQUISITES: tuple[str, ...] = (
 """The default published unavailability. Assembly narrows this only once the
 physical prerequisites actually hold; nothing at runtime can clear it."""
 
+
+
+def _worker_category(result: ProcessResult) -> WorkerResultCategory:
+    category: WorkerResultCategory
+    # Precedence is explicit when a ProcessResult carries several flags.
+    if result.timed_out:
+        category = "timeout"
+    elif result.bound_exceeded is not None:
+        category = "output_bound"
+    elif result.payload_returncode is None or result.payload_returncode != result.returncode:
+        category = "incomplete"
+    elif result.returncode != 0:
+        category = "nonzero"
+    else:
+        try:
+            result.stdout.decode("utf-8")
+            category = "success"
+        except UnicodeError:
+            category = "invalid_utf8"
+    return category
 
 class _LocalClose(asyncio.CancelledError):
     """Owned physical work stopped by this handle's permanent close latch."""
@@ -474,6 +498,7 @@ class CodexConversation:
         self.withheld_methods: list[str] = []
         self._entered = False
         self.faults: tuple[str, ...] = ()
+        self.refusal: tuple[RefusalCode, ...] = ()
         self.gate_completed = False
         self.observation: TurnObservation = EMPTY_TURN
         self.preamble_records: list[bytes] = []
@@ -530,8 +555,10 @@ class CodexConversation:
 
     # -- transport ------------------------------------------------------------
 
-    def _refuse(self, reason: str) -> None:
+    def _refuse(self, reason: str, refusal: tuple[RefusalCode, ...] = ()) -> None:
         self.faults += (reason,)
+        if not self.refusal:
+            self.refusal = refusal
 
     def _next_identifier(self) -> int:
         self._identifier += 1
@@ -795,7 +822,8 @@ class CodexConversation:
             await io.write(raw)
         except (ContractViolation, OSError) as exc:
             # An interrupted write is never re-sent or refunded.
-            self._refuse(f"the native client stopped accepting input: {exc}")
+            self._refuse(f"the native client stopped accepting input: {exc}",
+                         exc.refusal if isinstance(exc, ContractViolation) else ())
             return False
         self._spent += len(raw)
         return True
@@ -809,11 +837,15 @@ class CodexConversation:
         method = payload["method"]
         if not self._drain_before(method):
             return None
-        if method == "turn/start" and self._before_turn is not None and (
-            refusal := self._before_turn()
-        ) is not None:
-            self._refuse(refusal)
-            return None
+        if method == "turn/start" and self._before_turn is not None:
+            try:
+                refusal = self._before_turn()
+            except ContractViolation as error:
+                self._refuse(bounded_detail(str(error)), error.refusal)
+                return None
+            if refusal is not None:
+                self._refuse(refusal)
+                return None
         # The turn starts when its request is written: a notice before then
         # may still stop it (#78), and none after it may.
         self._turn_requested = self._turn_requested or method == "turn/start"
@@ -901,18 +933,21 @@ class CodexConversation:
         """Hold at most one validated request until ``turn/start`` names its turn."""
 
         if self._deferred is not None:
-            self._refuse("a callback request arrived after the deferred turn completion")
+            self._refuse("a callback request arrived after the deferred turn completion",
+                         (RefusalCode.CALLBACK_ORDER,))
             return False
         if self._deferred_request is not None:
-            self._refuse("two callback requests arrived before the turn was named")
+            self._refuse("two callback requests arrived before the turn was named",
+                         (RefusalCode.CALLBACK_ORDER,))
             return False
         if self.thread_id is None:
-            self._refuse("a callback request arrived before the thread was named")
+            self._refuse("a callback request arrived before the thread was named",
+                         (RefusalCode.CALLBACK_ORDER,))
             return False
         try:
             parse_tool_call(record, thread_id=self.thread_id, turn_id=None)
         except ContractViolation as exc:
-            self._refuse(bounded_detail(str(exc)))
+            self._refuse(bounded_detail(str(exc)), exc.refusal)
             return False
         self._deferred_request = line
         return True
@@ -935,25 +970,29 @@ class CodexConversation:
             or self._deadline is None
             or self._catalog != CONTAINED_PYTHON_CATALOG
         ):
-            self._refuse("the callback authority is not open for this turn")
+            self._refuse("the callback authority is not open for this turn",
+                         (RefusalCode.CALLBACK_NOT_OPEN,))
             return False
         try:
             call = parse_tool_call(
                 record, thread_id=self.thread_id, turn_id=self.turn_id,
             )
         except ContractViolation as exc:
-            self._refuse(bounded_detail(str(exc)))
+            self._refuse(bounded_detail(str(exc)), exc.refusal)
             return False
         request_key = self._server_key(call.request_id)
         if request_key in self._server_requests:
-            self._refuse("the native client repeated a callback request id")
+            self._refuse("the native client repeated a callback request id",
+                         (RefusalCode.CALLBACK_REPEATED_ID,))
             return False
         self._server_requests.add(request_key)
         if call.call_id in self._tool_calls:
-            self._refuse("the native client repeated a callback call id")
+            self._refuse("the native client repeated a callback call id",
+                         (RefusalCode.CALLBACK_REPEATED_ID,))
             return False
         if len(self._tool_calls) >= MAX_TOOL_CALLS:
-            self._refuse("the native client exceeded the callback call ceiling")
+            self._refuse("the native client exceeded the callback call ceiling",
+                         (RefusalCode.CALLBACK_CALL_CEILING,))
             return False
         # Spend before the first effect await. A lost response can never make
         # this call eligible to run again.
@@ -970,7 +1009,8 @@ class CodexConversation:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self._refuse(f"the contained callback failed ({type(exc).__name__})")
+            self._refuse(f"the contained callback failed ({type(exc).__name__})",
+                         exc.refusal if isinstance(exc, ContractViolation) else ())
             return False
         if not await self._send(io, response):
             return False
@@ -1011,6 +1051,10 @@ class CodexConversation:
             errors: list[BaseException] = []
             for task, result in zip(tasks, results, strict=True):
                 if not isinstance(result, BaseException):
+                    continue
+                if (result is primary and type(primary) is ContractViolation
+                        and primary.refusal):
+                    # Joining the already-raised coded worker is not a second failure.
                     continue
                 if isinstance(result, asyncio.CancelledError) and task in cancelled_here:
                     continue
@@ -1083,7 +1127,7 @@ class CodexConversation:
                                         turn_id=self.turn_id,
                                     )
                                 except ContractViolation as exc:
-                                    self._refuse(bounded_detail(str(exc)))
+                                    self._refuse(bounded_detail(str(exc)), exc.refusal)
                                     return None
                                 request_key = self._server_key(deferred.request_id)
                                 if (
@@ -1091,7 +1135,8 @@ class CodexConversation:
                                     or request_key in held_requests
                                 ):
                                     self._refuse(
-                                        "the native client repeated a pending callback request id"
+                                        "the native client repeated a pending callback request id",
+                                        (RefusalCode.CALLBACK_REPEATED_ID,),
                                     )
                                     return None
                                 if (
@@ -1099,12 +1144,14 @@ class CodexConversation:
                                     or deferred.call_id in held_calls
                                 ):
                                     self._refuse(
-                                        "the native client repeated a pending callback call id"
+                                        "the native client repeated a pending callback call id",
+                                        (RefusalCode.CALLBACK_REPEATED_ID,),
                                     )
                                     return None
                                 if len(self._tool_calls) + len(held) >= MAX_TOOL_CALLS:
                                     self._refuse(
-                                        "the native client exceeded the callback call ceiling"
+                                        "the native client exceeded the callback call ceiling",
+                                        (RefusalCode.CALLBACK_CALL_CEILING,),
                                     )
                                     return None
                                 if held_bytes + len(line) > CALLBACK_PENDING_BYTES:
@@ -1119,8 +1166,9 @@ class CodexConversation:
                             elif pending.get("method") == "turn/completed":
                                 self._transcript.append(line)
                                 self._refuse(
-                                    "the turn completed while a callback was active"
-                                )
+                                    "the turn completed while a callback was active",
+                                        (RefusalCode.CALLBACK_UNANSWERED,),
+                                    )
                                 return None
                             elif not self._absorb(line, pending):
                                 return None
@@ -1131,7 +1179,8 @@ class CodexConversation:
                             continue
                         return worker.result(), held
             except TimeoutError:
-                self._refuse("the shared deadline expired while a callback was active")
+                self._refuse("the shared deadline expired while a callback was active",
+                             (RefusalCode.CALLBACK_DEADLINE,))
                 return None
         except BaseException as exc:
             primary = exc
@@ -1159,10 +1208,12 @@ class CodexConversation:
         try:
             record = parse_record(line)
         except RecordDamaged:
-            self._refuse("the deferred callback request became damaged")
+            self._refuse("the deferred callback request became damaged",
+                         (RefusalCode.CALLBACK_MALFORMED,))
             return False
         if not isinstance(record, dict):
-            self._refuse("the deferred callback request is not an object")
+            self._refuse("the deferred callback request is not an object",
+                         (RefusalCode.CALLBACK_MALFORMED,))
             return False
         return await self._dispatch_tool(io, record)
 
@@ -1409,7 +1460,8 @@ class CodexConversation:
         self._transcript.extend(self._held)
         self._held.clear()
         if self._deferred_request is not None and self._deferred is not None:
-            self._refuse("the turn completed before its deferred callback was answered")
+            self._refuse("the turn completed before its deferred callback was answered",
+                         (RefusalCode.CALLBACK_UNANSWERED,))
             return
         if not await self._claim_deferred_request(io):
             return
@@ -1420,7 +1472,8 @@ class CodexConversation:
             self._deferred_request is not None
             or self._callbacks_started != self._callbacks_completed
         ):
-            self._refuse("the callback completion check did not complete")
+            self._refuse("the callback completion check did not complete",
+                         (RefusalCode.CALLBACK_UNANSWERED,))
             return
 
         after = await self._account(io)
@@ -1770,13 +1823,13 @@ class CodexOperatorHandle:
         assert meter is not None
         self._require_open_sync()
         if refusal := self._expired():
-            raise ContractViolation(refusal)
+            raise ContractViolation(refusal, refusal=(RefusalCode.PERMIT_EXPIRED,))
         meter.intend()
         # A durable commit does not extend authorization or physical custody.
         self._require_open_sync()
         meter.check_dispatch()
         if refusal := self._expired():
-            raise ContractViolation(refusal)
+            raise ContractViolation(refusal, refusal=(RefusalCode.PERMIT_EXPIRED,))
 
     def _intend(self) -> str | None:
         """The record's intent, the last word before `turn/start` is written.
@@ -1786,7 +1839,13 @@ class CodexOperatorHandle:
         """
         if self.attempt is None:
             return "a read qualification requires its attempt record"
-        return self._expired() or self.attempt.intend() or self._expired()
+        if refusal := self._expired():
+            raise ContractViolation(refusal, refusal=(RefusalCode.PERMIT_EXPIRED,))
+        if refusal := self.attempt.intend():
+            return refusal
+        if refusal := self._expired():
+            raise ContractViolation(refusal, refusal=(RefusalCode.PERMIT_EXPIRED,))
+        return None
 
     def _expired(self) -> str | None:
         qualification = self.provider.qualification
@@ -2042,8 +2101,16 @@ class CodexOperatorHandle:
                 # Something escaped the callback; the evidence survives, but
                 # never as a success (below): the exchange itself failed.
                 result, exchange_failed = exc.result, True
+                # LinuxLauncher.exchange wraps only its own observed primary failure.
+                # Do not inspect groups, arbitrary causes or timed-out exchanges.
+                cause = exc.__cause__
+                if (not result.timed_out and type(cause) is ContractViolation
+                        and cause.refusal):
+                    conversation._refuse(bounded_detail(str(cause)), cause.refusal)
             except (OSError, ContractViolation) as exc:
-                return _unavailable(str(exc), grants)
+                return _unavailable(str(exc), grants,
+                                    refusal=exc.refusal
+                                    if isinstance(exc, ContractViolation) else ())
             except BaseExceptionGroup as group:
                 if group.subgroup(asyncio.CancelledError) is not None:
                     raise
@@ -2072,6 +2139,7 @@ class CodexOperatorHandle:
                 conversation.observation,
                 result,
                 requested_model=requested,
+                refusal=conversation.refusal,
             )
         # A relay denial refuses here, beside the conversation's own faults, so a
         # successful answer cannot mask one (M8-N5-state-review.md, Stage 0).
@@ -2079,6 +2147,7 @@ class CodexOperatorHandle:
         if faults:
             return unavailable_outcome(
                 faults, conversation.observation, result, requested_model=requested,
+                refusal=conversation.refusal,
             )
         outcome = decode_turn(conversation.observation, result, requested_model=requested)
         if exchange_failed and isinstance(outcome, ExecutorSuccess):
@@ -2127,13 +2196,15 @@ class CodexOperatorHandle:
         """Execute one program in the workspace-only zone and join its owner."""
 
         if self.worker_active is not None:
-            raise ContractViolation("contained callbacks must be sequential")
+            raise ContractViolation("contained callbacks must be sequential",
+                                        refusal=(RefusalCode.CALLBACK_ORDER,))
         validated = self._validated_workspace(workspace, grants)
         async with validated.use() as guard:
             self._validated_workspace(validated, grants)
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
-                raise ContractViolation("the shared operator deadline expired")
+                raise ContractViolation("the shared operator deadline expired",
+                                            refusal=(RefusalCode.CALLBACK_DEADLINE,))
             task = asyncio.create_task(self.provider.launcher.run(
                 WORKER_ARGUMENTS,
                 workspace=Path(validated.path), posture=Posture.WRITE,
@@ -2196,17 +2267,20 @@ class CodexOperatorHandle:
                     self.worker_active = None
             assert result is not None
             self._validated_workspace(validated, grants)
-            if (
-                result.returncode != 0
-                or result.payload_returncode != 0
-                or result.timed_out
-                or result.bound_exceeded is not None
-            ):
-                raise ContractViolation("the contained callback worker did not complete")
-            try:
-                return result.stdout.decode("utf-8")
-            except UnicodeError as exc:
-                raise ContractViolation("the contained callback returned invalid UTF-8") from exc
+            category = _worker_category(result)
+            if category != "success":
+                code = {
+                    "timeout": RefusalCode.CALLBACK_WORKER_TIMEOUT,
+                    "output_bound": RefusalCode.CALLBACK_WORKER_OUTPUT_BOUND,
+                    "incomplete": RefusalCode.CALLBACK_WORKER_INCOMPLETE,
+                    "nonzero": RefusalCode.CALLBACK_WORKER_NONZERO,
+                    "invalid_utf8": RefusalCode.CALLBACK_WORKER_INVALID_UTF8,
+                }[category]
+                message = ("the contained callback returned invalid UTF-8"
+                           if category == "invalid_utf8" else
+                           "the contained callback worker did not complete")
+                raise ContractViolation(message, refusal=(code,))
+            return result.stdout.decode("utf-8")
 
     def _observe_callbacks(self, started: int, completed: int) -> None:
         if self.attempt is None or self.attempt.callbacks is None:
@@ -2229,24 +2303,9 @@ class CodexOperatorHandle:
         if self.attempt is None or self.attempt.callbacks is None:
             return
         previous = self.attempt.callbacks
-        from constructicon.core.qualification_write import CallbackObservation, WorkerResultCategory
+        from constructicon.core.qualification_write import CallbackObservation
 
-        category: WorkerResultCategory
-        # Precedence is explicit when a ProcessResult carries several flags.
-        if result.timed_out:
-            category = "timeout"
-        elif result.bound_exceeded is not None:
-            category = "output_bound"
-        elif result.payload_returncode is None or result.payload_returncode != result.returncode:
-            category = "incomplete"
-        elif result.returncode != 0:
-            category = "nonzero"
-        else:
-            try:
-                result.stdout.decode("utf-8")
-                category = "success"
-            except UnicodeError:
-                category = "invalid_utf8"
+        category = _worker_category(result)
         if not previous.worker_results:
             raise ContractViolation("worker observations require an admitted callback")
         self.attempt.observe_callbacks(CallbackObservation(
@@ -2371,10 +2430,11 @@ def _hashable(value: Any) -> bool:
     return True
 
 
-def _unavailable(detail: str, grants: EffectiveGrants) -> ExecutorFailure:
+def _unavailable(detail: str, grants: EffectiveGrants, *,
+                 refusal: tuple[RefusalCode, ...] = ()) -> ExecutorFailure:
     return ExecutorFailure(
         requested_model=grants.model_selection.model,
-        error=ExecutorError(kind="unavailable", detail=bounded_detail(detail)),
+        error=ExecutorError(kind="unavailable", detail=bounded_detail(detail), refusal=refusal),
     )
 
 
@@ -2592,7 +2652,8 @@ class CodexOperatorProvider:
             raise ContractViolation("an available operator provider requires a physical binding")
         if context.check_control is None:
             raise ContractViolation("an operator acquisition requires invocation control")
-        if authorization is not None and (faults := authorization.acquisition_faults(
+        if authorization is not None and (faults := permit_faults(
+            authorization,
             run_id=context.run_lease.run_id,
             path=context.path,
             binding=context.binding.binding,
@@ -2604,7 +2665,10 @@ class CodexOperatorProvider:
             epoch=context.run_lease.epoch,
             now=datetime.now(UTC),
         )):
-            raise ContractViolation("; ".join(faults))
+            raise ContractViolation(
+                "; ".join(fault_sentences(authorization, faults)),
+                refusal=tuple(fault.refusal for fault in faults),
+            )
         logical = lease_id_for(context.run_lease.run_id, context.path, context.binding.binding)
         acquisition = acquisition_id_for(logical, context.run_lease.epoch)
         attempt = None

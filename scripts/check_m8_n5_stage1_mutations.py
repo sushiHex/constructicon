@@ -2,7 +2,7 @@
 
 from _mutations import run
 
-CORE = "constructicon.core.qualification:QualificationAuthorization."
+CORE = "constructicon.core.permit:"
 CODEX = "constructicon.substrate.executors.codex:"
 CORE_TEST = "tests/core/test_qualification.py::"
 CODEX_TEST = "tests/substrate/test_codex_qualification.py::"
@@ -32,21 +32,34 @@ MUTANTS = (
      "return authorization is not None and", "return True or",
      CODEX_TEST + "test_admission_is_answered_only_for_the_authorized_graph"),
     ("admission is asked about the exact graph",
-     CORE + "admits", "source_graph_hash == self.source_graph_hash", "True",
+     CORE + "admits", "source_graph_hash == permit.source_graph_hash", "True",
      CORE_TEST + "test_admission_is_timeless_and_names_graph_capability_and_revision"),
     ("acquisition is pinned to the run",
-     CORE + "acquisition_faults", "(run_id == self.run_id,", "(True,",
+     CORE + "faults", "(run_id == permit.run_id,", "(True,",
      CORE_TEST + "test_every_other_acquisition_is_refused_for_its_reason"),
     ("acquisition is pinned to the graph, recovery included",
-     CORE + "acquisition_faults",
-     "(source_graph_hash == self.source_graph_hash,", "(True,",
+     CORE + "faults",
+     "(source_graph_hash == permit.source_graph_hash,", "(True,",
      CORE_TEST + "test_every_other_acquisition_is_refused_for_its_reason"),
     ("acquisition is bounded by max_epoch",
-     CORE + "acquisition_faults", "(epoch <= self.max_epoch,", "(True,",
+     CORE + "faults", "(type(epoch) is int and 1 <= epoch <= permit.max_epoch,", "(True,",
      ENTRY_TEST + "test_a_successor_reconciles_and_acquires_only_within_the_budget"),
     ("acquisition is bounded by expiry",
-     CORE + "acquisition_faults", "(now < self.not_after,", "(True,",
+     CORE + "faults", "(now < permit.not_after,", "(True,",
      ENTRY_TEST + "test_an_expired_authorization_admits_but_never_acquires"),
+    ("acquisition epochs are integers rather than booleans or fractions",
+     CORE + "faults", "type(epoch) is int and ", "",
+     "tests/core/test_permit.py::"
+     "test_a_multi_epoch_permit_refuses_noninteger_or_out_of_range_epochs"),
+    ("acquisition epochs start at one",
+     CORE + "faults", "1 <= epoch <= permit.max_epoch", "epoch <= permit.max_epoch",
+     "tests/core/test_permit.py::"
+     "test_a_multi_epoch_permit_refuses_noninteger_or_out_of_range_epochs"),
+    ("qualification JSON refuses repeated keys before model validation",
+     "constructicon.substrate.executors.qualification:read_authorization",
+     'record = parse_json_value(_read_authorization_bytes(path).decode("utf-8"))',
+     "return QualificationAuthorization.model_validate_json(_read_authorization_bytes(path))",
+     "tests/core/test_run_permit_goldens.py::test_the_two_readers_on_a_repeated_key"),
     ("the provider enforces the authorization at acquire",
      CODEX + "CodexOperatorProvider.acquire",
      "if authorization is not None and (faults :=", "if False and (faults :=",

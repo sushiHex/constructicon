@@ -30,9 +30,8 @@ from pydantic import (
 )
 
 from constructicon.core.address import ExecutionPath, RunId, ScopePath
-from constructicon.core.control import command_id_for, run_id_for_command
-from constructicon.core.grants import EffectiveGrants, Posture
-from constructicon.core.identity import Digest, canonical_json
+from constructicon.core.grants import EffectiveGrants
+from constructicon.core.identity import Digest
 from constructicon.core.qualification_write import WriteQualificationPins
 
 QUALIFICATION_OPERATION = "runs_start"
@@ -106,18 +105,18 @@ class QualificationAuthorization(BaseModel):
             grants = self.grants
             if self.write is None:
                 raise ValueError("a WRITE authorization requires its assembly pins")
-            if grants is None or (
-                grants.posture is not Posture.WRITE
-                or grants.model_selection.kind != "explicit"
-                or not (grants.model_selection.model or "").strip()
-                or not (grants.effort or "").strip()
-                or grants.allowed_tools != ("contained_python",)
-                or grants.env_allowlist != ()
-                or grants.network != "allow"
-                or grants.timeout_s != 300
-            ):
+            from constructicon.core.permit import fixed_write_grants
+
+            if grants is None or not fixed_write_grants(grants):
                 raise ValueError("a WRITE authorization requires the fixed WRITE grant shape")
         return self
+
+    @property
+    def purpose(self) -> Literal[
+        "qualification-no-dispatch", "qualification-read", "qualification-write",
+    ]:
+        """The closed purpose, retaining ``stage`` as the wire discriminator."""
+        return self.stage
 
     @property
     def dispatches(self) -> bool:
@@ -125,8 +124,9 @@ class QualificationAuthorization(BaseModel):
 
     @property
     def run_id(self) -> RunId:
-        command = command_id_for(self.actor_id, QUALIFICATION_OPERATION, self.idempotency_key)
-        return run_id_for_command(command)
+        from constructicon.core.permit import run_id
+
+        return run_id(self)
 
     def admits(self, *, source_graph_hash: Digest, capability_id: str, revision: str) -> bool:
         """Admission's question: is this graph authorized for this executor?
@@ -134,10 +134,11 @@ class QualificationAuthorization(BaseModel):
         Deliberately timeless: admission must not vary with the clock. Expiry,
         the run and the epoch are acquisition's to refuse.
         """
-        return (
-            source_graph_hash == self.source_graph_hash
-            and capability_id == self.capability_id
-            and revision == self.revision
+        from constructicon.core.permit import admits
+
+        return admits(
+            self, source_graph_hash=source_graph_hash,
+            capability_id=capability_id, revision=revision,
         )
 
     def acquisition_faults(
@@ -155,23 +156,14 @@ class QualificationAuthorization(BaseModel):
         now: datetime,
     ) -> tuple[str, ...]:
         """Every reason this acquisition is not the authorized one; empty admits."""
-        pinned = self.grants is None or canonical_json(grants) == canonical_json(self.grants)
-        checks = (
-            (run_id == self.run_id, "a different run"),
-            (path == ExecutionPath(scope=self.scope), "a different invocation"),
-            (binding == self.binding, "a different binding"),
-            (source_graph_hash == self.source_graph_hash, "a different source graph"),
-            (capability_id == self.capability_id, "a different capability"),
-            (revision == self.revision, "a different adapter revision"),
-            (
-                operator_binding_digest == self.operator_binding_digest,
-                "a different operator binding",
-            ),
-            (pinned, "other grants"),
-            (epoch <= self.max_epoch, "an acquisition beyond the authorized epochs"),
-            (now < self.not_after, "an expired authorization"),
-        )
-        return tuple(f"qualification refuses {fault}" for held, fault in checks if not held)
+        from constructicon.core.permit import fault_sentences, faults
+
+        return fault_sentences(self, faults(
+            self, run_id=run_id, path=path, binding=binding,
+            source_graph_hash=source_graph_hash, capability_id=capability_id, revision=revision,
+            operator_binding_digest=operator_binding_digest, grants=grants,
+            epoch=epoch, now=now,
+        ))
 
 
 @runtime_checkable

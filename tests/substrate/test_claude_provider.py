@@ -611,6 +611,23 @@ def test_protocol_revision_covers_the_closed_observation_law():
     assert expected == claude_provider.PROTOCOL_REVISION
 
 
+def test_adapter_revision_covers_the_extracted_permit_law(monkeypatch):
+    from constructicon.core import permit
+    from constructicon.substrate.executors import claude_provider
+
+    original = claude_provider._adapter_revision()
+    source = claude_provider.inspect.getsource
+
+    def changed(module):
+        raw = source(module)
+        return raw + "\n# changed permit law\n" if module is permit else raw
+
+    monkeypatch.setattr(claude_provider.inspect, "getsource", changed)
+    assert claude_provider._adapter_revision() != original
+    # The adapter's published value is the source observed when it was loaded.
+    assert original == claude_provider.ADAPTER_REVISION
+
+
 def test_write_callback_progress_retains_only_completed_response(tmp_path):
     from constructicon.substrate.executors.attempt_record import AttemptRecord
 
@@ -783,3 +800,50 @@ async def test_write_provider_run_retains_actual_worker_and_eight_completed_resp
     assert saved["callbacks"]["admitted_completed"] == 8
     assert saved["callbacks"]["worker_results"] == ["success"] * 8
     assert commands == [ClaudeNativeRecipe.STREAM_JSON_WRITE.command(launcher.claude)]
+
+
+@pytest.mark.parametrize("fault", ["worker-nonzero", "relay-denial", "none"])
+async def test_assembled_provider_preserves_worker_refusal_through_callback_normalization(
+    assembled, monkeypatch, fault,
+):
+    from constructicon.core.refusal import RefusalCode
+
+    a = assembled
+    # Real Git custody checks can exceed the fixture's usual 30s on Windows.
+    # Assemble the same closed recipe under an explicit larger test grant.
+    a.grants = a.grants.model_copy(update={"timeout_s": 120})
+    a.executor = native.ClaudeOperatorProvider(**{
+        **a.kwargs,
+        "qualification": a.kwargs["qualification"].model_copy(update={"grants": a.grants}),
+    })
+    a.context = replace(a.context, binding=a.context.binding.model_copy(
+        update={"effective_grants": a.grants}))
+    original = LinuxLauncher.run
+    async def run(self, command, **kwargs):
+        result = await original(self, command, **kwargs)
+        if fault == "worker-nonzero":
+            return replace(result, returncode=1, payload_returncode=1)
+        return result
+    monkeypatch.setattr(LinuxLauncher, "run", run)
+    if fault == "relay-denial":
+        a.state.denied["denied:fixture"] = 1
+    acquired = await acquire_ready(a)
+    try:
+        outcome = await execute(a, acquired)
+        saved = record(a)
+    finally:
+        await a.executor.close(acquired, "discard")
+    assert len(a.state.workers) == len(a.state.exchanges) == 1
+    assert a.state.native_joined and a.state.closed
+    assert a.state.guards == a.state.locks == 0
+    if fault == "none":
+        assert isinstance(outcome, ExecutorSuccess)
+        assert outcome.raw_reply == "task output"
+        assert saved["facts"]["callback_completed"] == 1
+    else:
+        assert isinstance(outcome, ExecutorFailure)
+        expected = ((RefusalCode.CALLBACK_WORKER_NONZERO,) if fault == "worker-nonzero" else ())
+        assert outcome.error.refusal == expected
+        assert saved["facts"]["callback_started"] == 1
+        assert saved["facts"]["callback_completed"] == (0 if fault == "worker-nonzero" else 1)
+        assert outcome.raw_reply is None and outcome.output is None

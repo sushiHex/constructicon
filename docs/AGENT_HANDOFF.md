@@ -16,6 +16,71 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Containment proof lanes keep measured foundation headroom
+
+The common-runtime containment group now runs in the combined lane, once and
+as the same non-sudo service user. Controller-death recovery stays in a named
+foundation step with the required operator store: its imported fixture and
+subprocess helper both consume that environment. The initial claim that all
+of the group was store-independent was wrong; review caught a silent skip.
+Recent foundation passes took 27m58s and 26m33s; the original common group took
+3m44s and 3m41s, including recovery. These measurements justify rebalancing,
+but subtraction is an estimate, not a measured runtime for the new workflow.
+All four lanes, proof membership and existing deadlines remain enforced.
+
+Direct physical pytest commands use unbuffered verbose output so a cancelled
+job retains its active test name. The earlier cancelled log did contain
+completed test progress; the missing fact was the next active test, not all
+pytest output. Local routing/source checks and an abrupt subprocess-stop
+experiment support this correction; Linux workflow execution remains CI evidence.
+
+## The live-run permits share a law and retain their refusal evidence
+
+The two permit models retain their wire fields, JSON schemas, run identities,
+printed bytes and refusal sentences. Their shared `core/permit.py` law is
+explicitly covered by the maintenance application and Claude adapter source
+identities. Qualification now refuses non-integer or nonpositive acquisition
+epochs and repeated JSON keys; no-dispatch permits still carry no pinned grant.
+
+Permit and callback guards record closed codes at their producer. Executor
+errors omit the optional code field when unrecorded; a writer adds its own
+guard before the executor's code chain. A separately failing cleanup or an
+exception group is not mined for a primary code. Uncoded node-event payloads
+remain unchanged. The assembled Claude provider preserves an actual worker
+failure's codes when callback normalization rebuilds its error; an independent
+relay denial does not inherit or invent a worker code. Hostile and replay tests
+assert the complete writer-plus-worker refusal chain. The protocol, adapter,
+application and diagnostic source changes require fresh qualification before
+live use; this delivery is not installation or qualification evidence.
+
+Maintenance diagnostics and reports now emit schema 2, prefer sealed failure
+codes, and use exact historical sentences only for uncoded events. Their
+16 KiB whole-packet bound accommodates the tested maximum failure/code and
+callback-content observations without dropping a section. Historical frozen
+operator readers do not thereby accept the new schema; a successor package
+must pin the new source and output contract.
+
+## Two verified snapshot exports share disk extraction
+
+[#432](https://github.com/sushiHex/constructicon/issues/432) gives the contained
+gate and legacy `read_snapshot` one `GitAuthority.extract_exact` operation:
+fresh destination, data-filtered disk tar extraction, tar removal before exact
+path/type/blob/mode verification, and cleanup on refusal. Legacy Git now writes
+an absolute `--output` file, including with relative workspace roots, instead of
+returning tar bytes on stdout. Its synchronous runner and Windows mode
+normalization remain; the gate keeps guarded `GitProcess` and joined extraction.
+
+The third READ workspace exporter in `substrate/git/contained.py` is unchanged:
+its 16 MiB tar-output bound and absent exact comparison need a separate behavioral
+slice. Legacy snapshots do not acquire the Linux pump's 128 MiB file ceiling;
+equality hashing still reads each blob whole. Existing source inventories cover
+the shared implementation: gate/check-set and WRITE workspace revisions change;
+maintenance application and executor adapter sources stay unchanged. Portable
+real-Git tests substitute only Windows guard inheritance, not extraction or
+verification. This Windows account cannot create symlinks, so native symlink
+acceptance and Linux containment remain unproven locally. No host qualification
+or vendor run is implied.
+
 ## The gate snapshot's archive is written to disk, not through the Git output pump
 
 This repository is its own maintenance base, and a contained gate snapshots the whole prepared merge commit. Until #423 it read `git archive --format=tar` into memory under `ProcessLimits.artifact_bytes`, 16 MiB, and the tree reached it (16,752,640 bytes at `cf7042f`). Owner decision on #423: no new budget and no new limit.

@@ -49,9 +49,10 @@ MUTANTS = (
         TEST + "test_integrity_failure_is_checked_after_launch_and_before_mint",
     ),
     (
-        "exported tree equality is ignored", GATE + "_snapshot",
+        "exported tree equality is ignored",
+        "constructicon.substrate.git.authority:GitAuthority._verify_export",
         "if observed != expected:", "if False:",
-        TEST + "test_lossy_archive_cannot_claim_the_original_tree[export-ignore]",
+        TEST + "test_snapshot_uses_the_shared_exact_extraction_with_real_git[export-ignore]",
     ),
     (
         "the snapshot tree is read back through the pump into memory", GATE + "_snapshot",
@@ -157,6 +158,13 @@ MUTANTS = (
         "if observed != expected:",
         "if False:",
         "tests/substrate/test_git_authority.py::test_snapshot_refuses_exports_that_differ_from_the_git_tree[export-ignore]",
+    ),
+    (
+        "legacy snapshot tar returns through subprocess stdout",
+        "constructicon.substrate.git.authority:GitAuthority.read_snapshot",
+        'f"--output={archive_path}", commit]', "commit]",
+        "tests/substrate/test_git_authority.py::"
+        "test_snapshot_archive_is_disk_backed_even_with_a_relative_workspace_root",
     ),
     (
         "check result derives status after Boolean coercion",

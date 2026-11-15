@@ -552,13 +552,16 @@ WORKER_MUTANTS = (
      "await self._open(owned, deadline)\n        return text", "pass\n        return text",
      WORKER_TEST + "test_guard_release_closure_also_prevents_publication"),
     ("READ worker result requires actual contract evidence", WORKER_CALL,
-     "type(result) is not ProcessResult", "False",
+     "if (type(result) is not ProcessResult", "if (False",
      WORKER_TEST + "test_process_evidence_cannot_be_a_matching_duck"),
     ("READ worker supervisor success is not boolean", WORKER_CALL,
-     "or type(result.returncode) is not int", "or False",
+     "or type(result.returncode) is not int or result.returncode != 0",
+     "or result.returncode != 0",
      WORKER_TEST + "test_process_completion_bounds_and_utf8_are_affirmative[supervisor-bool]"),
     ("READ worker payload success is not boolean", WORKER_CALL,
-     "or type(result.payload_returncode) is not int", "or False",
+     "or type(result.payload_returncode) is not int\n"
+     "                    or result.payload_returncode != 0",
+     "or result.payload_returncode != 0",
      WORKER_TEST + "test_process_completion_bounds_and_utf8_are_affirmative[payload-bool]"),
     ("READ worker cannot publish output beyond bound", WORKER_CALL,
      "or len(result.stdout) > self._limits.stdout_bytes", "or False",
@@ -2566,7 +2569,7 @@ MUTANTS += (
      '        if False:',
      WRITE_PROTOCOL_TEST + "test_completed_command_buffered_before_next_callback_refuses"),
     ("WRITE callbacks cannot exceed the closed recipe ceiling",
-     READ + "ClaudeReadTransaction._mcp", "self._calls >= self._recipe.call_limit", "False",
+     READ + "ClaudeReadTransaction._mcp", "or self._calls >= self._recipe.call_limit", "or False",
      WRITE_PROTOCOL_TEST + "test_write_callback_ceiling_refuses_ninth_effect"),
     ("WRITE must actually complete a callback before success",
      READ + "run_read_transaction", "recipe is ClaudeNativeRecipe.STREAM_JSON", "True",
@@ -2599,6 +2602,15 @@ MUTANTS += (
     ("WRITE metadata closes binding ownership before publishing", WRITE_PINS,
      "provider.binding_store.close_candidate(opened)", "pass",
      WRITE_PINS_TEST + "test_main_pins_reports_actual_metadata_without_enrollment_or_dispatch"),
+)
+
+MUTANTS += (
+    ("Claude provider normalization preserves the actual callback worker guard",
+     "constructicon.substrate.executors.claude_provider:ClaudeOperatorHandle._run",
+     "refusal=outcome.error.refusal", "refusal=()",
+     "tests/substrate/test_claude_provider.py::"
+     "test_assembled_provider_preserves_worker_refusal_through_callback_normalization"
+     "[worker-nonzero]"),
 )
 
 if __name__ == "__main__":

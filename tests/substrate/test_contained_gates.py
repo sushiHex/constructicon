@@ -663,7 +663,7 @@ async def test_lossy_archive_cannot_claim_the_original_tree(tmp_path, attribute)
     sha = candidate(runner, {
         ".gitattributes": f"extra {attribute}\n", "extra": "$Format:%H$\n",
     })
-    with pytest.raises(ContractViolation, match="exact prepared Git tree"):
+    with pytest.raises(ContractViolation, match="differs from the exact Git tree"):
         await acquired.resource.verify(sha)
     assert not runner._journal.drafts
     assert not acquired.resource.paths.payload.exists()
@@ -1206,3 +1206,48 @@ async def test_native_full_tree_entry_mediates_real_worker_capture_and_consumer(
                if kwargs.get("input_kind") == "task"]
     assert len(workers) == 1 and workers[0][1]["posture"] is Posture.WRITE
     assert b"task callback completed" in workers[0][1]["stdin"]
+
+
+@pytest.mark.parametrize("attribute", [None, "export-ignore", "export-subst"])
+async def test_snapshot_uses_the_shared_exact_extraction_with_real_git(
+    tmp_path, monkeypatch, attribute,
+):
+    from constructicon.substrate.git.process import GitProcess
+
+    runner = unqualified(tmp_path)
+    sha = candidate(runner, {
+        ".gitattributes": f"extra {attribute}\n" if attribute else "",
+        "extra": "$Format:%H$\n",
+    })
+    handle = SimpleNamespace(paths=SimpleNamespace(payload=tmp_path / "snapshot-payload"))
+    read_fd, write_fd = os.pipe()
+    original = GitProcess.run
+    archives = []
+
+    async def run(self, *args, **kwargs):
+        assert kwargs["guard"] == read_fd
+        os.fstat(read_fd)
+        # Only descriptor inheritance is platform-bound. The actual Git pump,
+        # disk archive, shared extraction and exact-tree refusal still run.
+        if sys.platform != "linux":
+            kwargs["guard"] = None
+        output = await original(self, *args, **kwargs)
+        if args[0] == "archive":
+            assert output == b"", "tar bytes crossed the bounded output pump"
+            archives.append(args)
+        return output
+
+    monkeypatch.setattr(GitProcess, "run", run)
+    try:
+        if attribute:
+            with pytest.raises(ContractViolation, match="differs from the exact Git tree"):
+                await runner._snapshot(handle, sha, read_fd)
+            assert not (handle.paths.payload / "snapshot").exists()
+        else:
+            snapshot = await runner._snapshot(handle, sha, read_fd)
+            assert (snapshot / "extra").read_text() == "$Format:%H$\n"
+        assert len(archives) == 1
+        assert not (handle.paths.payload / "snapshot.tar").exists()
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)

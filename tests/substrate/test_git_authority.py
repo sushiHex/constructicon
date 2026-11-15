@@ -3,8 +3,11 @@ install transaction, and marker-based reconciliation (M3 §2)."""
 
 from __future__ import annotations
 
+import hashlib
+import io
 import os
 import subprocess
+import tarfile
 import threading
 from pathlib import Path
 
@@ -376,3 +379,131 @@ def test_snapshot_accepts_ordinary_candidate_with_attributes_and_modes(
     finally:
         authority.discard_snapshot(snapshot)
     assert _snapshot_dirs(authority, tmp_path) == []
+
+
+def test_snapshot_archive_is_disk_backed_even_with_a_relative_workspace_root(
+    authority, tmp_path, monkeypatch,
+):
+    monkeypatch.chdir(tmp_path)
+    relative = GitAuthority(authority.repository_id, Path("relative-workspaces"))
+    original = subprocess.run
+    archives = []
+
+    def observe(command, **kwargs):
+        result = original(command, **kwargs)
+        if "archive" in command:
+            outputs = [arg.removeprefix("--output=") for arg in command
+                       if arg.startswith("--output=")]
+            assert len(outputs) == 1, "archive has no affirmative disk-output destination"
+            archive = Path(outputs[0])
+            assert archive.is_absolute() and archive.is_file()
+            assert archive.stat().st_size > 0
+            assert result.stdout == b"", "tar bytes crossed the subprocess output boundary"
+            archives.append(archive)
+        return result
+
+    monkeypatch.setattr(subprocess, "run", observe)
+    snapshot = relative.read_snapshot(relative.resolve_ref("refs/heads/main"))
+    try:
+        expected = relative._run("show", f"{snapshot.commit}:calc.py").stdout
+        assert Path(snapshot.path, "calc.py").read_text() == expected
+        assert len(archives) == 1 and not any(path.exists() for path in archives)
+        assert not Path(snapshot.path).is_absolute()
+    finally:
+        relative.discard_snapshot(snapshot)
+
+
+@pytest.mark.parametrize("failure", ["archive", "extract", "readonly"])
+def test_snapshot_cleans_its_disk_archive_and_tree_on_failure(
+    authority, tmp_path, monkeypatch, failure,
+):
+    from constructicon.substrate.git import authority as module
+
+    original = subprocess.run
+    if failure == "archive":
+        def fail(command, **kwargs):
+            if "archive" in command:
+                output, = (arg.removeprefix("--output=") for arg in command
+                           if arg.startswith("--output="))
+                Path(output).write_bytes(b"partial archive")
+                raise subprocess.CalledProcessError(1, command)
+            return original(command, **kwargs)
+        monkeypatch.setattr(subprocess, "run", fail)
+    elif failure == "extract":
+        def fail_extract(self, path, **kwargs):
+            Path(path, "partial").write_bytes(b"partial extraction")
+            raise tarfile.ReadError("partial extraction")
+        monkeypatch.setattr(tarfile.TarFile, "extractall", fail_extract)
+    else:
+        set_bits = module._set_write_bits
+        def fail_readonly(root, *, writable):
+            if not writable:
+                raise OSError("readonly setup failed")
+            set_bits(root, writable=writable)
+        monkeypatch.setattr(module, "_set_write_bits", fail_readonly)
+    with pytest.raises((subprocess.CalledProcessError, tarfile.ReadError, OSError)):
+        authority.read_snapshot(authority.resolve_ref("refs/heads/main"))
+    assert _snapshot_dirs(authority, tmp_path) == []
+
+
+def test_exact_extraction_never_removes_a_preexisting_destination(authority, tmp_path):
+    dest, archive = tmp_path / "existing", tmp_path / "owned.tar"
+    dest.mkdir()
+    (dest / "sentinel").write_bytes(b"not this extraction's tree")
+    archive.write_bytes(b"unused")
+    with pytest.raises(FileExistsError):
+        authority.extract_exact(b"", archive, dest)
+    assert (dest / "sentinel").read_bytes() == b"not this extraction's tree"
+    assert not archive.exists()
+
+
+def test_exact_extraction_refuses_escaping_tar_members_and_cleans_up(authority, tmp_path):
+    archive, dest = tmp_path / "unsafe.tar", tmp_path / "snapshot"
+    with tarfile.open(archive, "w") as output:
+        output.addfile(tarfile.TarInfo("../escaped"))
+    with pytest.raises(tarfile.FilterError):
+        authority.extract_exact(b"", archive, dest)
+    assert not archive.exists() and not dest.exists() and not (tmp_path / "escaped").exists()
+
+
+@pytest.mark.parametrize("entry", ["executable", "symlink", "blob-mismatch", "gitlink"])
+def test_exact_extraction_preserves_blob_type_and_mode_laws(authority, tmp_path, entry):
+    archive, dest = tmp_path / "tree.tar", tmp_path / "snapshot"
+    if entry == "symlink" and os.name == "nt":
+        probe = tmp_path / "symlink-probe"
+        try:
+            probe.symlink_to("target")
+        except OSError as exc:
+            if exc.winerror == 1314:
+                pytest.skip("Windows account cannot create symbolic links")
+            raise
+        probe.unlink()
+    raw = b"target" if entry == "symlink" else b"blob contents\n"
+    oid = hashlib.new(authority.environment.object_format,
+                      f"blob {len(raw)}\0".encode() + raw).hexdigest()
+    mode = {"executable": "100755", "symlink": "120000", "gitlink": "160000"}.get(
+        entry, "100644",
+    )
+    inventory = f"{mode} {'commit' if entry == 'gitlink' else 'blob'} {oid}\tfile\0".encode()
+    with tarfile.open(archive, "w") as output:
+        member = tarfile.TarInfo("file")
+        member.mode = 0o755 if entry == "executable" else 0o644
+        if entry == "symlink":
+            member.type, member.linkname = tarfile.SYMTYPE, "target"
+        else:
+            payload = b"wrong contents" if entry == "blob-mismatch" else raw
+            member.size = len(payload)
+        output.addfile(member, None if entry == "symlink" else io.BytesIO(payload))
+    if entry in {"blob-mismatch", "gitlink"}:
+        with pytest.raises(ContractViolation, match=r"exact Git tree|unsupported Git entry"):
+            authority.extract_exact(inventory, archive, dest)
+        assert not dest.exists()
+    else:
+        authority.extract_exact(inventory, archive, dest)
+        if entry == "symlink":
+            assert (dest / "file").is_symlink() and os.readlink(dest / "file") == "target"
+        else:
+            assert (dest / "file").read_bytes() == raw
+            if os.name != "nt":
+                assert (dest / "file").stat().st_mode & 0o111
+    assert not archive.exists()

@@ -119,9 +119,11 @@ def test_program_and_output_bounds_permit_the_exact_byte_limit_and_refuse_one_mo
     call = parse(record)
     assert call.program == program
     record["params"]["arguments"]["program"] += "x"
-    with pytest.raises(ContractViolation):
+    with pytest.raises(ContractViolation) as refused:
         parse(record)
+    assert [code.value for code in refused.value.refusal] == ["callback.program_bound"]
     output = "é" * (TOOL_OUTPUT_BYTES // 2)
     assert tool_call_response(call, output)["result"]["contentItems"][0]["text"] == output
-    with pytest.raises(ContractViolation):
+    with pytest.raises(ContractViolation) as refused:
         tool_call_response(call, output + "x")
+    assert [code.value for code in refused.value.refusal] == ["callback.tool_output_bound"]

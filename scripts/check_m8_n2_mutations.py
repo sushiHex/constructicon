@@ -197,11 +197,13 @@ N5_PROTOCOL = (
     ("N5-26 held evidence joins the transcript before any callback", CONVERSE,
      "    self._transcript.extend(self._held)\n    self._held.clear()\n"
      "    if self._deferred_request is not None and self._deferred is not None:\n"
-     '        self._refuse("the turn completed before its deferred callback was answered")\n'
+     '        self._refuse("the turn completed before its deferred callback was answered",\n'
+     '                     (RefusalCode.CALLBACK_UNANSWERED,))\n'
      "        return\n"
      "    if not await self._claim_deferred_request(io):\n        return\n",
      "    if self._deferred_request is not None and self._deferred is not None:\n"
-     '        self._refuse("the turn completed before its deferred callback was answered")\n'
+     '        self._refuse("the turn completed before its deferred callback was answered",\n'
+     '                     (RefusalCode.CALLBACK_UNANSWERED,))\n'
      "        return\n"
      "    if not await self._claim_deferred_request(io):\n        return\n"
      "    self._transcript.extend(self._held)\n    self._held.clear()\n",

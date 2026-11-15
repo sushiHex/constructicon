@@ -52,7 +52,8 @@ from constructicon.substrate.journal.maintenance_diagnostic import (
 from constructicon.substrate.journal.maintenance_evidence import capture_evidence
 from constructicon.substrate.journal.sqlite import SqliteJournal
 
-MAX_PACKET_BYTES = 8192
+MAX_PACKET_BYTES = 16384
+REPORT_SCHEMA_VERSION = 2
 MAX_LEASES = 16
 ERROR = "maintenance report refused or incomplete"
 _DIAGNOSTIC_STAGES = frozenset({"snapshot", "journal", "attempt", "command", "result", "task",
@@ -91,7 +92,8 @@ def _stage(name: str) -> Iterator[None]:
 
 
 def _refused(stage: str, facts: dict[str, object] | None = None) -> dict[str, object]:
-    return {**(facts or {}), "schema_version": 1, "complete": False, "stage": stage,
+    return {**(facts or {}), "schema_version": REPORT_SCHEMA_VERSION, "complete": False,
+            "stage": stage,
             "error": ERROR}
 
 
@@ -283,9 +285,10 @@ def _outcome(status: str, result: dict[str, object], nodes: dict[str, Any],
     for name in _NODES:
         failures = nodes[name]["failures"]
         if failures:
-            # The diagnostic maps only producer-emitted NodeFailed text to a cause.
+            # The diagnostic prefers sealed guard codes; uncoded history uses exact text.
             refusal = {"node": name, "cause": failures[0]["cause"],
-                       "source": "diagnostic-producer-mapped-node-failure"}
+                       "source": "diagnostic-producer-mapped-node-failure",
+                       "refusal": failures[0]["refusal"]}
             break
     stored = result["observation"] == "historical-acceptance-observed"
     confirmed = (attestation.get("observation") == "recorded" and attestation.get("ok") is True
@@ -374,7 +377,7 @@ def _report(root: Path, out: Path, command_report: Path, run_id: str,
         status = _status(facts.get("status"))
         outcome, refusal = _outcome(status, result, facts["nodes"], attestation)
         packet: dict[str, object] = {
-            "schema_version": 1, "complete": True,
+            "schema_version": REPORT_SCHEMA_VERSION, "complete": True,
             "meaning": "selected-historical-run-facts-from-a-private-copy",
             "run_id": str(run), "purpose": purpose, "status": status, "outcome": outcome,
             "refusal": refusal,

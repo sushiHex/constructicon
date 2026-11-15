@@ -32,7 +32,6 @@ yields the same sha. Kernel budget: stdlib subprocess only.
 from __future__ import annotations
 
 import hashlib
-import io
 import os
 import shutil
 import stat
@@ -391,39 +390,72 @@ class GitAuthority:
         """
         self._snapshot_seq += 1
         dest = self._root / "snapshots" / f"{commit[:16]}-{self._snapshot_seq}"
-        dest.mkdir(parents=True)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        archive_path = (dest.parent / f"{dest.name}.tar").absolute()
+        archive_claimed = False
+        extracted = False
         env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
         env.update(_PINNED_ENV)
         try:
+            archive_path.touch(exist_ok=False)
+            archive_claimed = True
             inventory = subprocess.run(
                 [self.git_executable, "ls-tree", "-r", "-z", "--full-tree", commit],
                 cwd=self._repo,
                 env=env,
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 check=True,
                 timeout=60,
             ).stdout
-            archive = subprocess.run(
-                [self.git_executable, "archive", "--format=tar", commit],
+            subprocess.run(
+                [self.git_executable, "archive", "--format=tar",
+                 f"--output={archive_path}", commit],
                 cwd=self._repo,
                 env=env,
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 check=True,
                 timeout=60,
             )
-            with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
-                tar.extractall(dest, filter="data")
+            self.extract_exact(inventory, archive_path, dest)
+            extracted = True
+            _set_write_bits(dest, writable=False)
+        except BaseException:
+            if extracted:
+                _remove_tree(dest, best_effort=True)
+            raise
+        finally:
+            if archive_claimed:
+                archive_path.unlink(missing_ok=True)
+        return ReadSnapshot(repository=self.repository_id, commit=commit, _path=str(dest))
+
+    def extract_exact(self, inventory: bytes, archive_path: Path, dest: Path) -> None:
+        """Claim and verify one disk export; refuse lossy trees before use.
+
+        Both snapshot runners supply their own archive and inventory. This
+        operation owns only the fresh destination and supplied temporary tar,
+        not Git execution, acquisition guards or read-only mounting.
+        """
+        claimed = False
+        try:
+            dest.mkdir(parents=True, exist_ok=False)
+            claimed = True
+            with tarfile.open(archive_path) as archive:
+                archive.extractall(dest, filter="data")
+            archive_path.unlink()  # Checks see the snapshot directory alone.
             self._verify_export(inventory, dest)
         except BaseException:
-            _remove_tree(dest, best_effort=True)
+            if claimed:
+                _remove_tree(dest, best_effort=True)
             raise
-        _set_write_bits(dest, writable=False)
-        return ReadSnapshot(repository=self.repository_id, commit=commit, _path=str(dest))
+        finally:
+            archive_path.unlink(missing_ok=True)
 
     def _verify_export(self, inventory: bytes, root: Path) -> None:
         """Compare exported files with the exact Git tree (path, type, blob
         id, executable bit). Gitlinks and other entries fail closed, matching
-        the contained gate's snapshot check."""
+        the shared contained gate snapshot check."""
         expected: dict[str, tuple[str, str]] = {}
         for entry in inventory.split(b"\0"):
             if not entry:

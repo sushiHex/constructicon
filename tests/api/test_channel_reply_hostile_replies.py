@@ -197,7 +197,9 @@ WHERE = (
 ACCEPTED = "accepted"
 # Where a refused case ends: the refusal codes its guard sealed in the event.
 UNCHANGED = [RefusalCode.CAPTURE_UNCHANGED]
-NOT_POSITIVE = [RefusalCode.WRITER_NOT_POSITIVE]
+WORKER_NONZERO = [RefusalCode.WRITER_NOT_POSITIVE, RefusalCode.CALLBACK_WORKER_NONZERO]
+TOOL_OUTPUT_BOUND = [RefusalCode.WRITER_NOT_POSITIVE, RefusalCode.CALLBACK_TOOL_OUTPUT_BOUND]
+CALL_CEILING = [RefusalCode.WRITER_NOT_POSITIVE, RefusalCode.CALLBACK_CALL_CEILING]
 GATE = [RefusalCode.GATE_NOT_POSITIVE]
 
 
@@ -243,16 +245,16 @@ SHARED = {
     "edit-matches-nothing": case([READ, edit_program(checked=False, misremembered=True)],
                                  UNCHANGED, node="writer"),
     # One uncaught exception ends the attempt; the peer is sent no output for it.
-    "call-raises": case([WRONG_PATH], NOT_POSITIVE, node="writer",
+    "call-raises": case([WRONG_PATH], WORKER_NONZERO, node="writer",
                         completed=0, workers=["nonzero"], seen=0),
     # A correct write does not survive a later call that raises.
-    "edit-then-raise": case([EDIT, WRONG_PATH], NOT_POSITIVE, node="writer",
+    "edit-then-raise": case([EDIT, WRONG_PATH], WORKER_NONZERO, node="writer",
                             completed=1, workers=["success", "nonzero"], seen=1),
     # 43,520 hex characters: the worker succeeds, the adapter refuses the output.
-    "output-over-bound": case([HEX_DUMP], NOT_POSITIVE, node="writer",
+    "output-over-bound": case([HEX_DUMP], TOOL_OUTPUT_BOUND, node="writer",
                               completed=0, workers=["success"], seen=0),
     # The ninth call is never admitted, and the eight completed ones are discarded.
-    "nine-calls": case([PEEK] * (MAX_TOOL_CALLS + 1), NOT_POSITIVE, node="writer",
+    "nine-calls": case([PEEK] * (MAX_TOOL_CALLS + 1), CALL_CEILING, node="writer",
                        started=MAX_TOOL_CALLS, completed=MAX_TOOL_CALLS,
                        workers=["success"] * MAX_TOOL_CALLS, seen=MAX_TOOL_CALLS),
     "edit-plus-backup": case(
@@ -285,7 +287,7 @@ CONTAINED = {
     "edit-plus-py-compile": case([READ, COMPILE], ACCEPTED),
     # The worker's interpreter is isolated: the project is not importable.
     "imports-the-project": case(["import constructicon\nprint(constructicon.__file__)\n"],
-                                NOT_POSITIVE, node="writer",
+                                WORKER_NONZERO, node="writer",
                                 completed=0, workers=["nonzero"], seen=0),
 }
 
@@ -356,6 +358,7 @@ async def attempt(resources, launch, binding, tmp_path, monkeypatch, seat: Seate
     if result is None:
         failure, = failures
         assert failure.payload["error_type"] == "ContractViolation", failure.payload
+        assert isinstance(failure.payload.get("refusal"), list), failure.payload
         outcome, node = failure.payload["refusal"], failure.path.scope.segments[-1]
         assert not (Path(authorization.journal).parent / "maintenance-result.json").exists()
     else:

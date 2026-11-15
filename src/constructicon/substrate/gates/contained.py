@@ -12,7 +12,6 @@ import hashlib
 import math
 import os
 import shutil
-import tarfile
 import weakref
 from contextlib import suppress
 from dataclasses import asdict, dataclass, field
@@ -330,42 +329,9 @@ class ContainedGateRunner:
                 f"gate snapshot archive failed ({written} written): {exc}",
             ) from exc
 
-        def extract() -> None:
-            snapshot.mkdir(exist_ok=False)
-            with tarfile.open(tar) as archive:
-                archive.extractall(snapshot, filter="data")
-            tar.unlink()  # Checks see the snapshot directory alone.
-            # Archive attributes may omit or substitute content. Compare actual
-            # exported blobs/modes with the exact Git tree before running code.
-            # Unsupported gitlinks or lossy exports fail closed, never attest a
-            # different filesystem under the original tree's identity.
-            expected = {}
-            for entry in inventory.split(b"\0"):
-                if not entry:
-                    continue
-                metadata, name = entry.split(b"\t", 1)
-                mode, kind, oid = metadata.decode("ascii").split()
-                if kind != "blob" or mode not in {"100644", "100755", "120000"}:
-                    raise ContractViolation("gate snapshot contains an unsupported Git entry")
-                expected[os.fsdecode(name)] = (mode, oid)
-            observed = {}
-            for path in snapshot.rglob("*"):
-                if path.is_symlink():
-                    mode, raw = "120000", os.fsencode(os.readlink(path))
-                elif path.is_file():
-                    mode = "100755" if path.stat().st_mode & 0o111 else "100644"
-                    raw = path.read_bytes()
-                else:
-                    continue
-                oid = hashlib.new(
-                    self.authority.environment.object_format,
-                    f"blob {len(raw)}\0".encode() + raw,
-                ).hexdigest()
-                observed[path.relative_to(snapshot).as_posix()] = (mode, oid)
-            if observed != expected:
-                raise ContractViolation("gate snapshot differs from the exact prepared Git tree")
-
-        await finish_owned(asyncio.create_task(asyncio.to_thread(extract)))
+        await finish_owned(asyncio.create_task(asyncio.to_thread(
+            self.authority.extract_exact, inventory, tar, snapshot,
+        )))
         return snapshot
 
     async def _check(self, spec: CheckSpec, snapshot: Path, guard: int) -> CheckResult:
