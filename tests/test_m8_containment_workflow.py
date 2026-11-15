@@ -124,6 +124,9 @@ PROOFS = {
         "tests/substrate/test_contained_gates.py tests/substrate/test_gate_lifecycle.py "
         "tests/api/test_channel_reply_hostile_replies.py",
     ),
+    "Prove controller-death recovery with the required operator store": (
+        "foundation", "tests/substrate/test_codex_write_recovery.py",
+    ),
     "Prove containment as the non-sudo service user": (
         "combined",
         "tests/substrate/test_linux_containment.py tests/substrate/test_contained_workspace.py "
@@ -134,7 +137,6 @@ PROOFS = {
         "tests/substrate/test_claude_write_worker.py "
         "tests/substrate/test_lifetime.py tests/substrate/test_git_pack.py "
         "tests/substrate/test_codex_write_capture.py tests/substrate/test_codex_write_restart.py "
-        "tests/substrate/test_codex_write_recovery.py "
         "tests/substrate/test_git_process.py tests/substrate/test_git_executable.py "
         "tests/runtime/test_async_workspace.py tests/api/test_capture_assembly.py "
         "tests/runtime/test_async_gates.py "
@@ -315,6 +317,24 @@ def test_common_containment_needs_only_the_shared_runtime():
     assert 'M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE"' in step
     assert "M8_OPERATOR_STORE" not in step and "M8_EGRESS" not in step
     assert "-u -m pytest" in step
+
+
+def test_controller_death_recovery_requires_the_provisioned_store():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    step = text.split(
+        "      - name: Prove controller-death recovery with the required operator store\n", 1,
+    )[1].split("\n      - name:", 1)[0]
+    assert "if: matrix.lane == 'foundation'" in step
+    assert "sudo -u m8-service env -i" in step
+    assert "M8_OPERATOR_STORE_REQUIRED=1" in step
+    assert "M8_OPERATOR_STORE_ROOT=/var/lib/constructicon-m8-launch/operator-stores" in step
+    assert "-u -m pytest tests/substrate/test_codex_write_recovery.py" in step
+    # Its imported fixture and subprocess owner both consume this environment.
+    root = Path(__file__).parents[1]
+    fixture = (root / "tests/substrate/test_operator_store_containment.py").read_text()
+    owner = (root / "tests/substrate/_codex_write_recovery_owner.py").read_text()
+    assert 'os.environ.get("M8_OPERATOR_STORE_ROOT")' in fixture
+    assert 'os.environ["M8_OPERATOR_STORE_ROOT"]' in owner
 
 
 def test_gate_always_checks_the_selected_proof_set_without_bypass():

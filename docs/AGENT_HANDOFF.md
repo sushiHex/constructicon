@@ -3,9 +3,12 @@
 ## Containment proof lanes keep measured foundation headroom
 
 The common-runtime containment group now runs in the combined lane, once and
-as the same non-sudo service user. It does not require the foundation lane's
-operator store or relay. Recent foundation passes took 27m58s and 26m33s;
-the moved group took 3m44s and 3m41s. These measurements justify the move,
+as the same non-sudo service user. Controller-death recovery stays in a named
+foundation step with the required operator store: its imported fixture and
+subprocess helper both consume that environment. The initial claim that all
+of the group was store-independent was wrong; review caught a silent skip.
+Recent foundation passes took 27m58s and 26m33s; the original common group took
+3m44s and 3m41s, including recovery. These measurements justify rebalancing,
 but subtraction is an estimate, not a measured runtime for the new workflow.
 All four lanes, proof membership and existing deadlines remain enforced.
 
