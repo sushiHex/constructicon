@@ -16,6 +16,27 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Two verified snapshot exports share disk extraction
+
+[#432](https://github.com/sushiHex/constructicon/issues/432) gives the contained
+gate and legacy `read_snapshot` one `GitAuthority.extract_exact` operation:
+fresh destination, data-filtered disk tar extraction, tar removal before exact
+path/type/blob/mode verification, and cleanup on refusal. Legacy Git now writes
+an absolute `--output` file, including with relative workspace roots, instead of
+returning tar bytes on stdout. Its synchronous runner and Windows mode
+normalization remain; the gate keeps guarded `GitProcess` and joined extraction.
+
+The third READ workspace exporter in `substrate/git/contained.py` is unchanged:
+its 16 MiB tar-output bound and absent exact comparison need a separate behavioral
+slice. Legacy snapshots do not acquire the Linux pump's 128 MiB file ceiling;
+equality hashing still reads each blob whole. Existing source inventories cover
+the shared implementation: gate/check-set and WRITE workspace revisions change;
+maintenance application and executor adapter sources stay unchanged. Portable
+real-Git tests substitute only Windows guard inheritance, not extraction or
+verification. This Windows account cannot create symlinks, so native symlink
+acceptance and Linux containment remain unproven locally. No host qualification
+or vendor run is implied.
+
 ## The gate snapshot's archive is written to disk, not through the Git output pump
 
 This repository is its own maintenance base, and a contained gate snapshots the whole prepared merge commit. Until #423 it read `git archive --format=tar` into memory under `ProcessLimits.artifact_bytes`, 16 MiB, and the tree reached it (16,752,640 bytes at `cf7042f`). Owner decision on #423: no new budget and no new limit.
