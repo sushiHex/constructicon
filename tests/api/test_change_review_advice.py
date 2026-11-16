@@ -481,6 +481,56 @@ async def test_the_route_assembles_only_through_host_assembly_with_reasons_intac
     assert executor.unavailable_reasons == UNQUALIFIED_PREREQUISITES
 
 
+def _mint_argv(tmp_path: Path, summary_file: Path, *extra: str) -> list[str]:
+    return [
+        "--summary", str(summary_file), "--stage", "mint",
+        "--session", str(tmp_path), "--sealed", str(tmp_path),
+        "--qualification", str(tmp_path), "--state", str(tmp_path), "--store-key", "key",
+        "--journal", str((tmp_path / "fresh.sqlite").resolve()),
+        "--attempt-record", str((tmp_path / "fresh.attempt").resolve()), *extra,
+    ]
+
+
+@pytest.mark.parametrize("extra", [(), ("--authorization-id", ""),
+                                   ("--authorization-id", "x" * 129)])
+def test_mint_refuses_a_missing_or_unbounded_id_by_name_before_assembly(
+    tmp_path, monkeypatch, capsys, extra,
+):
+    """Through the installed entry: the id is checked before host assembly runs."""
+    summary_file = tmp_path / "summary.json"
+    summary_file.write_text(DEMO.model_dump_json(), encoding="utf-8")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("host assembly ran before the mint inputs were checked")
+
+    monkeypatch.setattr(route, "operator_provider", forbidden)
+    assert route.main(_mint_argv(tmp_path, summary_file, *extra)) == 1
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["status"] == "refused"
+    assert printed["refusal"] == [str(RefusalCode.ADVICE_PERMIT)]
+
+
+def test_mint_through_the_installed_entry_prints_the_candidate(
+    tmp_path, portable_binding, monkeypatch, capsys,
+):
+    """Accepting mint, with only host assembly replaced by its credential-free twin."""
+    native = adapter.clean_native(records=[])
+    executor = provider(tmp_path, portable_binding, native)
+    monkeypatch.setattr(route, "operator_provider", lambda host, authorization: executor)
+    summary_file = tmp_path / "summary.json"
+    summary_file.write_text(DEMO.model_dump_json(), encoding="utf-8")
+    argv = _mint_argv(tmp_path, summary_file, "--authorization-id", "owner-advice-1")
+    assert route.main(argv) == 0
+    candidate = QualificationAuthorization.model_validate_json(capsys.readouterr().out)
+    bound = route.bound_values(DEMO)
+    assert candidate.authorization_id == "owner-advice-1"
+    assert candidate.idempotency_key == bound.idempotency_key
+    assert candidate.source_graph_hash == bound.source_graph_hash
+    assert candidate.revision == executor.identity.revision
+    assert not (tmp_path / "fresh.sqlite").exists() and not (tmp_path / "fresh.attempt").exists()
+    assert turns(native) == []
+
+
 def test_the_route_constructs_no_provider_and_passes_no_reasons():
     source = Path(route.__file__).read_text(encoding="utf-8")
     assert "unavailable_reasons=" not in source

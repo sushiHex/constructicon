@@ -534,6 +534,12 @@ def pins(options: argparse.Namespace, summary: ChangeSummaryV1) -> dict[str, obj
 
 def mint(options: argparse.Namespace, summary: ChangeSummaryV1) -> QualificationAuthorization:
     """A candidate only: root placement of the reviewed record is the owner's act."""
+    # The M9 mint's bounded-input idiom (``m9_trial.py:175-176``), checked before
+    # host assembly so a missing or oversized id is a named refusal.
+    identifier = getattr(options, "authorization_id", None)
+    if not isinstance(identifier, str) or not 0 < len(identifier) <= 128:
+        raise _refuse("mint requires an authorization id of 1 to 128 characters",
+                      RefusalCode.ADVICE_PERMIT)
     journal, record = options.journal, options.attempt_record
     for path in (journal, record):
         if not isinstance(path, Path) or not path.is_absolute() or path.resolve() != path:
@@ -545,7 +551,7 @@ def mint(options: argparse.Namespace, summary: ChangeSummaryV1) -> Qualification
     bound = bound_values(summary)
     provider = require_provider(host_provider(options))
     return QualificationAuthorization(
-        authorization_id=options.authorization_id, stage="qualification-read",
+        authorization_id=identifier, stage="qualification-read",
         actor_id=ACTOR_ID, idempotency_key=bound.idempotency_key, scope=SCOPE,
         binding=EXECUTOR, source_graph_hash=bound.source_graph_hash,
         capability_id=CAPABILITY, revision=provider.identity.revision,
