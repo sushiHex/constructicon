@@ -3,7 +3,7 @@
 **Status:** proposed, 2026-11-16. Refs
 [#442](https://github.com/sushiHex/constructicon/issues/442). Not accepted.
 It authorizes no source change, installation, credential, host operation or
-model call. The owner decided "ADR first, then route" on 2026-11-16; the
+model call. On 2026-11-16 the owner put this decision before any route; the
 route waits for acceptance of this record.
 
 Accepted [ADR 0018](0018-live-executors-are-leased-contained-processes.md),
@@ -154,13 +154,25 @@ none of them new law:
   (`core/permit.py:118`; `codex.py:2655-2671`).
 - The node rebuilds the instruction from its actual input, hashes it,
   recomputes the run id and refuses unless it equals `ctx.run_id`
-  (`runtime/context.py:47-63`), before it calls `execute`. The node's
-  source is inside its component version (`core/component.py:35-44`,
-  `:155-166`; `runtime/registry.py:357-374`), which the graph names
-  exactly, so `permit.source_graph` pins this guard.
+  (`runtime/context.py:47-63`), before it calls `execute`.
+- That guard is pinned only if its source is. `PythonRef.source_digest` is
+  optional (`core/component.py:44`), and `source_digest_for` hashes only
+  `inspect.getsource` of the implementation, plus an explicitly supplied
+  adapter revision (`runtime/registry.py:357-374`), not the helpers or
+  module globals it calls. The implementation must therefore give every
+  part of the guard a positive source identity: the instruction builder, its
+  canonicalization, the run-id recomputation, and the fixed actor,
+  operation, prefix and framing. Either it inlines the whole guard in the
+  hashed implementation or it uses the existing explicit adapter-revision
+  mechanism; no new framework. A test must show the component version
+  moving when any of those helpers or literals changes. Only then does
+  `permit.source_graph`, which names the exact component versions, pin the
+  guard.
 
-The same bytes are the same run, so a repeat replays and never dispatches
-again. Different bytes cannot spend the permit's turn. The entry makes the
+Within one approved permit and its journal, the same bytes are the same run,
+so a repeat replays and never dispatches again; this is not a global
+deduplication across permits or journals. Different bytes cannot spend the
+permit's turn. The entry makes the
 same comparison before `runs_start`: the walker acquires and materializes
 the executor, which reserves the attempt record, before the node body runs
 (`runtime/walker.py:1918-1931`, `:1963-1969`; `codex.py:2674-2686`), so a
@@ -168,9 +180,9 @@ mismatch first seen by the node spends the permit without a dispatch.
 
 ### 3. One instruction, one bounded reply
 
-The adapters are not extended. Either extension edits `codex.py` and
-`codex_protocol.py`, which two revisions hash whole (`codex.py:267`,
-`:2770-2772`), widens what reaches a vendor, and has one consumer (I6).
+The adapters are not extended. Either extension edits at least `codex.py`,
+which the adapter revision hashes whole (`codex.py:2770-2772`), widens what
+reaches a vendor, and has one consumer (I6).
 
 - The task is `TaskSpec(instruction=...)` and nothing else
   (`core/executor.py:40-45`).
@@ -186,7 +198,8 @@ The adapters are not extended. Either extension edits `codex.py` and
 - Symbol names are text chosen by the author of the reviewed code, and can
   carry injected instructions. The Codex READ profile has no tools, no
   workspace and only vendor-session egress (`codex_host.py:62-91`), so an
-  injection can change the reply and nothing else.
+  injection gains no mediated tool or workspace authority. What it does to
+  the reply, to vendor-side behavior and to token use is not proven.
 - The node accepts only a success whose output is non-empty text within a
   fixed byte bound, as the READ qualification node does
   (`api/qualification.py:99-104`). The reply is stored as text. Nothing
@@ -325,9 +338,10 @@ The new entry joins both import contracts, so the MCP adapter can never
 reach it (`pyproject.toml:84-144`).
 
 Main's adapter and protocol sources already need fresh qualification before
-live use (`docs/AGENT_HANDOFF.md:90-92`). The route therefore lands with
-the planned requalification (#438) at no further cost. Each optional row is
-free only inside it.
+live use (`docs/AGENT_HANDOFF.md:90-92`). Whether the route and any optional
+row can share a later requalification is not established here: the #438
+record authorizes no requalification and no freeze exception, and the exact
+overlap with the pins current at implementation is determined then.
 
 Cost of one real run: one native user turn. The one comparable turn on
 record took about 6.5 seconds and reported 5,812 input and 7 output tokens
@@ -338,14 +352,15 @@ withdrawal and a park. Money stays unknown.
 
 ## Proof
 
-Credential-free tests drive the real adapter, walker, journal and control
-plane over a scripted byte channel
+No route exists yet; this section states the proof a future implementation
+must supply. Credential-free tests already drive the real adapter, walker,
+journal and control plane over a scripted byte channel
 (`tests/substrate/test_codex_adapter.py:154-206`, `:334-398`). The route's
-tests use the permit path, as the READ entry's do
+tests must use the permit path, as the READ entry's do
 (`tests/api/test_qualification_entry.py:404-425`, `:496-533`), and never
 an emptied reason tuple.
 
-They prove:
+Required proof:
 
 - the exact graph is admitted and every reason is still published;
 - each of the ten mismatches refuses with its code before a handle exists;
@@ -358,7 +373,7 @@ They prove:
 - the default route's graph hash, outputs and `unmeasured` metering are
   byte-identical to the base.
 
-They cannot prove:
+Such tests cannot prove:
 
 - that a real model answers this instruction usefully, or at all. A
   scripted peer returns what the test wrote;
@@ -415,9 +430,9 @@ this is M9 again with a different prompt.*
 
 None. This record supersedes no clause of ADR 0018, 0021 or 0024. It
 restates, for consumers, the law that already governs qualification and
-maintenance runs. At delivery, `ARCHITECTURE.md` gains one sentence of
-current truth: the READ permit has three uses, which are qualification,
-the M9 selection and consumer advice.
+maintenance runs. Publishing this proposal changes no current-truth
+document. Only after a separately authorized implementation merges would
+`ARCHITECTURE.md` record that the READ permit also serves consumer advice.
 
 Not decided here, and not authorized: availability by evidence (b); a
 Claude route; a rename of the permit's stage; structured output or task
