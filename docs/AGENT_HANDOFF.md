@@ -16,6 +16,30 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## A subscription consumer is proposed as one permitted run, not availability
+
+[ADR 0025](adr/0025-consumer-runs-earn-a-permit.md), for
+[#442](https://github.com/sushiHex/constructicon/issues/442), is proposed only.
+It is not accepted, implements no route and changes no identity.
+
+It records that no current proof makes a native executor available outside a
+live window. The change-review consumer would instead be one owner-permitted
+Codex READ run for one reviewed graph:
+- the READ permit's law is reused unchanged;
+- task data is bound through the run identity;
+- the task is the instruction only, with a bounded text reply;
+- model advice gets a separate contract from human advice.
+
+The independent review corrected the draft before publication:
+- **Guard pinning.** A component's source digest covers only its
+  implementation, so the guard needs its own source identity.
+- **Proof.** The proof section lists required future tests, not results.
+- **Requalification.** No requalification is assumed free.
+- **Authority.** The authority delta is stated as one reviewed graph, not a
+  precedent drawn from M9.
+
+---
+
 ## Revision-unit coverage is recorded as a proposal, not implemented
 
 The [revision-unit record](designs/REVISION_UNITS.md) for
