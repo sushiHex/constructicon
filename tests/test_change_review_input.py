@@ -48,6 +48,7 @@ def test_packet_uses_the_actual_summary_and_instruction_producers(source_world, 
     assert record["offline_pins"] == bound.projection()
     assert record["offline_pins_are_provisional"] is True
     assert record["execution_authorized"] is False
+    assert record["change"] == {"before": before, "after": after, "path": "calc.py"}
     instruction = (out / "instruction.txt").read_bytes()
     assert instruction == bound.instruction.encode("utf-8")
     assert str(repository).encode() not in instruction and b"return sum" not in instruction
