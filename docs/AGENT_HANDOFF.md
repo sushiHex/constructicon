@@ -16,6 +16,48 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## A subscription consumer is proposed as one permitted run, not availability
+
+[ADR 0025](adr/0025-consumer-runs-earn-a-permit.md), for
+[#442](https://github.com/sushiHex/constructicon/issues/442), is proposed only.
+It is not accepted, implements no route and changes no identity.
+
+It records that no current proof makes a native executor available outside a
+live window. The change-review consumer would instead be one owner-permitted
+Codex READ run for one reviewed graph:
+- the READ permit's law is reused unchanged;
+- task data is bound through the run identity;
+- the task is the instruction only, with a bounded text reply;
+- model advice gets a separate contract from human advice.
+
+The independent review corrected the draft before publication:
+- **Guard pinning.** A component's source digest covers only its
+  implementation, so the guard needs its own source identity.
+- **Proof.** The proof section lists required future tests, not results.
+- **Requalification.** No requalification is assumed free.
+- **Authority.** The authority delta is stated as one reviewed graph, not a
+  precedent drawn from M9.
+
+---
+
+## Revision-unit coverage is recorded as a proposal, not implemented
+
+The [revision-unit record](designs/REVISION_UNITS.md) for
+[#438](https://github.com/sushiHex/constructicon/issues/438) inventories source
+inputs at `558dc44`, recommends explicit whole-module lists while preserving
+existing coverage and kernel member laws, and leaves the owner decision pending.
+It changes no identity, frozen decision, source unit or qualification evidence.
+
+A source-revision move does not universally force authenticated startup:
+startup-record comparisons, one-run permits and M9 whole-package installation
+identity bind different inputs. The v1/v3 kernel identities already hash shared
+grant bodies, so an omitted grant-module name in an adapter list is not evidence
+of uncovered law. Remaining cross-entry permit and local gate-helper coverage
+questions are explicitly untraced, rather than established defects. The separate
+READ exporter has its own #440/PR #441 scope and needs no unit implementation.
+The completed source advisory was reused; manual closure claims were checked
+where stated, without a new model review, live operation or requalification.
+
 ## The contained READ workspace shares verified disk extraction
 
 [#440](https://github.com/sushiHex/constructicon/issues/440) moves the remaining

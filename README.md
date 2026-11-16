@@ -535,6 +535,8 @@ plus Pydantic. CI enforces both rules.
   recovered records, and implementation handoffs
 - [Self-improvement design](docs/designs/SELF_IMPROVEMENT.md): learning as
   candidates, never self-authorized mutation
+- [Revision units](docs/designs/REVISION_UNITS.md): proposed source coverage
+  contract; owner decision pending
 - [M9 selector trial guide](docs/plans/handoffs/M9-model-selector-guide.md):
   the installed fixed trial, its stages, and its live boundary
 - [Architecture decisions](docs/adr/): why the system is shaped this way
