@@ -16,6 +16,24 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Revision-unit coverage is recorded as a proposal, not implemented
+
+The [revision-unit record](designs/REVISION_UNITS.md) for
+[#438](https://github.com/sushiHex/constructicon/issues/438) inventories source
+inputs at `558dc44`, recommends explicit whole-module lists while preserving
+existing coverage and kernel member laws, and leaves the owner decision pending.
+It changes no identity, frozen decision, source unit or qualification evidence.
+
+A source-revision move does not universally force authenticated startup:
+startup-record comparisons, one-run permits and M9 whole-package installation
+identity bind different inputs. The v1/v3 kernel identities already hash shared
+grant bodies, so an omitted grant-module name in an adapter list is not evidence
+of uncovered law. Remaining cross-entry permit and local gate-helper coverage
+questions are explicitly untraced, rather than established defects. The separate
+READ exporter has its own #440/PR #441 scope and needs no unit implementation.
+The completed source advisory was reused; manual closure claims were checked
+where stated, without a new model review, live operation or requalification.
+
 ## The contained READ workspace shares verified disk extraction
 
 [#440](https://github.com/sushiHex/constructicon/issues/440) moves the remaining
