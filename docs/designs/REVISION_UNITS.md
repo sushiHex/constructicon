@@ -15,13 +15,26 @@ a separately reviewed implementation supplies its exact before/after inventory.
 Do not replace module hashing with symbol slicing: Codex adapter v1 missed
 module-level rules called by its hashed classes (`substrate/executors/codex.py:2773-2777`).
 
-The owner choice is whether to adopt that preservation contract, with reviewed
-coverage inventories and targeted sensitivity checks as its proof method, or
-retain today's layout. This trades continued conservative invalidation and
-manual impact review for avoiding a new hashing/discovery framework. It does
-not promise fewer authenticated startups from a list-only change. Narrowing a
-startup-bound concern needs its own exact coverage argument and owner decision;
-no current covered input may quietly disappear during extraction.
+The owner has three explicit options:
+
+1. **Preservation contract (recommended here).** Keep explicit whole-module
+   lists and existing kernel member laws, with reviewed coverage inventories
+   and targeted sensitivity checks.
+2. **The contract plus Fable's tests-only closure check.** Parse static package
+   imports in CI, compare coverage with a reasoned baseline that may only shrink,
+   and reject removals of currently hashed inputs. No runtime identity changes
+   belong in that first test-only slice. This can expose new import edges, but
+   it adds a baseline/deny policy and cannot prove semantic closure: imports may
+   overstate influence, and embedded source and runtime artifacts need separate
+   treatment. Existing indirect coverage must be traced before classifying gaps.
+3. **Keep the current layout.** Make no revision-unit implementation change and
+   continue exact impact review under existing identities.
+
+Option 1 trades continued conservative invalidation and manual impact review
+for avoiding a new hashing/discovery framework. No option promises fewer
+authenticated startups from a list-only change. Narrowing a startup-bound
+concern needs its own exact coverage argument and owner decision; no current
+covered input may quietly disappear during extraction.
 
 Acceptance of this contract would guide a scoped implementation proposal. It
 would not approve an extraction, change a hash domain/version, retire a freeze,
@@ -168,14 +181,15 @@ v1/v3 law and serialization goldens remain binding. Such checks sample stated
 coverage; they do not prove all semantic influence. Review the inventory with
 the exact diff, and separately test any intended behavior change.
 
-Fable's proposed AST-closure test, baseline ratchet and dynamic-import deny rule
-are not recommended for this slice. Imports can overstate influence, miss
+Option 2 retains Fable's proposed AST-closure test, baseline ratchet and
+dynamic-import deny rule as an owner alternative; option 1 does not recommend
+them for this slice. Imports can overstate influence, miss
 embedded source/runtime artifacts, and already-covered kernel bodies make a
-naive gap table misleading. A growing exception baseline introduces another
+naive gap table misleading. An exception baseline introduces another
 policy. Propose automation only for a concrete demonstrated omission and an
 explicit owner choice; do not claim it proves semantic completeness. Runtime
 AST discovery, blanket import hashing, symbol slicing and a source registry
-are rejected here as additional mechanisms without that demonstrated need.
+are not part of any option here.
 
 The frozen S3-4 decision says Stage 3 merges before Stage 2 because later Codex
 adapter edits invalidate g4 ([record](../plans/handoffs/M8-N5-stage3-read.md),
@@ -189,3 +203,8 @@ unification, F4 neutral helpers and an optional launcher split remain separate
 implementation choices with exact overlap, behavior and requalification scope
 to review. No extraction or stricter-settlement adoption is bundled into the
 contract decision, and no frozen artifact is edited by this proposal.
+
+The S3-4 exception, whether store-law source changes require fresh authenticated
+startup, and whether a launcher split joins a later requalification or waits
+remain explicit open owner decisions. Selecting a coverage option settles none
+of them.
