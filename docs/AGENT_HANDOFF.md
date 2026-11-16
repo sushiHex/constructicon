@@ -16,6 +16,47 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## The contained READ workspace shares verified disk extraction
+
+[#440](https://github.com/sushiHex/constructicon/issues/440) moves the remaining
+READ workspace export from tar bytes on Git stdout to an exclusively claimed
+`snapshot.tar` in its acquisition payload. Trusted authority-side Git inherits
+the acquisition guard; joined `GitAuthority.extract_exact` claims the fresh
+workspace and checks paths, types, blobs and executable modes before readiness.
+WRITE still creates its staging directory through its existing path. Existing
+archive/workspace neighbors refuse without being overwritten or deleted.
+
+No output budget grows: inventory/stdout retains `artifact_bytes`, while the
+Linux Git pump retains its existing 128 MiB file ceiling. Cancellation joins the
+writer/extractor before removing the claimed tar and releasing its guard;
+lease disposal still owns the payload. Exact hashing still reads each blob whole.
+Real-Git tests cross a small stdout cap, refuse lossy archive attributes and
+hostile members, and exercise failure/cancellation cleanup. Portable Windows
+tests substitute only guard acquisition/inheritance; native symlink and Linux
+containment evidence remain the physical CI lane's responsibility.
+
+The ordinary READ provider has no intrinsic revision. Its changed source moves
+the Claude READ fixture revision and the contained WRITE workspace's existing
+source closure, plus M9's whole-package installed-source identity. No executor
+adapter/protocol or gate/check-set source changes. Assemblies that bind the changed
+workspace revisions consequently derive new launch identities.
+This is code evidence, not a fresh live qualification or an implemented
+revision-unit policy. Frozen operator plans remain unchanged.
+
+## Dispatch expiry remains a refusal boundary
+
+The #417 investigation at `558dc44` used the real Codex dispatch hook, acquisition
+closure and SQLite meter with a controlled Git command primitive. A simulated
+31-second post-intent stall deferred an eligible event-loop callback, expired the
+default 30-second owner lease and raised `OwnershipLost` before any transport
+write: `turn_sent` stayed false, one intent-only record remained and its fresh
+dispatch token was consumed. Nine existing focused expiry/send-order cases passed.
+This establishes a possible availability risk and the fail-closed response, not
+an observed production stall or the cause of the original CI lapse. PR #418 already
+corrected the test successor's lease margin; this investigation adds no production
+fix. Simply awaiting the final closure read would admit a stale observation before
+transfer, so the existing no-await fence and one-attempt law remain intact.
+
 ## The accepted gen19 stored-reply contribution reaches normal source review
 
 The accepted generation-19 WRITE produced the `_stored_reply` extraction now

@@ -29,6 +29,11 @@ COMMIT = (
     "            closure.commit, paths, candidate_ref=candidate_ref, disposition=disposition,\n"
     "        )))"
 )
+EXTRACT = (
+    "await finish_owned(asyncio.create_task(asyncio.to_thread(\n"
+    "                self.authority.extract_exact, inventory, archive, Path(workspace.path),\n"
+    "            )))"
+)
 METADATA = (
     ("acquire", WORKSPACE + "acquire", BASE_READ,
      "self.authority.resolve_ref(self.target_ref)"),
@@ -41,6 +46,31 @@ METADATA = (
 )
 
 MUTANTS = (
+    (
+        "READ archive loses its acquisition guard", WORKSPACE + "populate",
+        'cwd=self.authority.repository_id, guard=guard,\n            )\n'
+        '            await finish_owned',
+        'cwd=self.authority.repository_id,\n            )\n'
+        '            await finish_owned',
+        LEASE + "test_read_disk_export_crosses_stdout_bound_and_verifies_exact_tree",
+    ),
+    (
+        "READ overwrites an unclaimed archive", WORKSPACE + "populate",
+        "archive.touch(mode=0o600, exist_ok=False)",
+        "archive.touch(mode=0o600, exist_ok=True)",
+        LEASE + "test_read_export_refuses_existing_neighbors_without_overwrite_or_deletion[archive]",
+    ),
+    (
+        "READ omits its exact-tree extraction", WORKSPACE + "populate",
+        "self.authority.extract_exact, inventory, archive, Path(workspace.path)",
+        "lambda *unused: None, inventory, archive, Path(workspace.path)",
+        LEASE + "test_read_workspace_refuses_lossy_git_archive[export-ignore]",
+    ),
+    (
+        "READ cancellation leaves its disk archive", WORKSPACE + "populate",
+        "archive.unlink(missing_ok=True)", "pass",
+        LEASE + "test_read_archive_cancellation_removes_claimed_tar_before_return",
+    ),
     (
         "TERM grace is skipped", "constructicon.substrate.executors._supervisor:_Shutdown.forced",
         "self.started + TERM_GRACE_S", "self.started",
@@ -91,13 +121,13 @@ MUTANTS = (
     ),
     (
         "READ extraction monopolizes the event loop", WORKSPACE + "populate",
-        "await finish_owned(asyncio.create_task(asyncio.to_thread(extract)))", "extract()",
+        EXTRACT, "self.authority.extract_exact(inventory, archive, Path(workspace.path))",
         LEASE + "test_read_extraction_yields_and_retains_its_guard_until_writes_finish",
     ),
     (
         "READ extraction outlives its guard", WORKSPACE + "populate",
-        "await finish_owned(asyncio.create_task(asyncio.to_thread(extract)))",
-        "await asyncio.to_thread(extract)",
+        EXTRACT,
+        "await asyncio.to_thread(self.authority.extract_exact, inventory, archive, Path(workspace.path))",
         LEASE + "test_read_extraction_yields_and_retains_its_guard_until_writes_finish",
     ),
     (

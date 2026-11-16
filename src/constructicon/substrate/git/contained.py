@@ -8,9 +8,7 @@ Safe async capture is PR C, not an uncontained escape on this view.
 from __future__ import annotations
 
 import asyncio
-import io
 import sys
-import tarfile
 import weakref
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -104,7 +102,8 @@ class ContainedWorkspace:
             await finish_owned(asyncio.create_task(asyncio.to_thread(
                 self.provider.closure.require_open, self.paths,
             )))
-            Path(self.path).mkdir(parents=True, exist_ok=False)
+            if self.provider.posture is Posture.WRITE:
+                Path(self.path).mkdir(parents=True, exist_ok=False)
             await self.provider.populate(self, guard)
             self._phase.ready = True
 
@@ -244,13 +243,28 @@ class ContainedWorkspaceProvider:
 
     async def populate(self, workspace: ContainedWorkspace, guard: int) -> None:
         if self.posture is Posture.READ:
-            content = await self._export("archive", "--format=tar", workspace.base)
-
-            def extract() -> None:
-                with tarfile.open(fileobj=io.BytesIO(content)) as archive:
-                    archive.extractall(workspace.path, filter="data")
-
-            await finish_owned(asyncio.create_task(asyncio.to_thread(extract)))
+            git = GitProcess(self.git, self.launcher.limits)
+            inventory = await git.run(
+                "ls-tree", "-r", "-z", "--full-tree", workspace.base,
+                cwd=self.authority.repository_id, guard=guard,
+            )
+            workspace.paths.payload.mkdir(parents=True, exist_ok=True)
+            archive = workspace.paths.payload / "snapshot.tar"
+            # Trusted authority-side Git owns this guarded output, outside the
+            # eventual READ mount. Only stdout uses artifact_bytes; the disk tar
+            # retains GitProcess's existing Linux RLIMIT_FSIZE (128 MiB).
+            archive.touch(mode=0o600, exist_ok=False)
+            try:
+                await git.run(
+                    "archive", "--format=tar", f"--output={archive}", workspace.base,
+                    cwd=self.authority.repository_id, guard=guard,
+                )
+                await finish_owned(asyncio.create_task(asyncio.to_thread(
+                    self.authority.extract_exact, inventory, archive, Path(workspace.path),
+                )))
+            finally:
+                # The child/extractor has joined before its claimed tar is removed.
+                archive.unlink(missing_ok=True)
             return
         content = await self._export(
             "pack-objects", "--stdout", "--revs", stdin=f"{workspace.base}\n".encode(),
