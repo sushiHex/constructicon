@@ -43,6 +43,12 @@ fixture now positively accepts a disk tar above its stdout cap and refuses an
 inventory that crosses that cap. These fixture corrections do not relax the
 production guard, exact-tree law or configured limits.
 
+The controller-death fixture pauses at the real disk archive/extraction boundary.
+Its prior mocked-populate pause preceded payload creation after this change;
+the corrected child and parent require a nonempty archive and absent workspace
+before killing the owner. The original other crash phases and recovery remain.
+
+
 The ordinary READ provider has no intrinsic revision. Its changed source moves
 the Claude READ fixture revision and the contained WRITE workspace's existing
 source closure, plus M9's whole-package installed-source identity. No executor

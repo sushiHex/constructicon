@@ -109,13 +109,18 @@ async def main():
         if phase == "after_record":
             pause(phase, row)
 
-    async def populate_at_seam(workspace, guard):
-        assert row_seen is not None
-        pause(phase, row_seen)
-
     journal.record_capability_lease = record_at_seam
     if phase == "during_materialization":
-        provider.populate = populate_at_seam
+        extract = provider.authority.extract_exact
+
+        def extract_at_seam(inventory, archive, destination):
+            assert row_seen is not None
+            assert inventory and archive.is_file() and archive.stat().st_size > 0
+            assert not destination.exists()
+            pause(phase, row_seen)
+            extract(inventory, archive, destination)
+
+        provider.authority.extract_exact = extract_at_seam
     control = ControlPlane(system=system, store=journal)
     await control.startup()
     graph = await register_read(control)

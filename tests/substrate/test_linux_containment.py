@@ -1104,6 +1104,10 @@ async def test_real_controller_death_on_both_sides_of_the_durable_lease(launcher
             row.lease_id, row.acquisition_epoch,
         ))
         assert old.payload.exists() == (phase == "during_materialization")
+        if phase == "during_materialization":
+            archive = old.payload / "snapshot.tar"
+            assert archive.is_file() and archive.stat().st_size > 0
+            assert not (old.payload / "workspace").exists()
         if phase == "before_record":
             assert not old.root.exists()
         owner.kill()
