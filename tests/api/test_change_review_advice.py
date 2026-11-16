@@ -310,22 +310,33 @@ async def test_a_reply_that_is_not_bounded_text_refuses_and_never_checkpoints(
     executor = provider(tmp_path, portable_binding, native)
     outcome = await route.advise(provider=executor, summary=DEMO)
     assert outcome["result"]["status"] == "failed" and len(turns(native)) == 1
+    assert outcome["advice"] is None
     payload = failure(executor.qualification.journal, route.bound_values(DEMO).run_id)
     assert payload["refusal"] == codes
 
 
-async def test_a_reply_at_its_bound_is_accepted(tmp_path, portable_binding, substituted_guard):
-    answer = "x" * route.MODEL_ADVICE_MAX_BYTES
+@pytest.mark.parametrize("answer", [
+    "x" * route.MODEL_ADVICE_MAX_BYTES,
+    "\N{SNOWMAN}" * (route.MODEL_ADVICE_MAX_BYTES // 3),
+], ids=["ascii", "non-ascii"])
+async def test_a_reply_at_its_bound_is_returned_whole(
+    tmp_path, portable_binding, substituted_guard, answer,
+):
     native = adapter.clean_native(records=[completed(answer=answer)])
     executor = provider(tmp_path, portable_binding, native)
     outcome = await route.advise(provider=executor, summary=DEMO)
     assert outcome["result"]["status"] == "succeeded"
-    # The public preview may truncate a large value; the checkpoint holds it whole.
+    # The preview truncates a large value; the result carries the whole advice.
+    assert outcome["result"]["outputs"]["advice"] == {"truncated": True}
+    assert outcome["advice"]["advice"] == answer
+    assert outcome["advice"]["reply_bytes"] == len(answer.encode("utf-8"))
     journal = SqliteJournal(executor.qualification.journal)
     retained = journal.checkpoint(route.bound_values(DEMO).run_id, PATH)
-    assert retained is not None
-    payload = retained.outputs["advice"].payload
-    assert payload["advice"] == answer and payload["reply_bytes"] == route.MODEL_ADVICE_MAX_BYTES
+    assert retained is not None and retained.outputs["advice"].payload == outcome["advice"]
+    # A replay in a fresh journal handle returns the same whole advice.
+    replayed = route.replay(SqliteJournal(executor.qualification.journal), route.bound_values(DEMO))
+    assert replayed is not None and replayed["replayed"] is True
+    assert replayed["advice"] == outcome["advice"] and replayed["result"] == outcome["result"]
 
 
 @pytest.mark.parametrize(("outcome", "codes"), [

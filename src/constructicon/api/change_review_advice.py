@@ -56,6 +56,7 @@ from constructicon.core.control import (
     READ_SCOPE,
     AuthenticatedActor,
     ControlRejected,
+    DetailChunk,
     RegistrationCommandResult,
     RunResultPreviewV3,
     RunSubmission,
@@ -445,7 +446,37 @@ def _result(journal: SqliteJournal, bound: Bound, *, replayed: bool) -> dict[str
         raise _refuse("the advice run has no retained result", RefusalCode.ADVICE_JOURNAL)
     return {"run_id": bound.run_id, "replayed": replayed,
             "instruction_digest": str(bound.instruction_digest),
+            "advice": _whole_advice(control, result),
             "result": result.model_dump(mode="json")}
+
+
+def _whole_advice(control: ControlPlane, result: RunResultPreviewV3) -> dict[str, object] | None:
+    """The whole advice, read from the result detail the preview points at.
+
+    The preview replaces any output over 2,000 canonical bytes with a marker
+    (``_control_queries.py:883-888``), and the reply bound is 16,384 bytes, so
+    the owner's answer is read from the detail, never from the preview.
+    """
+    if result.status is not RunStatus.SUCCEEDED:
+        return None
+    if result.detail is None:
+        raise _refuse("the advice result has no detail", RefusalCode.ADVICE_JOURNAL)
+    text, cursor, total = "", None, None
+    while True:
+        chunk = control.details_read(ACTOR, result.detail, cursor=cursor, max_bytes=64_000)
+        if not isinstance(chunk, DetailChunk) or total not in (None, chunk.total_bytes):
+            raise _refuse("the advice result detail is unreadable", RefusalCode.ADVICE_JOURNAL)
+        text, cursor, total = text + chunk.text, chunk.next_cursor, chunk.total_bytes
+        if cursor is None:
+            break
+    try:
+        if len(text.encode("utf-8")) != total:
+            raise ValueError("short detail")
+        payload = ModelAdvicePayload.model_validate(json.loads(text)["outputs"][MODEL_ADVICE.name])
+    except (ValueError, KeyError, TypeError) as error:
+        raise _refuse("the advice result detail does not hold the advice",
+                      RefusalCode.ADVICE_JOURNAL) from error
+    return payload.model_dump(mode="json")
 
 
 async def advise(
