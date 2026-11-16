@@ -23,6 +23,7 @@ from examples import change_review
 
 from constructicon.api import change_review_advice as advice
 from constructicon.core import control, identity
+from constructicon.core.errors import ContractViolation
 
 
 def _wire(value: object) -> bytes:
@@ -93,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         record = prepare(options.repository, options.controller, options.before,
                          options.after, options.path, options.out)
-    except (OSError, ValueError):
+    except (OSError, ValueError, ContractViolation):
         print(json.dumps({"status": "refused", "reason": "consumer-input-unproved"}))
         return 1
     print(json.dumps({"status": "prepared", "summary_sha256": record["summary_sha256"],

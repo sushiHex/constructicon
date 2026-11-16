@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 from examples import change_review
-from scripts.ops.change_review_input import prepare
+from scripts.ops.change_review_input import main, prepare
 
 from constructicon.api import change_review_advice as advice
 from constructicon.core import control, identity
@@ -94,3 +94,36 @@ def test_real_isolated_entry_prepares_and_refuses_reuse(source_world, tmp_path):
     assert json.loads(runs[1].stdout) == {
         "status": "refused", "reason": "consumer-input-unproved",
     }
+
+
+def test_a_valid_wide_summary_is_an_opaque_instruction_bound_refusal(
+    source_world, tmp_path, capsys,
+):
+    repository, controller, _, _ = source_world
+
+    def functions(prefix, returned):
+        return "\n".join(
+            f"def {prefix}{'一' * 74}_{index:02}(): return {returned}"
+            for index in range(25)
+        )
+
+    for label, source in (
+        ("before", functions("共有", 1) + "\n" + functions("削除", 1)),
+        ("after", functions("共有", 2) + "\n" + functions("追加", 2)),
+    ):
+        (repository / "calc.py").write_text(source, encoding="utf-8", newline="\n")
+        change_review.git(repository, "add", "calc.py")
+        change_review.git(repository, "commit", "-qm", label)
+        commit = change_review.git(repository, "rev-parse", "HEAD").decode().strip()
+        if label == "before":
+            before = commit
+        else:
+            after = commit
+    out = tmp_path / "too-wide"
+    assert main(["--repository", str(repository), "--controller", controller,
+                 "--before", before, "--after", after, "--path", "calc.py",
+                 "--out", str(out)]) == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "refused", "reason": "consumer-input-unproved",
+    }
+    assert not out.exists()
