@@ -1,7 +1,8 @@
 """A feasibility witness, never a model answer or an additional acceptance rule.
 
-The full committed checkout tree supplies fixture data; its captured tree OID
-is imported without history or network into a deterministic parentless base.
+The committed checkout tree supplies fixture data; it is imported without
+history or network into a deterministic parentless base. A channel witness
+explicitly substitutes the pinned pre-contribution target, never a live old base.
 The scripted native peer replaces the vendor, while the real adapter mediates
 its callback through the supplied portable or physically contained launcher.
 Who answers the turn is the seat's occupant (``tests/model_seat.py``); what stood
@@ -72,7 +73,7 @@ def task_vectors() -> bytes:
     return json.dumps({"version": 1, "cases": cases}, separators=(",", ":")).encode()
 
 
-async def committed_tree_base(authority) -> str:
+async def committed_tree_base(authority, *, channel: bool = False) -> str:
     repository = Path(__file__).resolve().parents[1]
     git = GitProcess(authority.git_executable, ProcessLimits())
     checkout = ("-c", f"safe.directory={repository.resolve().as_posix()}")
@@ -84,18 +85,35 @@ async def committed_tree_base(authority) -> str:
     for name in SOURCE_FILES:
         source = await git.run(*checkout, "show", tree.decode() + ":" + name, cwd=repository)
         assert hashlib.sha256(source).hexdigest() == SOURCE_HASHES[name]
-    return await import_fixture_tree(authority, repository, tree)
+    return await import_fixture_tree(authority, repository, tree, channel=channel)
 
 
-async def import_fixture_tree(authority, repository, tree: bytes) -> str:
-    """Keep every committed blob/mode except the application's one output path."""
+async def import_fixture_tree(authority, repository, tree: bytes, *, channel: bool = False) -> str:
+    """Keep committed blobs/modes except the fixed synthetic task input/output.
+
+    Channel witnesses replace only the target with independently pinned old
+    bytes. This is test data, not a claim about a live historical base.
+    """
     git = GitProcess(authority.git_executable, ProcessLimits())
     # CI's checked-out source belongs to runner while the physical lane runs as
     # m8-service. Trust this exact read-only fixture source for this child only.
     checkout = ("-c", f"safe.directory={repository.resolve().as_posix()}")
     inventory = await git.run(*checkout, "ls-tree", "-r", "-z", tree.decode(), cwd=repository)
-    expected = b"\0".join(record for record in inventory.split(b"\0")
-        if not record.endswith(b"\ttests/vectors/plan_manifest.json"))
+    records = [record for record in inventory.split(b"\0")
+               if not record.endswith(b"\ttests/vectors/plan_manifest.json")]
+    target_entry = None
+    if channel:
+        from constructicon.core.maintenance import CHANNEL_TARGET_PATH
+        from tests.substrate.test_channel_reply_oracle import BASE
+
+        target_blob = (await git.run("hash-object", "-w", "--stdin",
+                                    cwd=authority.repository_id, stdin=BASE)).strip().decode()
+        target_entry = f"100644 blob {target_blob}\t{CHANNEL_TARGET_PATH}".encode()
+        selected = [index for index, record in enumerate(records)
+                    if record.endswith(b"\t" + CHANNEL_TARGET_PATH.encode())]
+        assert len(selected) == 1, "the committed channel target is missing"
+        records[selected[0]] = target_entry
+    expected = b"\0".join(records)
     pack = await git.run(*checkout, "pack-objects", "--stdout", "--revs", cwd=repository,
                          stdin=tree + b"\n")
     await git.run("index-pack", "--stdin", cwd=authority.repository_id, stdin=pack)
@@ -103,8 +121,10 @@ async def import_fixture_tree(authority, repository, tree: bytes) -> str:
     # contribution cannot invalidate this reusable feasibility witness.
     await git.run("read-tree", tree.decode(), cwd=authority.repository_id)
     oid_width = 40 if authority.environment.object_format == "sha1" else 64
-    await git.run("update-index", "--index-info", cwd=authority.repository_id,
-        stdin=f"0 {'0' * oid_width}\ttests/vectors/plan_manifest.json\n".encode())
+    updates = f"0 {'0' * oid_width}\ttests/vectors/plan_manifest.json\n".encode()
+    if target_entry is not None:
+        updates += target_entry + b"\n"
+    await git.run("update-index", "--index-info", cwd=authority.repository_id, stdin=updates)
     fixture_tree = (await git.run("write-tree", cwd=authority.repository_id)).strip().decode()
     base = (await git.run("commit-tree", fixture_tree, cwd=authority.repository_id,
                          stdin=b"full committed-tree maintenance fixture\n")).strip().decode()

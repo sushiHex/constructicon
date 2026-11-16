@@ -13,8 +13,7 @@ import sys
 from pathlib import Path
 
 import pytest
-
-from constructicon.core.maintenance import CHANNEL_TARGET_PATH
+from tests.substrate.test_channel_reply_oracle import BASE_FIXTURE
 
 ROOT = Path(__file__).resolve().parents[3]
 BATTERY = ROOT / "tests/channel_reply_battery.py"
@@ -39,7 +38,7 @@ def battery(source: Path) -> dict[str, list[dict[str, object]]]:
 
 @pytest.fixture(scope="module")
 def base_report():
-    return battery(ROOT / CHANNEL_TARGET_PATH)
+    return battery(BASE_FIXTURE)
 
 
 def test_fixture_candidate_matches_base_on_every_fault(base_report):

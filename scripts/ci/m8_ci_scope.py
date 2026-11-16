@@ -33,7 +33,8 @@ ROOT_MARKDOWN = frozenset({"README.md", "AGENTS.md", "CLAUDE.md", "CONTRIBUTING.
 ROOT_PROSE = frozenset({"AGENTS.md", "CLAUDE.md"})
 DOCS_PROSE = frozenset({
     "docs/AGENT_HANDOFF.md", "docs/ARCHITECTURE.md", "docs/CONTRIBUTING.md",
-    "docs/WORK_TRACKING.md", "docs/plans/README.md", "docs/plans/MANIFEST.sha256",
+    "docs/WORK_TRACKING.md", "docs/operator-preparation.md",
+    "docs/plans/README.md", "docs/plans/MANIFEST.sha256",
     "docs/plans/handoffs/M8-implementation-record.md",
     "docs/plans/handoffs/M9-live-selector-record.md",
 })

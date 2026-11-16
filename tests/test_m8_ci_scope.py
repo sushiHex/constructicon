@@ -33,6 +33,9 @@ def _entry(
         (_entry("AGENTS.md"),),
         (_entry("AGENTS.md", status="D"),),
         (_entry("CLAUDE.md"),),
+        (_entry("docs/operator-preparation.md"),),
+        (_entry("docs/operator-preparation.md", status="A"),),
+        (_entry("docs/operator-preparation.md", status="D"),),
         (_entry("docs/CONTRIBUTING.md", status="A"),),
         (_entry("docs/ARCHITECTURE.md", status="A"),),
         (_entry("docs/CONTRIBUTING.md", status="D"),),
@@ -57,7 +60,12 @@ def test_only_plain_allowlisted_prose_changes_select_docs(
         _entry(".github/pull_request_template.md"),
         _entry("notes/example.md"),
         _entry("docs/unknown.md"),
+        _entry("docs/operator-preparation-new.md"),
+        _entry("docs/operator-preparation.md", new_mode="100755"),
+        _entry("docs/operator-preparation.md", status="A", new_mode="120000"),
+        _entry("docs/operator-preparation.md", old_mode="120000"),
         _entry("docs/plans/handoffs/M8-N6-host-session.md"),
+        _entry("docs/plans/milestones/M8-live-executors-rev2.md"),
         _entry("docs/plans/handoffs/M9-live-selector-record-new.md"),
         _entry("docs/plans/handoffs/M9-operator-trial.md"),
         _entry("docs/plans/handoffs/M9-live-selector-record.md", new_mode="100755"),
@@ -77,8 +85,9 @@ def test_unknown_path_mode_or_status_selects_full(entry: scope.DiffEntry) -> Non
     assert scope.classify_changes((entry,)) == "full"
 
 
-def test_one_unknown_entry_makes_the_whole_change_full() -> None:
-    entries = (_entry("docs/ARCHITECTURE.md"), _entry("tests/test_behavior.py"))
+@pytest.mark.parametrize("prose", ["docs/ARCHITECTURE.md", "docs/operator-preparation.md"])
+def test_one_unknown_entry_makes_the_whole_change_full(prose: str) -> None:
+    entries = (_entry(prose), _entry("tests/test_behavior.py"))
     assert scope.classify_changes(entries) == "full"
 
 
@@ -138,16 +147,18 @@ def git_repository(tmp_path: Path) -> tuple[Path, str]:
     _run_git(repository, "config", "user.email", "ci@example.invalid")
     (repository / "docs").mkdir()
     (repository / "docs/ARCHITECTURE.md").write_text("guide\n", encoding="utf-8")
+    (repository / "docs/operator-preparation.md").write_text("census\n", encoding="utf-8")
     (repository / "README.md").write_text("readme\n", encoding="utf-8")
     (repository / "source.py").write_text("value = 1\n", encoding="utf-8")
     return repository, _commit(repository, "base")
 
 
+@pytest.mark.parametrize("path", ["docs/ARCHITECTURE.md", "docs/operator-preparation.md"])
 def test_repository_classifier_uses_the_committed_docs_diff(
-    git_repository: tuple[Path, str],
+    git_repository: tuple[Path, str], path: str,
 ) -> None:
     repository, base = git_repository
-    (repository / "docs/ARCHITECTURE.md").write_text("changed\n", encoding="utf-8")
+    (repository / path).write_text("changed\n", encoding="utf-8")
     head = _commit(repository, "docs")
     assert scope.classify_repository(repository, base, head) == "docs"
 
@@ -188,23 +199,25 @@ def test_repository_classifier_selects_full_for_code(
     assert scope.classify_repository(repository, base, head) == "full"
 
 
+@pytest.mark.parametrize("path", ["docs/ARCHITECTURE.md", "docs/operator-preparation.md"])
 def test_repository_classifier_selects_full_for_an_executable_doc(
-    git_repository: tuple[Path, str],
+    git_repository: tuple[Path, str], path: str,
 ) -> None:
     repository, base = git_repository
-    _run_git(repository, "update-index", "--chmod=+x", "docs/ARCHITECTURE.md")
+    _run_git(repository, "update-index", "--chmod=+x", path)
     _run_git(repository, "commit", "-m", "executable docs")
     head = _run_git(repository, "rev-parse", "HEAD")
     assert scope.classify_repository(repository, base, head) == "full"
 
 
+@pytest.mark.parametrize("path", ["docs/ARCHITECTURE.md", "docs/operator-preparation.md"])
 def test_repository_classifier_selects_full_for_a_symlink_record(
-    git_repository: tuple[Path, str],
+    git_repository: tuple[Path, str], path: str,
 ) -> None:
     repository, base = git_repository
     blob = _run_git(repository, "hash-object", "-w", "--stdin", input_bytes=b"ARCHITECTURE.md")
     _run_git(repository, "update-index", "--add", "--cacheinfo",
-             f"120000,{blob},docs/ARCHITECTURE.md")
+             f"120000,{blob},{path}")
     _run_git(repository, "commit", "-m", "symlink docs")
     head = _run_git(repository, "rev-parse", "HEAD")
     assert scope.classify_repository(repository, base, head) == "full"
@@ -284,8 +297,11 @@ def test_docs_validation_accepts_the_actual_repository() -> None:
     scope.verify_docs(Path(__file__).parents[1])
 
 
-def test_docs_validation_refuses_a_missing_relative_target(docs_repository: Path) -> None:
-    (docs_repository / "README.md").write_text("[missing](docs/missing.md)\n")
+@pytest.mark.parametrize("path", ["README.md", "docs/operator-preparation.md"])
+def test_docs_validation_refuses_a_missing_relative_target(
+    docs_repository: Path, path: str,
+) -> None:
+    (docs_repository / path).write_text("[missing](missing.md)\n")
     with pytest.raises(scope.ScopeError, match="missing relative link"):
         scope.verify_docs(docs_repository)
 

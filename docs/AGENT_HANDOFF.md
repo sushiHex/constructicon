@@ -16,6 +16,44 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## The accepted gen19 stored-reply contribution reaches normal source review
+
+The accepted generation-19 WRITE produced the `_stored_reply` extraction now
+used by `reply_for` and `acknowledge`. A later data-only window recovered its
+exact source blob, reconstructed the full historical tested tree in private
+quarantine, and passed the trusted AST extraction exam without executing the
+candidate. The target's base bytes still matched main, so this delivery copies
+the verified blob rather than generating a replacement.
+
+The helper keeps both callers' missing-port refusal text, lookup inputs, locking
+and validation order. Existing channel acceptance and corruption tests cover
+the behavior. The normal PR gate checks the new main tree; the historical
+attestation is not reused as authority for that tree or a new live profile.
+
+CI exposed an invalid test assumption: reading the live target no longer gives
+a pre-contribution base after this merge. The exact historical base is now
+byte-pinned test data. Existing test Git worlds substitute only that target and
+preserve the remaining blobs and modes; fault calibration compares historical
+base with candidate rather than comparing the candidate with itself. Production
+refusal of an already-completed base remains intact. This fixture correction
+never selects an old base for a live operation.
+
+Raw candidate commit metadata, authorization, journal and captures stay private.
+The pin receipt binds a freshly observed root-custody authorization to the sealed
+journal and attestation; no independently available historical approval-byte
+digest was claimed. The VM was normally parked and custody released after fresh
+idle observations. The earlier preflight quoting failure was an operator error;
+the corrected window used frozen, compiled source and made no model attempt.
+
+## The operator preparation census is explicitly descriptive prose
+
+The CI prose allowlist includes only the exact `docs/operator-preparation.md`
+path. Its census has no executable consumer; future executable use must remove
+that exemption first. Ordinary additions, modifications and deletions use the
+prose route; mixed code, unknown paths, executable/symlink modes and frozen
+plans retain full CI. Link and archive validation still run. This introducing
+mixed-code delivery itself runs full CI; it does not use its own new exemption.
+
 ## Containment proof lanes keep measured foundation headroom
 
 The common-runtime containment group now runs in the combined lane, once and

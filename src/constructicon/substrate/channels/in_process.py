@@ -141,13 +141,7 @@ class InProcessChannel:
             if request is None:
                 return None
             request = self._complete_request(request)
-            if request.reply_port is None:
-                raise JournalDamaged(f"channel request {request_id} pins no reply port")
-            reply_id = reply_message_id(
-                request_id=request.message_id,
-                reply_port=request.reply_port,
-            )
-            stored = self._by_id.get(str(reply_id))
+            stored = self._stored_reply(request, request_id)
             if stored is None:
                 return None
             return _detached_message(self._complete_reply(request, stored))
@@ -260,15 +254,7 @@ class InProcessChannel:
             request = self._by_id.get(str(message_id))
             if request is not None and request.kind == "request":
                 request = self._complete_request(request)
-                if request.reply_port is None:
-                    raise JournalDamaged(
-                        f"channel request {message_id} pins no reply port"
-                    )
-                reply_id = reply_message_id(
-                    request_id=request.message_id,
-                    reply_port=request.reply_port,
-                )
-                reply = self._by_id.get(str(reply_id))
+                reply = self._stored_reply(request, message_id)
                 if reply is not None:
                     # Never let an explicit delivery observation heal the
                     # atomic acknowledgement missing from a torn reply.
@@ -507,6 +493,20 @@ class InProcessChannel:
                 f"reply {message.message_id} names request {message.reply_to}, which is not stored"
             )
         return self._complete_reply(request, message)
+
+
+    def _stored_reply(
+        self,
+        request: ChannelMessage,
+        request_id: Digest,
+    ) -> ChannelMessage | None:
+        if request.reply_port is None:
+            raise JournalDamaged(f"channel request {request_id} pins no reply port")
+        reply_id = reply_message_id(
+            request_id=request.message_id,
+            reply_port=request.reply_port,
+        )
+        return self._by_id.get(str(reply_id))
 
 
 def _detached_message(message: ChannelMessage) -> ChannelMessage:

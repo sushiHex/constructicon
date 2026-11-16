@@ -566,14 +566,14 @@ async def test_a_replay_that_diverges_stops_there_and_fails(
 
 
 async def contained_world(launcher, tmp_path):
-    """The provisioned launcher over the full committed tree, for this task."""
+    """The provisioned launcher over the synthetic pre-contribution channel tree."""
     physical = MaintenanceNativeLauncher(
         **{item.name: getattr(launcher, item.name) for item in fields(LinuxLauncher)},
     )
     journal = SqliteJournal(tmp_path / "hostile.sqlite")
     runner = unqualified(tmp_path, physical, journal=journal)
     git = runner.authority
-    base = await committed_tree_base(git)
+    base = await committed_tree_base(git, channel=True)
     source = git._run("show", f"{base}:{CHANNEL_TARGET_PATH}").stdout.encode()
     assert source == BASE
     assert b"__pycache__/\n" in git._run("show", f"{base}:.gitignore").stdout.encode()
