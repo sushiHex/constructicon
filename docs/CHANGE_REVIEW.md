@@ -128,3 +128,37 @@ contract, never as `constructicon.std/AdviceResponse`. This delivery adds no
 credential and no live authority, and has made no model call: its evidence is
 [credential-free](../tests/api/test_change_review_advice.py), over a scripted
 peer.
+
+### Prepare the exact input offline
+
+From the reviewed checkout and its project environment, use the packet preparer
+before selecting a host window. For example, this compares the merged opt-in
+change itself; all three full commits must already exist locally:
+
+```text
+python -I -B scripts/ops/change_review_input.py --repository LOCAL_REPOSITORY --controller cf81ccf92d395cd704dcf9d8d29b6470ca469563 --before 6857f0d80f94aea353cf748db2d634f47be73705 --after cf81ccf92d395cd704dcf9d8d29b6470ca469563 --path examples/change_review.py --out FRESH_PRIVATE_PACKET_DIRECTORY
+```
+
+The entry reads the exact committed blobs through the existing source selector
+and AST comparator. It checks the imported summary producer and the three
+instruction-guard source files against the selected controller's raw Git blobs;
+checkout conversion or a modified source refuses before output is claimed.
+It creates `summary.json`, the exact `instruction.txt`, and `packet.json` in one
+fresh directory. Existing output refuses; an interrupted partial directory is
+retained and must not be reused. Keep the repository, imported source and output
+parent trusted while preparing; this is a local byte comparison, not custody
+against a concurrent writer or a verification of every package dependency.
+
+Only `summary.json` is the consumer input. Its SHA-256 binds the exact transferred
+bytes, while the instruction digest and key bind the instruction the adapter
+would send. The packet's source references stay local; repository paths and
+source text are absent from the instruction. The example produces one added
+symbol (`model_advice`) and two changed symbols (`execute`, `main`). This supports
+test/follow-up suggestions from a bounded summary, not a source or coverage audit.
+
+The packet marks its graph/component/run pins provisional and execution
+unauthorized. They are preparation facts only. The installed host must derive
+and compare its actual pins before a separately approved permit can be placed.
+No provider, operator binding, boot, generation, custody, qualification or cost
+observation is supplied by packet preparation. The existing owner challenge and
+cleanup obligations remain part of the separately selected live window.
