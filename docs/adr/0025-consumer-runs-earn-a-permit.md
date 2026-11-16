@@ -200,9 +200,10 @@ reaches a vendor, and has one consumer (I6).
   workspace and only vendor-session egress (`codex_host.py:62-91`), so an
   injection gains no mediated tool or workspace authority. What it does to
   the reply, to vendor-side behavior and to token use is not proven.
-- The node accepts only a success whose output is non-empty text within a
-  fixed byte bound, as the READ qualification node does
-  (`api/qualification.py:99-104`). The reply is stored as text. Nothing
+- The node accepts only a success whose output is non-empty text, as the
+  READ qualification node does (`api/qualification.py:99-104`), and within
+  a fixed byte bound, which is a new requirement for this consumer: the
+  qualification node bounds nothing. The reply is stored as text. Nothing
   parses it for control: it is never an effect subject, an approval, a
   gate input or a branch condition (I1).
 
@@ -397,8 +398,8 @@ The three likeliest ways this decision weakens a guarantee.
    a key prefix, a count or an epoch range for convenience.
    *Guard:* host assembly is the route's only constructor and has no reason
    parameter. A test asserts the published reasons and `available: false`
-   before, during and after a permitted run. A mutation needle fails on
-   any reason argument in `src`. The validator keeps one epoch for every
+   before, during and after a permitted run. A mutation that makes the
+   route's trusted assembly pass a reason tuple must fail a test. The validator keeps one epoch for every
    dispatching permit (`core/qualification.py:94-101`).
 2. **Data reaches the vendor that the owner did not approve.** A different
    packet is submitted under a permitted key; or the instruction builder
