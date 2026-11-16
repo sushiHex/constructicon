@@ -312,8 +312,9 @@ that adapter revisions hash; see "What moves".
 **(c) A single-use permit per consumer run.** Adopted, in the form of (d).
 
 **(d) The smallest form of (c): no new permit type, literal or field.**
-Adopted. The consumer reuses the READ permit exactly as M9 does, and binds
-its task data through the run's identity.
+Adopted. The consumer reuses the READ permit's unchanged law, as the
+separately reviewed M9 consumer does, for this one reviewed graph only (see
+"Exact authority delta"). It binds its task data through the run's identity.
 
 - *Adds:* one nominal output contract and one installed entry.
   *Retires:* availability as a goal for consumers.
@@ -428,9 +429,17 @@ this is M9 again with a different prompt.*
 
 ## Exact authority delta
 
-None. This record supersedes no clause of ADR 0018, 0021 or 0024. It
-restates, for consumers, the law that already governs qualification and
-maintenance runs. Publishing this proposal changes no current-truth
+No wire, schema or invariant delta. This record supersedes no clause of
+ADR 0018, 0021 or 0024, and reuses the permit law unchanged.
+
+There is one authority delta, and acceptance would grant it. The permit
+type is documented for exactly one fixed qualification run
+(`core/qualification.py:1-8`, `:40-48`). The M9 selector is a separately
+reviewed fixed consumer, not a precedent for ordinary consumers. Acceptance
+would add one more accepted use: this specific, reviewed change-review
+advice graph, named by its exact component versions. It would not authorize
+arbitrary graphs, a family of graphs, or any other use of an existing
+permit, and it repurposes no permit already minted. Publishing this proposal changes no current-truth
 document. Only after a separately authorized implementation merges would
 `ARCHITECTURE.md` record that the READ permit also serves consumer advice.
 
