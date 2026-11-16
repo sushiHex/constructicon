@@ -92,6 +92,7 @@ def test_scope_conditions_select_docs_or_all_existing_code_jobs() -> None:
     ("AGENTS.md", "docs"), ("CLAUDE.md", "docs"), ("README.md", "full"),
     ("CONTRIBUTING.md", "full"),
     ("docs/ARCHITECTURE.md", "docs"), ("source.py", "full"),
+    ("docs/operator-preparation.md", "docs"),
     ("docs/plans/handoffs/M8-implementation-record.md", "docs"),
     ("docs/plans/handoffs/M8-N6-host-session.md", "full"),
     ("docs/unknown.md", "full"),

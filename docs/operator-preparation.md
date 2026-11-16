@@ -6,6 +6,11 @@ procedure and explicit owner authorization remain prerequisites. Host absence,
 custody and current boot are host observations, not facts established offline.
 See [operator instructions](../scripts/ops/README.md) for the complete contracts.
 
+Keep this file descriptive: no runnable procedure, extracted fixture or executable
+configuration belongs here. Before adding an executable consumer of its contents,
+remove its exact path from `DOCS_PROSE` in `scripts/ci/m8_ci_scope.py` so changes
+require full CI. The linked procedures and their own checks retain their contracts.
+
 | Consumer | Entry and locations | Coverage and limit |
 | --- | --- | --- |
 | Claude READ, including controller and launch verification and prepared withdrawal | `python -I -B scripts/ops/claude_read_session.py describe` exposes preparation fields, phase checks and readback names, with selected evidence slots. `claude_read_window.py describe` lists the fixed sequence. `prepare-bindings` derives role-named paths from installation facts and a fresh namespace; the window keeps `work/<phase>/package`, checked receipts and next bindings, except precompiled withdrawal at `evidence/cleanup-package`. Each transport claims a remote directory named from namespace, phase and package manifest; `readback_spec` maps each output to its declared source and local evidence slot. | The generated READ Linux rehearsal exercises the sequence, actual shell, readbacks and receipt gates with fake external boundaries. Controller verification is a READ phase, not a general controller installer/preparer. An uncertain withdrawal still requires the separately reviewed recovery disposition. |
