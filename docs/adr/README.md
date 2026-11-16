@@ -83,8 +83,10 @@ owner's 2026-11-05 adoption for [#376](https://github.com/sushiHex/constructicon
 The decision allows bounded native usage observations in the existing journal
 and preserves unknown monetary values and the previous custody decisions.
 
-Proposed [ADR 0025](0025-consumer-runs-earn-a-permit.md), for
+Accepted [ADR 0025](0025-consumer-runs-earn-a-permit.md), for
 [#442](https://github.com/sushiHex/constructicon/issues/442), keeps native
 executors unavailable and admits an ordinary consumer run, the change-review
-advice route, only as one owner-permitted run. It is not accepted and
-authorizes no source change, credential, host operation or model call.
+advice route, only as one owner-permitted run. The owner accepted it on
+2026-11-16 ([decision record](https://github.com/sushiHex/constructicon/issues/442#issuecomment-6914406703));
+acceptance authorizes credential-free construction of that one graph, and no
+live window, permit or model call.

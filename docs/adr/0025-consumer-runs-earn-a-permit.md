@@ -1,10 +1,10 @@
 # 0025 — Consumer runs earn a permit; native executors stay unavailable
 
-**Status:** proposed, 2026-11-16. Refs
-[#442](https://github.com/sushiHex/constructicon/issues/442). Not accepted.
-It authorizes no source change, installation, credential, host operation or
-model call. On 2026-11-16 the owner put this decision before any route; the
-route waits for acceptance of this record.
+**Status:** accepted, 2026-11-16. Refs
+[#442](https://github.com/sushiHex/constructicon/issues/442); decision record:
+[#442 comment](https://github.com/sushiHex/constructicon/issues/442#issuecomment-6914406703).
+Acceptance authorizes credential-free construction of the route for this one
+graph only. It authorizes no live window, permit or model call.
 
 Accepted [ADR 0018](0018-live-executors-are-leased-contained-processes.md),
 [ADR 0021](0021-subscription-executors-bind-operator-stores.md) and
