@@ -35,7 +35,15 @@ hostile members, and exercise failure/cancellation cleanup. Portable Windows
 tests substitute only guard acquisition/inheritance; native symlink and Linux
 containment evidence remain the physical CI lane's responsibility.
 
-CI exposed portable Pi and Claude worlds passing virtual guard descriptors to\nthe new Git writer. Their opt-in test substitute now checks registered simulated\ncustody before and after the real pump; physical Linux fixtures keep native\nguard inheritance. Reused virtual identifiers prove no OS ownership. The Claude\nfixture now positively accepts a disk tar above its stdout cap and refuses an\ninventory that crosses that cap. These fixture corrections do not relax the\nproduction guard, exact-tree law or configured limits.\n\nThe ordinary READ provider has no intrinsic revision. Its changed source moves
+CI exposed portable Pi and Claude worlds passing virtual guard descriptors to
+the new Git writer. Their opt-in test substitute now checks registered simulated
+custody before and after the real pump; physical Linux fixtures keep native
+guard inheritance. Reused virtual identifiers prove no OS ownership. The Claude
+fixture now positively accepts a disk tar above its stdout cap and refuses an
+inventory that crosses that cap. These fixture corrections do not relax the
+production guard, exact-tree law or configured limits.
+
+The ordinary READ provider has no intrinsic revision. Its changed source moves
 the Claude READ fixture revision and the contained WRITE workspace's existing
 source closure, plus M9's whole-package installed-source identity. No executor
 adapter/protocol or gate/check-set source changes. Assemblies that bind the changed
