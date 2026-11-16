@@ -97,7 +97,7 @@ async def test_real_workspace_acquires_the_pinned_ref(tmp_path: Path) -> None:
 
 
 async def test_exact_archive_materializes_under_its_distinct_bound(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, portable_git_guard,
 ) -> None:
     root = tmp_path / "fixture"
     fixture.prepare_fixture(root)
@@ -107,11 +107,16 @@ async def test_exact_archive_materializes_under_its_distinct_bound(
         expected_policy_sha256="0" * 64, limits=READ_WORKER_LIMITS,
     )
     provider = fixture.workspace_provider(root, launcher)
+    held = []
 
     @asynccontextmanager
     async def fake_guard(paths: object):
         paths.payload.mkdir(parents=True, exist_ok=True)
-        yield 0
+        held.append(0)
+        try:
+            yield 0
+        finally:
+            assert held.pop() == 0
 
     async def fake_dispose(closure: object, paths: object) -> bool:
         shutil.rmtree(paths.payload)
@@ -119,6 +124,19 @@ async def test_exact_archive_materializes_under_its_distinct_bound(
 
     monkeypatch.setattr(contained, "acquisition_guard", fake_guard)
     monkeypatch.setattr(contained, "dispose_acquisition", fake_dispose)
+    portable_git_guard(lambda descriptor: descriptor == 0 and held == [0])
+    # Unowned authority metadata reads legitimately have no acquisition guard;
+    # the opt-in OS substitute must delegate them to the actual bounded pump.
+    inventory = await provider._export("ls-tree", "-r", "-z", "--full-tree", fixture.BASE)
+    assert 16 < len(inventory) < 8192 and held == []
+    original_extract = provider.authority.extract_exact
+    sizes = []
+
+    def extract(inventory, archive, destination):
+        sizes.append((len(inventory), archive.stat().st_size))
+        return original_extract(inventory, archive, destination)
+
+    monkeypatch.setattr(provider.authority, "extract_exact", extract)
     acquired = await provider.acquire(_context())
     completed = False
     try:
@@ -130,14 +148,25 @@ async def test_exact_archive_materializes_under_its_distinct_bound(
     assert (Path(acquired.resource.path) / fixture.FILE).read_bytes() == fixture.CONTENT
     assert (await provider.close(acquired, "discard")).disposition == "discarded"
 
-    # The real one-file tar exceeds this reduced bound. A too-small bound
-    # must fail at the Git output pump, not accidentally accept a short file.
+    # The real one-file tar exceeds this reduced stdout bound and still uses
+    # the exact disk extractor; no tar bytes need to fit in the output pump.
     provider.launcher = replace(provider.launcher, limits=replace(
         fixture.MATERIALIZATION_LIMITS, artifact_bytes=8192,
     ))
     acquired = await provider.acquire(_context(run_id="second"))
+    await acquired.materialize()
+    assert (Path(acquired.resource.path) / fixture.FILE).read_bytes() == fixture.CONTENT
+    assert len(sizes) == 2 and sizes[-1][0] < 8192 < sizes[-1][1]
+    assert (await provider.close(acquired, "discard")).disposition == "discarded"
+
+    # Inventory still crosses stdout: positively exercise a bound that binds.
+    provider.launcher = replace(provider.launcher, limits=replace(
+        fixture.MATERIALIZATION_LIMITS, artifact_bytes=16,
+    ))
+    acquired = await provider.acquire(_context(run_id="third"))
     with pytest.raises(ContractViolation, match="materialization bound"):
         await acquired.materialize()
+    assert len(sizes) == 2 and not acquired.resource.ready
     assert (await provider.close(acquired, "discard")).disposition == "discarded"
 
 

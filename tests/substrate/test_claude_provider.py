@@ -71,7 +71,7 @@ async def portable_dispose(closure, paths, *, disposition="discard", candidate_r
 
 
 @pytest.fixture
-async def assembled(provider, monkeypatch, tmp_path):
+async def assembled(provider, monkeypatch, tmp_path, portable_git_guard):
     expected_base = provider.authority.resolve_ref("refs/heads/main")
     vendor = tmp_path / "vendor"
     vendor.mkdir()
@@ -212,6 +212,7 @@ async def assembled(provider, monkeypatch, tmp_path):
 
     monkeypatch.setattr(native, "acquisition_guard", guard)
     monkeypatch.setattr(contained, "acquisition_guard", guard)
+    portable_git_guard(lambda descriptor: descriptor == 77 and state.guards > 0)
     monkeypatch.setattr(native, "EgressRelay", Relay)
     monkeypatch.setattr(native, "dispose_acquisition", portable_dispose)
     monkeypatch.setattr(contained, "dispose_acquisition", portable_dispose)

@@ -90,6 +90,45 @@ def portable_acquisition_namespace(monkeypatch):
     monkeypatch.setattr(acquisition, "_remove_at_namespace", remove)
 
 
+@pytest.fixture
+def portable_git_guard(monkeypatch):
+    """Opt in only for worlds whose acquisition guard is explicitly simulated.
+
+    Virtual descriptors cannot be inherited even on Linux. Keep real Git's pump,
+    disk output and extraction, but check the world's simulated custody before
+    and after its joined call instead of passing that virtual fd to the OS.
+    Physical Linux fixtures never request this substitute.
+    Reused virtual IDs prove known simulated custody, not exact physical ownership.
+    """
+    from constructicon.substrate.git.process import GitProcess
+
+    original = GitProcess.run
+    checks = []
+
+    async def run(self, *args, **kwargs):
+        descriptor = kwargs.get("guard")
+        if descriptor is None:
+            return await original(self, *args, **kwargs)
+        held = [check for check in checks if check(descriptor) is True]
+        assert held, "Git entered outside simulated guard custody"
+        kwargs["guard"] = None
+        try:
+            return await original(self, *args, **kwargs)
+        finally:
+            assert any(check(descriptor) is True for check in held), (
+                "Git outlived simulated guard custody"
+            )
+
+    def substitute(held):
+        # A test can request both assembled READ and WRITE worker worlds. Keep
+        # one pump wrapper and each world's own affirmative custody predicate.
+        checks.append(held)
+        if len(checks) == 1:
+            monkeypatch.setattr(GitProcess, "run", run)
+
+    return substitute
+
+
 LEASE_TTL_S = 30.0
 TRIAGE_SCRIPT = {"triage": {"title": "fix the flaky retry loop", "risk": "low"}}
 

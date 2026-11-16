@@ -64,7 +64,7 @@ class PortableLauncher(SubprocessLauncher):
 
 
 @pytest.fixture
-async def world(tmp_path, monkeypatch, portable_acquisition_namespace):
+async def world(tmp_path, monkeypatch, portable_acquisition_namespace, portable_git_guard):
     from constructicon.substrate.git import acquisition, contained
 
     locks = {}
@@ -96,6 +96,7 @@ async def world(tmp_path, monkeypatch, portable_acquisition_namespace):
     monkeypatch.setattr(acquisition, "shutil", SimpleNamespace(rmtree=portable_remove))
     seed_authority(tmp_path, {"fixture.txt": "leased workspace bytes"})
     launcher = PortableLauncher(tmp_path / "runtime")
+    portable_git_guard(lambda descriptor: descriptor in launcher.held_guards.values())
     system, journal, executor, workspace = await assemble(tmp_path, launcher)
     return system, journal, executor, workspace, launcher, facts
 

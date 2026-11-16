@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import io
+import os
 import random
 import sys
 import tarfile
 import threading
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -26,6 +29,7 @@ from constructicon.substrate.executors.linux import ProcessLimits
 from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
 from constructicon.substrate.git.authority import GitAuthority
 from constructicon.substrate.git.contained import ContainedWorkspaceProvider
+from constructicon.substrate.git.process import GitProcess
 from tests.gitworld import push_to_main, seed_authority
 from tests.substrate.test_linux_containment import launcher as launcher
 
@@ -69,6 +73,222 @@ def provider(tmp_path):
         provider_id="test-workspace", posture=Posture.READ,
         launcher=SimpleNamespace(limits=ProcessLimits()),
     )
+
+
+@pytest.fixture
+def read_export(provider, tmp_path, monkeypatch):
+    # Windows cannot inherit the physical acquisition guard. Substitute only
+    # that primitive; the real Git pump, disk tar, extractor and comparison run.
+    if sys.platform != "linux":
+        from constructicon.substrate.git import contained
+
+        @asynccontextmanager
+        async def guard(paths):
+            with (tmp_path / "portable.guard").open("wb") as stream:
+                yield stream.fileno()
+
+        monkeypatch.setattr(contained, "acquisition_guard", guard)
+        original = GitProcess.run
+
+        async def run(self, *args, **kwargs):
+            if kwargs.get("guard") is not None:
+                os.fstat(kwargs["guard"])
+                kwargs["guard"] = None
+            return await original(self, *args, **kwargs)
+
+        monkeypatch.setattr(GitProcess, "run", run)
+    return provider
+
+
+async def test_read_disk_export_crosses_stdout_bound_and_verifies_exact_tree(
+    read_export, monkeypatch,
+):
+    provider = read_export
+    contents = "bounded tree bytes\n" * 512
+    base = push_to_main(Path(provider.authority.repository_id),
+                        {"nested/content.txt": contents}, "disk export")
+    provider.launcher.limits = ProcessLimits(artifact_bytes=1024)
+    # Positively exercise the old failure through the real producer/pump.
+    with pytest.raises(ContractViolation, match="output exceeds"):
+        await provider._export("archive", "--format=tar", base)
+    original = GitProcess.run
+    observed = []
+
+    async def run(self, *args, **kwargs):
+        assert kwargs.get("guard") is not None
+        output = await original(self, *args, **kwargs)
+        if args[0] == "archive":
+            assert output == b"", "tar crossed the stdout pump"
+            archive = Path(next(arg.removeprefix("--output=") for arg in args
+                                if arg.startswith("--output=")))
+            assert archive.is_absolute() and archive.stat().st_size > self.limits.artifact_bytes
+            observed.append(archive)
+        return output
+
+    monkeypatch.setattr(GitProcess, "run", run)
+    acquired = await provider.acquire(context())
+    await acquired.materialize()
+    view = acquired.resource
+    assert view.ready and (Path(view.path) / "nested/content.txt").read_text() == contents
+    assert len(observed) == 1 and not observed[0].exists()
+    assert set(view.paths.payload.iterdir()) == {Path(view.path)}
+    assert provider.authority.resolve_ref("refs/heads/main") == base
+
+
+@pytest.mark.parametrize("attribute", ["export-ignore", "export-subst"])
+async def test_read_workspace_refuses_lossy_git_archive(read_export, attribute):
+    provider = read_export
+    push_to_main(Path(provider.authority.repository_id), {
+        ".gitattributes": f"stamp.txt {attribute}\n", "stamp.txt": "$Format:%H$\n",
+    }, "lossy archive")
+    acquired = await provider.acquire(context())
+    with pytest.raises(ContractViolation, match="differs from the exact Git tree"):
+        await acquired.materialize()
+    assert not acquired.resource.ready and not Path(acquired.resource.path).exists()
+    assert not (acquired.resource.paths.payload / "snapshot.tar").exists()
+
+
+@pytest.mark.parametrize("mode", ["100755", "120000"])
+async def test_read_disk_export_preserves_git_executable_and_internal_symlink(
+    read_export, tmp_path, mode,
+):
+    provider = read_export
+    authority = provider.authority
+    if mode == "120000" and os.name == "nt":
+        probe = tmp_path / "symlink-probe"
+        try:
+            probe.symlink_to("target")
+        except OSError as exc:
+            if exc.winerror == 1314:
+                pytest.skip("Windows account cannot create symbolic links")
+            raise
+        probe.unlink()
+    base = authority.resolve_ref("refs/heads/main")
+    # Git's actual tree and archive are the producer, including on platforms
+    # where checkout mode handling cannot create this tree representation.
+    raw = "test_calc.py" if mode == "120000" else "#!/bin/sh\n"
+    oid = authority._run("hash-object", "-w", "--stdin", input_text=raw).stdout.strip()
+    inventory = authority._run("ls-tree", base).stdout
+    tree = authority._run(
+        "mktree", input_text=inventory + f"{mode} blob {oid}\trun\n",
+    ).stdout.strip()
+    commit = authority._run(
+        "commit-tree", tree, "-p", base, input_text="tree modes\n",
+    ).stdout.strip()
+    authority._run("update-ref", "refs/heads/main", commit)
+    acquired = await provider.acquire(context())
+    await acquired.materialize()
+    exported = Path(acquired.resource.path) / "run"
+    assert acquired.resource.ready
+    if mode == "120000":
+        assert exported.is_symlink() and os.readlink(exported) == raw
+    else:
+        assert exported.read_text() == raw
+        if os.name != "nt":
+            assert exported.stat().st_mode & 0o111
+    assert not (acquired.resource.paths.payload / "snapshot.tar").exists()
+
+
+@pytest.mark.parametrize("damage", ["traversal", "external-symlink", "blob", "archive-failure"])
+async def test_read_export_refuses_hostile_or_failed_archive_and_cleans_its_claim(
+    read_export, monkeypatch, tmp_path, damage,
+):
+    provider = read_export
+    original = GitProcess.run
+
+    async def run(self, *args, **kwargs):
+        output = await original(self, *args, **kwargs)
+        if args[0] == "archive":
+            archive = Path(next(arg.removeprefix("--output=") for arg in args
+                                if arg.startswith("--output=")))
+            assert archive.is_file() and archive.stat().st_size > 0
+            if damage == "archive-failure":
+                raise ContractViolation("scripted archive failed after writing")
+            with tarfile.open(archive, "w") as tar:
+                member = tarfile.TarInfo("../escaped" if damage == "traversal" else "calc.py")
+                if damage == "external-symlink":
+                    member.type, member.linkname = tarfile.SYMTYPE, "../../escaped"
+                    tar.addfile(member)
+                else:
+                    member.size = 5
+                    tar.addfile(member, io.BytesIO(b"wrong"))
+        return output
+
+    monkeypatch.setattr(GitProcess, "run", run)
+    acquired = await provider.acquire(context())
+    error = (tarfile.FilterError if damage in {"traversal", "external-symlink"}
+             else ContractViolation)
+    with pytest.raises(error):
+        await acquired.materialize()
+    assert not acquired.resource.ready and not Path(acquired.resource.path).exists()
+    assert not (acquired.resource.paths.payload / "snapshot.tar").exists()
+    assert not (acquired.resource.paths.payload / "escaped").exists()
+    assert not (tmp_path / "escaped").exists()
+
+
+@pytest.mark.parametrize("existing", ["archive", "workspace", "archive-symlink"])
+async def test_read_export_refuses_existing_neighbors_without_overwrite_or_deletion(
+    read_export, tmp_path, existing,
+):
+    acquired = await read_export.acquire(context())
+    view = acquired.resource
+    view.paths.payload.mkdir(parents=True)
+    sentinel = tmp_path / "sentinel"
+    sentinel.write_bytes(b"not this export's bytes")
+    archive = view.paths.payload / "snapshot.tar"
+    if existing == "workspace":
+        Path(view.path).mkdir()
+        neighbor = Path(view.path) / "sentinel"
+        neighbor.write_bytes(sentinel.read_bytes())
+    elif existing == "archive-symlink":
+        try:
+            archive.symlink_to(sentinel)
+        except OSError as exc:
+            if os.name == "nt" and exc.winerror == 1314:
+                pytest.skip("Windows account cannot create symbolic links")
+            raise
+        neighbor = archive
+    else:
+        archive.write_bytes(sentinel.read_bytes())
+        neighbor = archive
+    with pytest.raises(FileExistsError):
+        await acquired.materialize()
+    assert not view.ready and neighbor.read_bytes() == sentinel.read_bytes()
+    if existing == "archive-symlink":
+        assert archive.is_symlink()
+    if existing == "workspace":
+        assert not archive.exists()
+
+
+async def test_read_archive_cancellation_removes_claimed_tar_before_return(
+    read_export, monkeypatch,
+):
+    original = GitProcess.run
+    written = asyncio.Event()
+
+    async def run(self, *args, **kwargs):
+        output = await original(self, *args, **kwargs)
+        if args[0] == "archive":
+            written.set()
+            await asyncio.Event().wait()
+        return output
+
+    monkeypatch.setattr(GitProcess, "run", run)
+    acquired = await read_export.acquire(context())
+    task = asyncio.create_task(acquired.materialize())
+    try:
+        async with asyncio.timeout(5):
+            await written.wait()
+        archive = acquired.resource.paths.payload / "snapshot.tar"
+        assert archive.is_file() and archive.stat().st_size > 0
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not acquired.resource.ready and not archive.exists()
+        assert not Path(acquired.resource.path).exists()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 async def test_acquire_and_close_before_materialization_are_physically_inert(provider):
@@ -388,6 +608,7 @@ async def test_read_extraction_yields_and_retains_its_guard_until_writes_finish(
             await producer
         assert finished.is_set() and not acquired.resource.ready
         assert await waiting == "quiescent"
+        assert not (acquired.resource.paths.payload / "snapshot.tar").exists()
         assert Path(acquired.resource.path, "calc.py").read_text().startswith("def add")
     finally:
         release.set()
