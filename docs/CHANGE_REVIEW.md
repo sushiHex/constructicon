@@ -133,10 +133,12 @@ peer.
 
 From the reviewed checkout and its project environment, use the packet preparer
 before selecting a host window. For example, this compares the merged opt-in
-change itself; all three full commits must already exist locally:
+change itself; all three full commits must already exist locally.
+`REVIEWED_CONTROLLER_FULL_COMMIT` is the full commit of the reviewed checkout you
+run from (for example, `git rev-parse HEAD`); the entry refuses any other:
 
 ```text
-python -I -B scripts/ops/change_review_input.py --repository LOCAL_REPOSITORY --controller cf81ccf92d395cd704dcf9d8d29b6470ca469563 --before 6857f0d80f94aea353cf748db2d634f47be73705 --after cf81ccf92d395cd704dcf9d8d29b6470ca469563 --path examples/change_review.py --out FRESH_PRIVATE_PACKET_DIRECTORY
+python -I -B scripts/ops/change_review_input.py --repository LOCAL_REPOSITORY --controller REVIEWED_CONTROLLER_FULL_COMMIT --before 6857f0d80f94aea353cf748db2d634f47be73705 --after cf81ccf92d395cd704dcf9d8d29b6470ca469563 --path examples/change_review.py --out FRESH_PRIVATE_PACKET_DIRECTORY
 ```
 
 The entry reads the exact committed blobs through the existing source selector
