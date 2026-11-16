@@ -46,7 +46,6 @@ from constructicon.substrate.executors.linux import LinuxLauncher, ProcessResult
 from constructicon.substrate.gates import contained as gate_module
 from constructicon.substrate.git import acquisition, contained
 from constructicon.substrate.git.authority import _PINNED_ENV, _set_write_bits
-from constructicon.substrate.git.process import GitProcess
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.substrate.test_claude_provider import assembled as assembled
 from tests.substrate.test_claude_provider import provider as provider
@@ -97,24 +96,30 @@ class WritePeer(Peer):
 
 
 @pytest.fixture
-async def qualified(assembled, tmp_path, monkeypatch, portable_acquisition_namespace):
+async def qualified(
+    assembled, tmp_path, monkeypatch, portable_acquisition_namespace, portable_git_guard,
+):
     a = assembled
     monkeypatch.setattr(contained_assembly, "_private_owner", lambda info: None)
     monkeypatch.setattr(contained_assembly, "_ancestor_owner", lambda info: None)
+    held = set()
 
     @asynccontextmanager
     async def guard(paths):
         paths.guard.parent.mkdir(parents=True, exist_ok=True)
         descriptor = os.open(paths.guard, os.O_CREAT | os.O_RDWR, 0o600)
+        held.add(descriptor)
         a.state.guards += 1
         try:
             yield descriptor
         finally:
             a.state.guards -= 1
+            held.remove(descriptor)
             os.close(descriptor)
 
     for module in (native, acquisition, contained, gate_module):
         monkeypatch.setattr(module, "acquisition_guard", guard)
+    portable_git_guard(lambda descriptor: descriptor in held)
 
     if os.name == "nt":
         original_rmtree = shutil.rmtree
@@ -127,13 +132,6 @@ async def qualified(assembled, tmp_path, monkeypatch, portable_acquisition_names
 
         remove.avoids_symlink_attacks = True
         monkeypatch.setattr(shutil, "rmtree", remove)
-        original_run = GitProcess.run
-
-        async def immutable_git(self, *args, **kwargs):
-            kwargs["guard"] = None
-            return await original_run(self, *args, **kwargs)
-
-        monkeypatch.setattr(GitProcess, "run", immutable_git)
 
     resource_launcher = replace(a.kwargs["worker_launcher"], limits=a.kwargs["launcher"].limits)
     worker = replace(resource_launcher, limits=WRITE_WORKER_LIMITS)

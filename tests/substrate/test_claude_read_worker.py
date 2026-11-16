@@ -27,7 +27,7 @@ from tests.substrate.test_linux_containment import launcher as launcher
 
 
 @pytest.fixture
-async def custody(provider, monkeypatch, tmp_path):
+async def custody(provider, monkeypatch, tmp_path, portable_git_guard):
     state = {"held": 0, "calls": []}
 
     @asynccontextmanager
@@ -41,6 +41,7 @@ async def custody(provider, monkeypatch, tmp_path):
             state["held"] -= 1
 
     monkeypatch.setattr(contained, "acquisition_guard", fake_guard)
+    portable_git_guard(lambda descriptor: descriptor == 77 and state["held"] > 0)
     ctx = context()
     acquired = await provider.acquire(ctx)
     await acquired.materialize()
