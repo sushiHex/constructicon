@@ -105,3 +105,26 @@ Focused executable evidence lives in
 process death after reply-command completion, fresh-process recovery and replay,
 no source execution, conflicting-key refusal and input bounds. This is a
 checkout example, not an installed CLI command or production executor route.
+
+## Opt-in: model advice under an owner's permit
+
+The default commands above call no model, and nothing here changes them. The
+explicit `model-advice` subcommand instead hands the bounded summary (scope,
+hashes, syntax diagnostics, availability, symbol lists, counts and the partial
+flag; never source text, a `GitRef` or a path) to the installed entry
+`constructicon.api.change_review_advice`, which asks Codex READ for the advice in
+one turn ([ADR 0025](adr/0025-consumer-runs-earn-a-permit.md)). Its stages are
+`--stage pins` (print what a permit would bind, beside the exact instruction),
+`--stage mint` (print a candidate permit; it installs nothing) and `--stage run`.
+
+A real run needs the private Linux host, an owner-minted READ permit placed in
+root custody that names this one run, and a live window. The executor stays
+unavailable throughout; the permit is the only thing that admits the run, and
+its idempotency key commits to the SHA-256 of the exact instruction bytes.
+Anywhere else, or without that permit, each stage ends in a named refusal such
+as `advice.permit` or `advice.provider`, never a fallback to the human route,
+another vendor or an API. The reply is stored as model advice on its own
+contract, never as `constructicon.std/AdviceResponse`. This delivery adds no
+credential and no live authority, and has made no model call: its evidence is
+[credential-free](../tests/api/test_change_review_advice.py), over a scripted
+peer.

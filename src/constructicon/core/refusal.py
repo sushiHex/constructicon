@@ -52,3 +52,15 @@ class RefusalCode(StrEnum):
     CALLBACK_WORKER_OUTPUT_BOUND = "callback.worker.output_bound"
     CALLBACK_WORKER_INCOMPLETE = "callback.worker.incomplete"
     CALLBACK_WORKER_INVALID_UTF8 = "callback.worker.invalid_utf8"
+
+    # The change-review advice route's own guards (ADR 0025, section 7).
+    ADVICE_SUMMARY = "advice.summary"
+    ADVICE_INSTRUCTION = "advice.instruction"
+    ADVICE_INSTRUCTION_BOUND = "advice.instruction_bound"
+    ADVICE_NOT_POSITIVE = "advice.not_positive"
+    ADVICE_REPLY_BOUND = "advice.reply_bound"
+    ADVICE_PERMIT = "advice.permit"
+    ADVICE_PROVIDER = "advice.provider"
+    ADVICE_JOURNAL = "advice.journal"
+    ADVICE_ADMISSION = "advice.admission"
+    ADVICE_SOURCE = "advice.source"

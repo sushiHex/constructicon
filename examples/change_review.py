@@ -1,7 +1,9 @@
 """Compare Python source as data, retain a review request, and collect advice.
 
 Run from the checkout with ``python -m examples.change_review --help``.
-This trusted local entry neither executes the submitted source nor calls a model.
+This trusted local entry never executes the submitted source. Its default
+commands call no model; only the explicit ``model-advice`` opt-in reaches the
+installed entry's owner-permitted Codex READ turn.
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ from constructicon.core.control import (
     RunSubmission,
 )
 from constructicon.core.envelope import GitRef
+from constructicon.core.errors import ContractViolation
 from constructicon.core.graph import Connection, Graph, GraphNode
 from constructicon.core.identity import Digest, digest
 from constructicon.core.ports import Port
@@ -335,8 +338,27 @@ def read_detail(control: ControlPlane, reference: DetailRef) -> Any:
             return json.loads("".join(parts))
 
 
+async def model_advice(args: argparse.Namespace) -> dict[str, Any]:
+    """The explicit opt-in: the installed entry's one owner-permitted Codex READ turn.
+
+    Only the bounded summary crosses; source text, GitRefs and paths never do.
+    Without the private host, an owner-minted READ permit and a live window this
+    ends in a named refusal, never a fallback.
+    """
+    from constructicon.api import change_review_advice as advice
+
+    _, before = committed_source(args.repository, args.before_commit, args.path)
+    _, after = committed_source(args.repository, args.after_commit, args.path)
+    summary = advice.ChangeSummaryV1.model_validate(
+        compare_sources(before, after).model_dump(mode="json", exclude={"tests_executed"}),
+    )
+    return await advice.dispatch(args, summary)
+
+
 async def execute(args: argparse.Namespace) -> dict[str, Any]:
     change = None
+    if args.command == "model-advice":
+        return await model_advice(args)
     if args.command == "demo":
         repository, before_commit, after_commit = demo_commits(args.state)
         before_ref, before = committed_source(repository, before_commit, "calc.py")
@@ -417,10 +439,28 @@ def main() -> int:
     reply.add_argument("--key", required=True)
     status = commands.add_parser("status", help="read a durable result without starting recovery")
     status.add_argument("--run-id", required=True)
+    advise = commands.add_parser(
+        "model-advice",
+        help="opt in: one owner-permitted Codex READ turn on the private Linux host",
+    )
+    advise.add_argument("--repository", type=Path, required=True)
+    advise.add_argument("--before-commit", required=True)
+    advise.add_argument("--after-commit", required=True)
+    advise.add_argument("--path", required=True)
+    from constructicon.api.change_review_advice import add_arguments
+
+    add_arguments(advise, state_flag="--host-state")
     try:
-        response = asyncio.run(execute(parser.parse_args()))
+        args = parser.parse_args()
+        response = asyncio.run(execute(args))
         print(json.dumps(response, indent=2))
+        if args.command == "model-advice":
+            return int("result" in response and response["result"]["status"] != "succeeded")
         return int(response["result"]["status"] not in {"succeeded", "parked"})
+    except ContractViolation as exc:
+        print(json.dumps({"error": str(exc), "refusal": [str(code) for code in exc.refusal]}),
+              file=sys.stderr)
+        return 1
     except (OSError, ValueError, RuntimeError) as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 1

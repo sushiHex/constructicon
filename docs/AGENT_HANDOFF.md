@@ -16,6 +16,47 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## The change-review advice route is built, credential-free, under accepted ADR 0025
+
+The owner accepted [ADR 0025](adr/0025-consumer-runs-earn-a-permit.md) on
+2026-11-16 for [#442](https://github.com/sushiHex/constructicon/issues/442),
+authorizing credential-free construction of one graph. The installed entry
+`api/change_review_advice.py` and the example's explicit `model-advice` opt-in
+now implement it. The example's default commands, graph, component versions and
+source graph hash are unchanged (a golden test pins the base identities).
+
+What it established:
+- **Unavailable throughout.** The route builds its provider only through
+  `codex_host.operator_provider`, and refuses (`advice.provider`) any provider
+  whose published reasons are not exactly `UNQUALIFIED_PREREQUISITES`. Tests
+  assert the reasons before, during and after a permitted run.
+- **Identity commits to the bytes.** The key is a fixed prefix plus the SHA-256
+  of the exact instruction. The entry compares it with the permit before
+  `runs_start`, and the node recomputes the run id before `execute`
+  (`advice.instruction`).
+- **The guard is pinned.** The node carries an adapter revision hashing this
+  module, `core/control.py` and `core/identity.py` whole. A sensitivity test
+  shows the component version moving for each helper or literal edit.
+- **Bounded both ways.** The instruction is at most 8,192 LF-only UTF-8 bytes
+  and is refused, never truncated. The reply is nonempty text of at most
+  16,384 bytes, stored as text on `constructicon.consumer/ModelAdvice`. That
+  contract has no actor or message id, and admission refuses it where
+  `constructicon.std/AdviceResponse` is required.
+- **Named refusals.** Ten closed `advice.*` codes were added to
+  `core/refusal.py`, which moves the maintenance application revision, as ADR
+  0025 accepts. The new package file also moves the M9 selector's whole-package
+  source identity, so existing M9 trial directories refuse.
+- **Mutation evidence.** `scripts/check_change_review_advice_mutations.py` holds
+  one mutant per guard, including an assembly that empties the reason tuple.
+
+What it deliberately did not do: no live window, permit, credential or model
+call. No adapter, protocol, permit or qualification source changed. No
+`ARCHITECTURE.md` change: that waits for merge, as ADR 0025 says. The tests
+cannot prove that a real model answers usefully, vendor facts, containment on
+the private host, owner provenance of a permit, or cost.
+
+---
+
 ## A subscription consumer is proposed as one permitted run, not availability
 
 [ADR 0025](adr/0025-consumer-runs-earn-a-permit.md), for

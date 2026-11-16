@@ -1,6 +1,8 @@
 # Revision units
 
-**Status: PROPOSED; owner decision pending.** Prepared for
+**Status: the owner selected option 1, the preservation contract, on
+2026-11-16 ([decision record](https://github.com/sushiHex/constructicon/issues/438#issuecomment-6914406199));
+the other three questions remain open.** Prepared for
 [#438](https://github.com/sushiHex/constructicon/issues/438), against
 `558dc44d04174f7241ed8a255a63bf602ba8fa4a` on 2026-11-16.
 This record proposes a contract; it accepts no boundary and changes no identity.
