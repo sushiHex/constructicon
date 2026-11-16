@@ -666,7 +666,7 @@ class PortableChannelWriter(Writer):
 
 
 async def channel_base(authority) -> str:
-    """A parentless base holding the real unrefactored target and one other blob."""
+    """A parentless base holding the pinned pre-contribution target and one other blob."""
     from constructicon.core.maintenance import CHANNEL_TARGET_PATH
     from tests.substrate.test_channel_reply_oracle import BASE
 

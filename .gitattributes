@@ -3,7 +3,8 @@
 /src/constructicon/substrate/journal/maintenance_diagnostic.py text eol=lf
 # Preserve the accepted data artifact's exact bytes across checkouts.
 /tests/vectors/plan_manifest.json text eol=lf
-# The hand-written channel stored-reply candidate is test data, compared by bytes.
+# The historical base and hand-written channel candidate are byte-pinned test data.
+/tests/fixtures/channel_stored_reply/in_process_base.py.txt text eol=lf
 /tests/fixtures/channel_stored_reply/in_process_candidate.py.txt text eol=lf
 # Maintenance instructions are pinned by the digest of these exact bytes.
 /maintenance/*.txt text eol=lf

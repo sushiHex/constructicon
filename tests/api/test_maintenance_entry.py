@@ -154,14 +154,20 @@ async def test_full_tree_entry_mediates_callback_and_runs_retained_consumer(
 
 
 @pytest.mark.parametrize("contribution_exists", [False, True])
+@pytest.mark.parametrize("channel", [False, True], ids=["plan", "channel"])
 async def test_task_fixture_preserves_inventory_when_contribution_exists(
-    tmp_path, contribution_exists,
+    tmp_path, contribution_exists, channel,
 ):
+    from constructicon.core.maintenance import CHANNEL_TARGET_PATH
     from constructicon.substrate.git.authority import GitAuthority
     from tests.gitworld import seed_authority
     from tests.maintenance_task_world import import_fixture_tree
+    from tests.substrate.test_channel_reply_oracle import BASE, CANDIDATE
 
-    files = {"retained.txt": "unchanged\n", "tests/retained.txt": "also unchanged\n"}
+    files = {"retained.txt": "unchanged\n", "tests/retained.txt": "also unchanged\n",
+             "retained-link": "retained.txt"}
+    if channel:
+        files[CHANNEL_TARGET_PATH] = (CANDIDATE if contribution_exists else BASE).decode()
     if contribution_exists:
         files["tests/vectors/plan_manifest.json"] = "old contribution\n"
     source_root = tmp_path / "source"
@@ -170,7 +176,8 @@ async def test_task_fixture_preserves_inventory_when_contribution_exists(
     source._run("read-tree", "--empty")
     for name, content in files.items():
         oid = source._run("hash-object", "-w", "--stdin", input_text=content).stdout.strip()
-        source._run("update-index", "--add", "--cacheinfo", f"100644,{oid},{name}")
+        mode = {"retained.txt": "100755", "retained-link": "120000"}.get(name, "100644")
+        source._run("update-index", "--add", "--cacheinfo", f"{mode},{oid},{name}")
     tree = source._run("write-tree").stdout.strip()
     commit = source._run("commit-tree", tree, input_text="inventory fixture\n").stdout.strip()
     source._run("update-ref", "refs/heads/main", commit)
@@ -179,7 +186,19 @@ async def test_task_fixture_preserves_inventory_when_contribution_exists(
     destination_root = tmp_path / "destination"
     destination_root.mkdir()
     destination = GitAuthority(seed_authority(destination_root), destination_root / "workspaces")
-    base = await import_fixture_tree(destination, Path(source.repository_id), source_tree)
+    base = await import_fixture_tree(destination, Path(source.repository_id), source_tree,
+                                     channel=channel)
+    expected = source._run("ls-tree", "-r", "-z", source_base).stdout.split("\0")
+    expected = [record for record in expected
+                if not record.endswith("\ttests/vectors/plan_manifest.json")]
+    if channel:
+        oid = hashlib.new(source.environment.object_format,
+                          f"blob {len(BASE)}\0".encode() + BASE).hexdigest()
+        expected = [f"100644 blob {oid}\t{CHANNEL_TARGET_PATH}"
+                    if record.endswith("\t" + CHANNEL_TARGET_PATH) else record
+                    for record in expected]
+        assert destination._run("show", f"{base}:{CHANNEL_TARGET_PATH}").stdout.encode() == BASE
+    assert destination._run("ls-tree", "-r", "-z", base).stdout == "\0".join(expected)
     assert destination.parents_of(base) == ()
     assert source.resolve_ref("refs/heads/main") == source_base
     assert source.tree_of(source_base).encode() == source_tree

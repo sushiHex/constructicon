@@ -30,6 +30,14 @@ and validation order. Existing channel acceptance and corruption tests cover
 the behavior. The normal PR gate checks the new main tree; the historical
 attestation is not reused as authority for that tree or a new live profile.
 
+CI exposed an invalid test assumption: reading the live target no longer gives
+a pre-contribution base after this merge. The exact historical base is now
+byte-pinned test data. Existing test Git worlds substitute only that target and
+preserve the remaining blobs and modes; fault calibration compares historical
+base with candidate rather than comparing the candidate with itself. Production
+refusal of an already-completed base remains intact. This fixture correction
+never selects an old base for a live operation.
+
 Raw candidate commit metadata, authorization, journal and captures stay private.
 The pin receipt binds a freshly observed root-custody authorization to the sealed
 journal and attestation; no independently available historical approval-byte

@@ -30,7 +30,9 @@ from constructicon.substrate.gates.channel_reply import (
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "tests/fixtures/channel_stored_reply/in_process_candidate.py.txt"
-BASE = (ROOT / CHANNEL_TARGET_PATH).read_bytes().replace(b"\r\n", b"\n")
+# Exact pre-contribution blob at ffc1c72; independent of current main and the oracle.
+BASE_FIXTURE = ROOT / "tests/fixtures/channel_stored_reply/in_process_base.py.txt"
+BASE = BASE_FIXTURE.read_bytes()
 CANDIDATE = FIXTURE.read_bytes().replace(b"\r\n", b"\n")
 HELPER = (
     b"    def _stored_reply(\n"
@@ -61,7 +63,11 @@ def refusal(candidate: bytes, base: bytes = BASE) -> str:
     return refused.value.code
 
 
-def test_fixture_is_test_data_and_the_target_stays_unrefactored():
+def test_fixture_is_test_data_and_the_base_stays_unrefactored():
+    assert hashlib.sha256(BASE).hexdigest() == (
+        "00f8ec5e5e1ffe1eb0dc415c2928f60078e58486a339557dee7cc0846e0cda3f"
+    )
+    assert b"\r" not in BASE
     assert b"_stored_reply" not in BASE and BASE.count(b"pins no reply port") == 2
     assert CANDIDATE.count(b"self._stored_reply(request, ") == 2
     assert HELPER in CANDIDATE and CANDIDATE.count(b"pins no reply port") == 1
