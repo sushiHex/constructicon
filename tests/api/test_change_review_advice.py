@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import io
 import json
 import sys
 from argparse import Namespace
@@ -540,6 +541,51 @@ def test_mint_through_the_installed_entry_prints_the_candidate(
     assert candidate.revision == executor.identity.revision
     assert not (tmp_path / "fresh.sqlite").exists() and not (tmp_path / "fresh.attempt").exists()
     assert turns(native) == []
+
+
+def _stdin(monkeypatch, raw: bytes) -> None:
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(raw), encoding="utf-8"))
+
+
+def test_a_stdin_summary_mints_the_same_candidate_as_its_file(
+    tmp_path, portable_binding, monkeypatch, capsys,
+):
+    executor = provider(tmp_path, portable_binding, adapter.clean_native(records=[]))
+    monkeypatch.setattr(route, "operator_provider", lambda host, authorization: executor)
+    raw = DEMO.model_dump_json().encode("utf-8")
+    summary_file = tmp_path / "summary.json"
+    summary_file.write_bytes(raw)
+    printed = []
+    for source in (str(summary_file), "-"):
+        _stdin(monkeypatch, raw)
+        argv = _mint_argv(tmp_path, summary_file, "--authorization-id", "owner-advice-1")
+        argv[1] = source
+        assert route.main(argv) == 0
+        candidate = json.loads(capsys.readouterr().out)
+        candidate.pop("not_after")
+        printed.append(candidate)
+    assert printed[0] == printed[1]
+
+
+@pytest.mark.parametrize("raw", [
+    DEMO.model_dump_json().encode("utf-8") + b" " * route.INSTRUCTION_MAX_BYTES,
+    b"",
+    b"not json",
+], ids=["over-bound", "empty", "not-a-summary"])
+def test_a_stdin_summary_out_of_contract_refuses_before_host_assembly(
+    tmp_path, monkeypatch, capsys, raw,
+):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("host assembly ran before the summary was checked")
+
+    monkeypatch.setattr(route, "operator_provider", forbidden)
+    _stdin(monkeypatch, raw)
+    argv = _mint_argv(tmp_path, tmp_path / "unused.json", "--authorization-id", "owner-advice-1")
+    argv[1] = "-"
+    assert route.main(argv) == 1
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["status"] == "refused"
+    assert printed["refusal"] == [str(RefusalCode.ADVICE_SUMMARY)]
 
 
 def test_the_route_constructs_no_provider_and_passes_no_reasons():

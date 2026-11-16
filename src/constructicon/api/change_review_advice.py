@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -559,7 +560,8 @@ def pins(options: argparse.Namespace, summary: ChangeSummaryV1) -> dict[str, obj
     """What a permit for this summary will bind, beside the instruction text."""
     bound = bound_values(summary)
     provider = require_provider(host_provider(options))
-    return {**bound.projection(), "provider_revision": provider.identity.revision,
+    return {**bound.projection(), "guard": str(guard_revision()),
+            "provider_revision": provider.identity.revision,
             "operator_binding_digest": str(provider.identity.store.operator_binding_digest)}
 
 
@@ -641,12 +643,20 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="constructicon.api.change_review_advice",
                                      allow_abbrev=False)
     parser.add_argument("--summary", type=Path, required=True,
-                        help="a JSON file holding exactly the bounded change summary")
+                        help="a JSON file holding exactly the bounded change summary, "
+                             "or - for at most INSTRUCTION_MAX_BYTES on stdin")
     add_arguments(parser)
     options = parser.parse_args(argv)
     try:
-        summary = ChangeSummaryV1.model_validate_json(options.summary.read_bytes())
-    except (OSError, ValidationError):
+        if str(options.summary) == "-":
+            # The summary is framed into the instruction, so it is never longer.
+            raw = sys.stdin.buffer.read(INSTRUCTION_MAX_BYTES + 1)
+            if len(raw) > INSTRUCTION_MAX_BYTES:
+                raise ValueError("the summary exceeds its bound")
+        else:
+            raw = options.summary.read_bytes()
+        summary = ChangeSummaryV1.model_validate_json(raw)
+    except (OSError, ValueError):
         print(json.dumps(refusal_projection(_refuse(
             "the summary is not the bounded change summary", RefusalCode.ADVICE_SUMMARY,
         ))))
