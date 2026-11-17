@@ -11608,6 +11608,40 @@ The correction writes UTF-8/LF bytes and passed through the actual unchanged
 builder entry offline. All 15 scripts and the summary are byte-identical to the
 pre-start package; only target changes in the selection and its manifest entry.
 All 17 manifest entries checked. There is no new generic serializer or modified
-pinned preparer. Live intake-to-reply completion remains unmeasured, and the
-stopped window authorizes no retry. The owning issue retains successor scope
-and current work: [#450](https://github.com/sushiHex/constructicon/issues/450).
+pinned preparer. At code-candidate preparation, live intake-to-reply completion
+was still unmeasured; the stopped window authorized no retry.
+
+A separately selected successor scope,
+`7ea4302378becf5b97fcc9e226d9808e70fba5da018c51f62b3b122791ff6915`,
+subsequently completed the same request on 2026-11-17. The actual post-discovery
+selection was
+`ab444ca5f4f666f1ce7564cee20cbf900ac9665302dfd9150b8ef203870f9eac`,
+with all 15 scripts and the summary byte-identical to the reviewed pre-start
+package and a target-only selection delta. The supervisor completed exit 0:
+`read-settled`, terminal dispatch, clean cleanup and release eligibility.
+
+The actual collector delivered 539 bytes of whole advice. Accepted READ:
+`4b25b25e750373c2a2a27234111fe1fbe1d141d5b169ed9f7de887d20253a3c6`.
+Reply JSON SHA-256:
+`106d5ac82c8435425a43ad28eb399c2c7bb00bbdaa435cf7b5b70446bf1bf5ec`.
+Metering reports one observed attempt and 5,922 input / 100 output tokens from
+`codex_fresh_thread_total_v1`. Served model, charge and estimate remain unknown.
+This is advice on the bounded AST summary, not proof of source-diff correctness,
+vendor request count or billing.
+
+The independent read-only review recomputed acceptance from the projection and
+decoded original; checked original/replay equality modulo the replay flag;
+matched the whole advice, metering and exact request; and checked slot 2's
+canonical claim against the challenge and dispatch records. Withdrawal floor
+23 and the checked park receipt matched the window. The run owner additionally
+observed fresh Off/Ok with zero connections/checkpoints, no active or suspension
+marker, and next free slot 3, then released custody. Closeout SHA-256:
+`33c189e5b518bf4f0ec50fae98124ea60c15a17d5865e54cfbc1e80db51698d2`.
+
+The collector's JSON was sent intact to the authenticated requester's private
+mailbox. The requester subsequently acknowledged consumption and independently
+ran the same collector, reproducing the exact request, acceptance digest, whole
+539-byte advice, slot 2 and recorded metering. No code/test blob changed after
+reviewed `626021b` for this live proof. The successor permits no later automatic
+window. The owning issue retains the delivery record:
+[#450](https://github.com/sushiHex/constructicon/issues/450).
