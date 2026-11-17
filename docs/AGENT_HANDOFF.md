@@ -16,6 +16,52 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## The standing record's first slot is spent; the rest need no new owner act
+
+[#446](https://github.com/sushiHex/constructicon/issues/446) closed with one
+unattended READ on generation 22. It spent slot 1 of the issued record
+`30ff2324…80d80`. [#448](https://github.com/sushiHex/constructicon/issues/448)
+prepares slots 2 and 3 as one reusable scope, so later advice requests need no
+per-window owner decision. Details are in the
+[implementation record](plans/handoffs/M8-implementation-record.md#standing-approval-read-accepted--generation-22-446).
+
+What it established:
+- **The record carries no per-change value.** `source_graph` and `component`
+  come from `advice_graph()` and `advice_definition()`
+  (`src/constructicon/api/change_review_advice.py`, `bound_values`). A new
+  change summary changes only instruction-derived values: the instruction
+  and its size, its digest, the idempotency key and the run id. None of those
+  is a record key, so one record serves different requests. Generations 21 and 22 share a run id because they
+  advised on the same summary.
+- **Offline reference packages bound later windows.**
+  - The packages for generations 23 and 24 were compiled offline, in advance,
+    by the reviewed preparer. Only its namespace constants and input-directory
+    literal changed.
+  - Each generation pins 13 phase-script digests and 2 consumer-script digests.
+    The consumer scripts are hashed with only the exact quoted summary masked.
+  - A window may differ from its generation's reference only in the
+    input-directory literal and the summary it embeds.
+- **Pre-start fit uses the existing pure API.** `StandingApproval.load`,
+  `selected_pins()` and `admit()` are read-only. They refuse an expired,
+  revoked, suspended or exhausted record before any VM start. Evaluating
+  `admit()` again at now + 5400 s reserves the 90-minute window at check
+  time. A later change of state, input or clock can still refuse.
+- **Nothing new counts windows.** The lowest free slot maps slot 2 to
+  generation 23 and slot 3 to generation 24. `max_runs` refuses a fourth. Once
+  admitted, a window that is not accepted clean leaves the record suspended,
+  which ends the scope. A refusal before admission spends and suspends
+  nothing.
+
+What it deliberately did not do:
+- No code, record schema or ADR change. The scope stays private in custody,
+  as g22's did.
+- Revocation stops admission and refuses at the next check point. It does not
+  cancel a turn already dispatched.
+- Generation 24's previous-boot expectation stays unresolved until generation
+  23's closeout supplies it.
+
+---
+
 ## A consumer READ spends a standing owner approval (ADR 0026, accepted)
 
 For [#446](https://github.com/sushiHex/constructicon/issues/446): the generation-20
