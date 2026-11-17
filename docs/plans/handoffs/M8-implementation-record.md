@@ -11569,3 +11569,45 @@ captures.
 The record is unchanged, unrevoked and unsuspended, and slots 2 and 3 remain
 free. This is one accepted READ at one revision and boot. It does not measure
 advice quality or a success rate.
+
+
+## Offline advice reply delivery and local dogfood stop — #450
+
+The independent review covered `626021b`: the new collector reads the window's
+own protected result/challenge, derives the native captures, reproduces
+`m9_read_closure._evidence`, and returns the whole advice only after terminal
+dispatch, clean cleanup and release eligibility. It reuses the existing private
+directory guard, validates the producer packet and strict scalar types, and
+reports a completed pre-challenge refusal without inventing captures. Metering
+and its coverage remain exactly recorded. No controller, runtime, standing
+record, accepted plan or model authority changed.
+
+The actual CLI passed against retained generation-22 evidence with the real
+Windows custody checks. Accepted READ:
+`71ad4225901f209a01f5baad02a7b55fe4ea97ff723eb7089eec2426c333a89d`.
+Reply JSON SHA-256:
+`69f097f6aede80cb7e1d558d37806a9fc1322bfc6bcaed2dda71202df187001b`.
+The full advice is 604 bytes; metering reports 5,932 input and 114 output tokens
+from `codex_fresh_thread_total_v1`. Served model, charge and estimate remain
+unreported/unknown. This historical result retains its original revision and
+does not become a fresh model observation.
+
+The requested real change was `77c19c04aa4ac66b747ab0dccf1b71848b93b589` to
+`592833c4b8bbfe3b9e34ab7d20613b63d4b396a7`,
+`tests/test_m9_owner_approval.py`, summary SHA-256
+`19dd09e7b43d6eec2a85e7eb5a8326ce98d386d145e43718202788dfce8bb20b`.
+After one normal VM start, the local post-discovery builder refused host-values
+bytes written with Windows CRLF. No supervisor, SSH, guest command, model call,
+generation publication or standing-slot claim was issued. The run owner used
+the selected pre-supervisor stop path: normal stop, independent Off/Ok with
+zero connections/checkpoints, closeout and custody release. Slot 2 remains
+unspent. This was operator serialization failure, not a vendor or application
+refusal.
+
+The correction writes UTF-8/LF bytes and passed through the actual unchanged
+builder entry offline. All 15 scripts and the summary are byte-identical to the
+pre-start package; only target changes in the selection and its manifest entry.
+All 17 manifest entries checked. There is no new generic serializer or modified
+pinned preparer. Live intake-to-reply completion remains unmeasured, and the
+stopped window authorizes no retry. The owning issue retains successor scope
+and current work: [#450](https://github.com/sushiHex/constructicon/issues/450).

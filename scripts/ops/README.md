@@ -458,3 +458,33 @@ fresh custody/boot checks. A completed shell exit alone cannot prove remote
 process quiescence. The physical locked withdrawal observation is load-bearing;
 this path does not grant another operation or another attempt. Explicit frozen
 stop/recovery rules and bounded owner scope continue to apply.
+
+
+## Return a finished change-review advice reply
+
+After the native window ends, its run owner invokes the read-only collector:
+
+```text
+python -I -B scripts/ops/change_review_reply.py --work PRIVATE_CUSTODY --record WINDOW_RECORD --packet OPERATOR_PACKET
+```
+
+`WINDOW_RECORD` is the nonce directory returned by the supervisor, directly
+under the private custody root. `OPERATOR_PACKET` is the run owner's own
+`change_review_input.py` output, not files supplied by the requester. The
+collector derives its fixed capture paths from the bounded challenge; it accepts
+no caller-supplied evidence digest or capture path. The custody's existing
+private-directory checks apply to every directory read.
+
+Stdout is one JSON reply. `delivered` includes the whole bounded advice and
+metering exactly as recorded, after reproducing the accepted evidence digest
+and checking terminal, clean, release-eligible disposition. `not-delivered`
+preserves another finished window's disposition, including a refusal before a
+challenge was written. Unproved records, evidence or packet binding produce a
+named `refused` response and exit 1. Send the JSON privately to the authenticated
+requester; public records carry digests and lengths only. This command writes
+nothing and performs no SSH, replay, model call or authority change.
+
+Private JSON passed to the strict preparation builder must be UTF-8/LF bytes;
+use `write_bytes` rather than default Windows text newline translation. Exercise
+the actual serialization and unchanged builder entry offline before starting
+the VM. A local preparation refusal does not grant a retry of a stopped window.
