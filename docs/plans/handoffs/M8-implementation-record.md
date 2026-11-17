@@ -11639,8 +11639,9 @@ marker, and next free slot 3, then released custody. Closeout SHA-256:
 `33c189e5b518bf4f0ec50fae98124ea60c15a17d5865e54cfbc1e80db51698d2`.
 
 The collector's JSON was sent intact to the authenticated requester's private
-mailbox. This proves transmission; consumption acknowledgement is not yet
-recorded. No code/test blob changed after reviewed `626021b` for this live proof.
-The successor permits no later automatic window. The owning issue retains
-delivery acknowledgement and current work:
+mailbox. The requester subsequently acknowledged consumption and independently
+ran the same collector, reproducing the exact request, acceptance digest, whole
+539-byte advice, slot 2 and recorded metering. No code/test blob changed after
+reviewed `626021b` for this live proof. The successor permits no later automatic
+window. The owning issue retains the delivery record:
 [#450](https://github.com/sushiHex/constructicon/issues/450).

@@ -49,14 +49,15 @@ advice and the route's 5,922 input / 100 output token observations; served model
 charge and estimate remain unknown. An independent retained-evidence check
 reproduced acceptance, original/replay equality, request/reply binding and the
 slot claim. Withdrawal floor 23 and fresh Off/Ok preceded custody release.
-The exact JSON was sent privately to the authenticated requester's mailbox;
-this establishes transmission, not consumption acknowledgement.
+The exact JSON was sent privately to the authenticated requester's mailbox.
+The requester subsequently acknowledged consumption and independently reproduced
+the delivered reply from the retained records.
 
 The existing tuple, pinned producer, standing record and controller remain
 unchanged; no queue, ledger or runtime primitive was added. The earlier stopped
 window was not retried: the successor had its own explicit bounded selection.
 Slot 3 is next in the record, but that does not grant an automatic later window.
-Evidence and any remaining delivery acknowledgement are in
+Evidence is in
 [#450](https://github.com/sushiHex/constructicon/issues/450).
 
 ---
