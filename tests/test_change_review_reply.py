@@ -1,46 +1,68 @@
 """The requester's reply, read from a real whole-chain window's own records.
 
 Every window here is the offline whole chain of ``test_change_review_read``
-(qualification, native read, supervisor, guest shell and closure program).
-No evidence byte is built by hand: tampers copy the retained custody and
-change one file in the copy.
+(qualification, native read, supervisor, guest shell and closure program),
+run on a summary that the real producer, ``change_review_input.prepare``,
+made from real commits. No evidence or packet byte is built by hand: each
+tamper copies the retained custody or packet and changes one file.
 """
 
 from __future__ import annotations
 
 import base64
 import json
+import os
 import shutil
-from hashlib import sha256
 from pathlib import Path
 
 import pytest
+from scripts.ops import change_review_input as producer
 from scripts.ops import change_review_reply as reply
-from scripts.ops.m9_read_closure import _wire
 
 from constructicon.api import change_review_advice as route
-from tests.api.test_change_review_advice import DEMO
+from tests import test_change_review_read as chain
 from tests.substrate.test_codex_adapter import portable_binding as portable_binding
 from tests.substrate.test_codex_adapter import substituted_guard as substituted_guard
-from tests.test_change_review_read import SUMMARY, settled_read, world
+from tests.test_change_review_input import source_world as source_world
+from tests.test_m9_read_window import Fake
 
-CHANGE = {"before": "1" * 40, "after": "2" * 40, "path": "examples/change_review.py"}
+
+@pytest.fixture
+def produced(source_world, tmp_path, monkeypatch):
+    """A real packet, and the whole chain rebound to its summary."""
+    repository, controller, before, after = source_world
+    packet = tmp_path / "packet"
+    record = producer.prepare(repository, controller, before, after, "calc.py", packet)
+    raw = (packet / "summary.json").read_bytes()
+    # The chain reads these module values at call time; ``selection``'s default
+    # argument was bound to the old bytes, so it is passed explicitly below.
+    monkeypatch.setattr(chain, "DEMO", route.ChangeSummaryV1.model_validate_json(raw))
+    monkeypatch.setattr(chain, "SUMMARY", raw)
+    return packet, record, (repository, controller, before, after)
 
 
-def packet(root: Path, summary: bytes = SUMMARY, instruction: bytes | None = None) -> Path:
-    """A prepared packet's three files, as ``change_review_input.prepare`` lays them out."""
-    bound = route.bound_values(route.ChangeSummaryV1.model_validate_json(summary))
-    root.mkdir(mode=0o700)
-    (root / "summary.json").write_bytes(summary)
-    (root / "instruction.txt").write_bytes(
-        bound.instruction.encode("utf-8") if instruction is None else instruction)
-    (root / "packet.json").write_bytes(_wire({
-        "schema_version": 1, "controller": "0" * 40, "checked_source_files": {},
-        "change": CHANGE, "summary_sha256": sha256(summary).hexdigest(),
-        "offline_pins": bound.projection(), "offline_pins_are_provisional": True,
-        "execution_authorized": False,
-    }))
-    return root
+@pytest.fixture
+def checked(monkeypatch):
+    """Every directory the reply checks. On POSIX the custody's own check runs as well;
+    pytest's Windows temp root is not private custody (test_m9_owner_approval covers
+    that check on a private home directory)."""
+    seen: list[Path] = []
+    real = reply.private_directory
+
+    def check(path: Path) -> None:
+        seen.append(path)
+        if os.name == "posix":
+            real(path)
+
+    monkeypatch.setattr(reply, "private_directory", check)
+    return seen
+
+
+def window(tmp_path, monkeypatch, binding, **options):
+    platform = chain.Platform(tmp_path, monkeypatch, binding, **options)
+    path, digest = chain.selection(tmp_path, summary=chain.SUMMARY)
+    host, result = platform.window(path, digest)
+    return platform, host, result
 
 
 def crlf(envelope: bytes) -> bytes:
@@ -50,9 +72,8 @@ def crlf(envelope: bytes) -> bytes:
                       sort_keys=True, separators=(",", ":")).encode() + b"\n"
 
 
-def copied(work: Path, record: Path, into: Path) -> tuple[Path, Path]:
-    shutil.copytree(work, into, symlinks=True)
-    return into, into / record.name
+def edit(target: Path, transform) -> None:
+    target.write_bytes(transform(target.read_bytes()))
 
 
 def refused(code: str, *args: Path) -> None:
@@ -62,23 +83,23 @@ def refused(code: str, *args: Path) -> None:
 
 
 def test_an_accepted_clean_window_delivers_the_whole_advice_and_refuses_each_tamper(
-    tmp_path, monkeypatch, portable_binding, substituted_guard,
+    tmp_path, monkeypatch, portable_binding, substituted_guard, produced, checked,
 ):
+    packet, record_out, (repository, controller, before, after) = produced
     answer = "Test the empty input.\N{SNOWMAN}"
-    platform, path, digest = world(tmp_path, monkeypatch, portable_binding, answer=answer)
-    host, result = platform.window(path, digest)
+    platform, host, result = window(tmp_path, monkeypatch, portable_binding, answer=answer)
     assert (result.reason, result.cleanup, result.custody_retained) == (
         "read-settled", "clean", False)
     work, record = platform.custody, result.record
-    prepared = packet(tmp_path / "packet")
-    _, _, stdout = settled_read(platform, host)
+    _, _, stdout = chain.settled_read(platform, host)
     printed = json.loads(stdout)
 
-    delivered = reply.collect(work, record, prepared)
-    bound = route.bound_values(DEMO)
+    delivered = reply.collect(work, record, packet)
+    bound = route.bound_values(chain.DEMO)
     assert delivered == {
-        "schema_version": 1, "status": "delivered", "change": CHANGE,
-        "summary_sha256": sha256(SUMMARY).hexdigest(),
+        "schema_version": 1, "status": "delivered",
+        "change": {"before": before, "after": after, "path": "calc.py"},
+        "summary_sha256": record_out["summary_sha256"],
         "instruction_digest": str(bound.instruction_digest), "window": record.name,
         "run_id": bound.run_id, "accepted_read_sha256": result.accepted_read_sha256,
         "approval_sha256": platform.approval.sha256, "approval_slot": 1,
@@ -88,76 +109,136 @@ def test_an_accepted_clean_window_delivers_the_whole_advice_and_refuses_each_tam
     assert delivered["advice"]["advice"] == answer
     assert delivered["metering"]["confirmed_charge"] is None
     assert delivered["metering"]["estimate"] is None
+    native = next(work.glob("native-*"))
+    assert checked == [work, record, packet, native, native / "captures"]
     # Reading changed nothing.
-    assert reply.collect(work, record, prepared) == delivered
+    assert reply.collect(work, record, packet) == delivered
+    # A directory the custody check refuses is refused by its own phase's code.
+    for target, code in ((record, "REPLY_RECORD_UNPROVED"), (packet, "REPLY_PACKET_MISMATCH"),
+                         (native / "captures", "REPLY_EVIDENCE_MISMATCH")):
+        def unsafe(path: Path, target=target) -> None:
+            if path == target:
+                raise ValueError("M9_OWNER_UNSAFE_CUSTODY")
 
-    def tamper(name: str, change) -> tuple[Path, Path]:
-        into, moved = copied(work, record, tmp_path / ("copy-" + name))
-        change(into, moved)
-        return into, moved
+        monkeypatch.setattr(reply, "private_directory", unsafe)
+        refused(code, work, record, packet)
+    monkeypatch.setattr(reply, "private_directory", lambda path: None)
 
-    def edit(target: Path, transform) -> None:
-        target.write_bytes(transform(target.read_bytes()))
+    copies = iter(range(100))
 
-    captures = lambda into: next(into.glob("native-*/captures"))  # noqa: E731
-    evidence = {
-        "close": lambda into, moved: edit(
-            moved / "close.json",
-            lambda raw: raw.replace(result.accepted_read_sha256.encode(), b"0" * 64)),
-        "projection": lambda into, moved: edit(
-            captures(into) / "read-projection.stdout", lambda raw: raw[:-1] + b" \n"),
+    def custody(change) -> tuple[Path, Path]:
+        into = tmp_path / f"custody-{next(copies)}"
+        shutil.copytree(work, into, symlinks=True)
+        change(into, into / record.name)
+        return into, into / record.name
+
+    def captures(into: Path) -> Path:
+        return next(into.glob("native-*/captures"))
+
+    # Control: an unchanged copy delivers, so each refusal below is its tamper's.
+    assert reply.collect(*custody(lambda into, moved: None), packet) == {
+        **delivered, "window": record.name}
+    for change in (
+        lambda into, moved: edit(moved / "close.json", lambda raw: raw.replace(
+            result.accepted_read_sha256.encode(), b"0" * 64)),
+        lambda into, moved: edit(captures(into) / "read-projection.stdout",
+                                 lambda raw: raw[:-1] + b" \n"),
         # CRLF producer bytes inside the envelope: a new stdout digest.
-        "original": lambda into, moved: edit(
-            captures(into) / "read-original.stdout", crlf),
-        "status": lambda into, moved: edit(
-            captures(into) / "read-projection.status.json",
-            lambda raw: raw.replace(b'"returncode": 0', b'"returncode": 1')),
-        "missing": lambda into, moved: (captures(into) / "read-original.stdout").unlink(),
-        "challenge": lambda into, moved: edit(
-            moved / "challenge.json", lambda raw: raw.replace(b'"consumer"', b'"consumer" ')),
-    }
-    for name, change in evidence.items():
-        refused("REPLY_EVIDENCE_MISMATCH", *tamper(name, change), prepared)
-
-    # A packet for another summary binds another run: the accepted advice is refused.
-    other = DEMO.model_copy(update={"symbols_partial": not DEMO.symbols_partial})
-    other_raw = _wire(other.model_dump(mode="json"))
-    refused("REPLY_ADVICE_INVALID", work, record, packet(tmp_path / "other", other_raw))
-    refused("REPLY_PACKET_MISMATCH", work, record,
-            packet(tmp_path / "forged", instruction=b"another instruction"))
+        lambda into, moved: edit(captures(into) / "read-original.stdout", crlf),
+        # A boolean is not a return code.
+        lambda into, moved: edit(captures(into) / "read-projection.status.json",
+                                 lambda raw: raw.replace(b'"returncode": 0',
+                                                         b'"returncode": false')),
+        lambda into, moved: edit(captures(into) / "read-original.stdout",
+                                 lambda raw: raw.replace(b'"returncode":0',
+                                                         b'"returncode":false')),
+        lambda into, moved: (captures(into) / "read-original.stdout").unlink(),
+        # Other challenge bytes name other captures.
+        lambda into, moved: edit(moved / "challenge.json",
+                                 lambda raw: raw.replace(b'"consumer"', b'"consumer" ')),
+    ):
+        refused("REPLY_EVIDENCE_MISMATCH", *custody(change), packet)
+    for change in (
+        lambda into, moved: edit(moved / "result.json", lambda raw: raw.replace(
+            b'"schema_version": 2', b'"schema_version": 2.0')),
+        lambda into, moved: edit(moved / "result.json", lambda raw: raw.replace(
+            b'"approval_slot": 1', b'"approval_slot": NaN')),
+        lambda into, moved: edit(moved / "result.json", lambda raw: b"[" * 100_000),
+    ):
+        refused("REPLY_RECORD_UNPROVED", *custody(change), packet)
     # Only the window's own record, named by its nonce, directly under work.
-    refused("REPLY_RECORD_UNPROVED", work, work / "result", prepared)
-    refused("REPLY_RECORD_UNPROVED", tmp_path, record, prepared)
+    refused("REPLY_RECORD_UNPROVED", work, work / "result", packet)
+    refused("REPLY_RECORD_UNPROVED", tmp_path, record, packet)
+
+    # The packet is exactly the producer's, for the summary the run answered.
+    copied = iter(range(100))
+
+    def forged(name: str, transform) -> Path:
+        into = tmp_path / f"packet-{next(copied)}"
+        shutil.copytree(packet, into)
+        edit(into / name, transform)
+        return into
+
+    assert reply.collect(work, record, forged("packet.json", lambda raw: raw)) == delivered
+    for name, transform in (
+        ("packet.json", lambda raw: raw.replace(before.encode(), b"not-a-commit")),
+        ("packet.json", lambda raw: raw.replace(b'"schema_version": 1', b'"schema_version": true')),
+        ("packet.json", lambda raw: raw.replace(b'"calc.py"', b'"../calc.py"')),
+        ("packet.json",
+         lambda raw: raw.replace(b'"instruction_bytes": ', b'"instruction_bytes": 1')),
+        ("instruction.txt", lambda raw: raw + b" "),
+        ("summary.json", lambda raw: raw.replace(b"\n", b"\r\n")),
+    ):
+        refused("REPLY_PACKET_MISMATCH", work, record, forged(name, transform))
+    # A real packet for another change binds another run: the accepted advice is refused.
+    other = tmp_path / "packet-reversed"
+    producer.prepare(repository, controller, after, before, "calc.py", other)
+    refused("REPLY_ADVICE_INVALID", work, record, other)
 
     # A window that is no longer clean, or whose marker still names it, is not delivered.
-    for name, change in {
-        "retained": lambda into, moved: edit(
-            moved / "result.json",
-            lambda raw: raw.replace(b'"custody_release_eligible": true',
-                                    b'"custody_release_eligible": false')),
-        "active": lambda into, moved: (into / "active").write_bytes(moved.name.encode()),
-    }.items():
-        into, moved = tamper(name, change)
-        outcome = reply.collect(into, moved, prepared)
+    for change in (
+        lambda into, moved: edit(moved / "result.json", lambda raw: raw.replace(
+            b'"custody_release_eligible": true', b'"custody_release_eligible": false')),
+        lambda into, moved: (into / "active").write_bytes(moved.name.encode()),
+    ):
+        into, moved = custody(change)
+        outcome = reply.collect(into, moved, packet)
         assert outcome["status"] == "not-delivered" and "advice" not in outcome
         assert outcome["result"]["accepted_read_sha256"] == result.accepted_read_sha256
 
 
-def test_a_failed_reply_is_not_delivered_and_keeps_its_disposition(
-    tmp_path, monkeypatch, portable_binding, substituted_guard, capsys,
+def test_a_window_that_ends_before_its_challenge_is_not_delivered(
+    tmp_path, produced, checked,
 ):
-    platform, path, digest = world(tmp_path, monkeypatch, portable_binding, answer="")
-    _, result = platform.window(path, digest)
+    """The real supervisor, through its own fake boundary, losing qualification."""
+    packet, _, _ = produced
+    work = tmp_path / "work"
+    work.mkdir(mode=0o700)
+    result = Fake(work, "qualification lost").run()
+    assert result.reason == "qualification-unproved"
+    assert not (result.record / "challenge.json").exists()
+    outcome = reply.collect(work, result.record, packet)
+    assert outcome["status"] == "not-delivered" and "advice" not in outcome
+    assert outcome["result"] == json.loads((result.record / "result.json").read_bytes())
+    assert outcome["result"]["approval_slot"] is None
+    # No challenge: no captures are looked for.
+    assert checked == [work, result.record, packet]
+
+
+def test_a_failed_reply_is_not_delivered_and_keeps_its_disposition(
+    tmp_path, monkeypatch, portable_binding, substituted_guard, produced, checked, capsys,
+):
+    packet, _, _ = produced
+    platform, _, result = window(tmp_path, monkeypatch, portable_binding, answer="")
     assert result.accepted_read_sha256 is None
-    prepared = packet(tmp_path / "packet")
-    outcome = reply.collect(platform.custody, result.record, prepared)
+    outcome = reply.collect(platform.custody, result.record, packet)
     assert outcome["status"] == "not-delivered" and "advice" not in outcome
     assert outcome["result"] == json.loads((result.record / "result.json").read_bytes())
     assert outcome["result"]["approval_suspended"] is True
 
     # The command prints the reply, or only a refusal's code.
     argv = ["--work", str(platform.custody), "--record", str(result.record)]
-    assert reply.main([*argv, "--packet", str(prepared)]) == 0
+    assert reply.main([*argv, "--packet", str(packet)]) == 0
     assert json.loads(capsys.readouterr().out) == outcome
     assert reply.main([*argv, "--packet", str(tmp_path / "absent")]) == 1
     assert json.loads(capsys.readouterr().out) == {
