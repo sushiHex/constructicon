@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import io
 import json
 import sys
 from argparse import Namespace
@@ -310,22 +311,33 @@ async def test_a_reply_that_is_not_bounded_text_refuses_and_never_checkpoints(
     executor = provider(tmp_path, portable_binding, native)
     outcome = await route.advise(provider=executor, summary=DEMO)
     assert outcome["result"]["status"] == "failed" and len(turns(native)) == 1
+    assert outcome["advice"] is None
     payload = failure(executor.qualification.journal, route.bound_values(DEMO).run_id)
     assert payload["refusal"] == codes
 
 
-async def test_a_reply_at_its_bound_is_accepted(tmp_path, portable_binding, substituted_guard):
-    answer = "x" * route.MODEL_ADVICE_MAX_BYTES
+@pytest.mark.parametrize("answer", [
+    "x" * route.MODEL_ADVICE_MAX_BYTES,
+    "\N{SNOWMAN}" * (route.MODEL_ADVICE_MAX_BYTES // 3),
+], ids=["ascii", "non-ascii"])
+async def test_a_reply_at_its_bound_is_returned_whole(
+    tmp_path, portable_binding, substituted_guard, answer,
+):
     native = adapter.clean_native(records=[completed(answer=answer)])
     executor = provider(tmp_path, portable_binding, native)
     outcome = await route.advise(provider=executor, summary=DEMO)
     assert outcome["result"]["status"] == "succeeded"
-    # The public preview may truncate a large value; the checkpoint holds it whole.
+    # The preview truncates a large value; the result carries the whole advice.
+    assert outcome["result"]["outputs"]["advice"] == {"truncated": True}
+    assert outcome["advice"]["advice"] == answer
+    assert outcome["advice"]["reply_bytes"] == len(answer.encode("utf-8"))
     journal = SqliteJournal(executor.qualification.journal)
     retained = journal.checkpoint(route.bound_values(DEMO).run_id, PATH)
-    assert retained is not None
-    payload = retained.outputs["advice"].payload
-    assert payload["advice"] == answer and payload["reply_bytes"] == route.MODEL_ADVICE_MAX_BYTES
+    assert retained is not None and retained.outputs["advice"].payload == outcome["advice"]
+    # A replay in a fresh journal handle returns the same whole advice.
+    replayed = route.replay(SqliteJournal(executor.qualification.journal), route.bound_values(DEMO))
+    assert replayed is not None and replayed["replayed"] is True
+    assert replayed["advice"] == outcome["advice"] and replayed["result"] == outcome["result"]
 
 
 @pytest.mark.parametrize(("outcome", "codes"), [
@@ -529,6 +541,51 @@ def test_mint_through_the_installed_entry_prints_the_candidate(
     assert candidate.revision == executor.identity.revision
     assert not (tmp_path / "fresh.sqlite").exists() and not (tmp_path / "fresh.attempt").exists()
     assert turns(native) == []
+
+
+def _stdin(monkeypatch, raw: bytes) -> None:
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(raw), encoding="utf-8"))
+
+
+def test_a_stdin_summary_mints_the_same_candidate_as_its_file(
+    tmp_path, portable_binding, monkeypatch, capsys,
+):
+    executor = provider(tmp_path, portable_binding, adapter.clean_native(records=[]))
+    monkeypatch.setattr(route, "operator_provider", lambda host, authorization: executor)
+    raw = DEMO.model_dump_json().encode("utf-8")
+    summary_file = tmp_path / "summary.json"
+    summary_file.write_bytes(raw)
+    printed = []
+    for source in (str(summary_file), "-"):
+        _stdin(monkeypatch, raw)
+        argv = _mint_argv(tmp_path, summary_file, "--authorization-id", "owner-advice-1")
+        argv[1] = source
+        assert route.main(argv) == 0
+        candidate = json.loads(capsys.readouterr().out)
+        candidate.pop("not_after")
+        printed.append(candidate)
+    assert printed[0] == printed[1]
+
+
+@pytest.mark.parametrize("raw", [
+    DEMO.model_dump_json().encode("utf-8") + b" " * route.INSTRUCTION_MAX_BYTES,
+    b"",
+    b"not json",
+], ids=["over-bound", "empty", "not-a-summary"])
+def test_a_stdin_summary_out_of_contract_refuses_before_host_assembly(
+    tmp_path, monkeypatch, capsys, raw,
+):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("host assembly ran before the summary was checked")
+
+    monkeypatch.setattr(route, "operator_provider", forbidden)
+    _stdin(monkeypatch, raw)
+    argv = _mint_argv(tmp_path, tmp_path / "unused.json", "--authorization-id", "owner-advice-1")
+    argv[1] = "-"
+    assert route.main(argv) == 1
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["status"] == "refused"
+    assert printed["refusal"] == [str(RefusalCode.ADVICE_SUMMARY)]
 
 
 def test_the_route_constructs_no_provider_and_passes_no_reasons():

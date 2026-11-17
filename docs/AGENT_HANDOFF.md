@@ -16,6 +16,54 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## The READ supervisor carries the advice route as a second, closed consumer
+
+For [#442](https://github.com/sushiHex/constructicon/issues/442), the existing
+operator READ supervisor (`scripts/ops/m9_*`) now carries two consumers: M9 and
+the change-review advice route. This is offline preparation for one later
+window, approved separately, that combines startup requalification with the
+first consumer READ.
+
+What it established:
+- **Closed choice.** Each consumer is one frozen descriptor in
+  `m9_read_command.py` that fixes its entry, argv, derived paths, closure rule,
+  bounds and refusal prefix. Only its id is chosen. The supervisor's lifecycle
+  and custody are unchanged. The owner challenge names the consumer.
+- **Fresh ground.** The advice selection is schema 3. It carries a fresh
+  selected session and state, and the guest's paths are derived from them and
+  from the authorization id. M9's historical session and state are refused,
+  never reused or archived. M9's emitted argv and live probe are byte-identical.
+- **The closure is the route's replay.** The guest projection reruns the
+  installed entry with no permit. Acceptance is equality with the original
+  apart from `replayed`, plus one `completion()` check that M9 shares: the
+  attempt, identities, process and one released lease.
+- **The owner sees the whole advice.** The result preview cuts any output over
+  2,000 bytes, so the route's result also carries the whole `ModelAdvice`, read
+  through `details_read`. The preview itself is unchanged.
+- **One bound.** The advice transport bounds derive from the 16,384-byte reply:
+  6x for JSON escaping plus a frame. The summary reaches the entry on stdin
+  (`--summary -`, bounded).
+- **Offline packet.** `scripts/ops/change_review_input.py` prepares the exact
+  summary, instruction and provisional pins from committed source. It records
+  no local path, and the pins it records are provisional.
+- **Rehearsal.** `tests/test_change_review_read.py` drives the real chain
+  (`QualificationBoundary`, then `run_native_read`, then `run_window`). It uses
+  the real producers over a scripted peer, and the emitted guest shell runs in
+  Bash. It covers bound, escaping, failure, lost-response, CRLF, drift and
+  occupancy controls. A new e2e test replays a completed run in a fresh process.
+
+What it deliberately did not do: no window, permit, credential, VM or model
+call. The route edits move its guard revision and the M9 whole-package source
+identity, so packet and pins must be regenerated at the merged head. Known
+limits:
+- the physical host is unmeasured;
+- some mutation baselines are Linux-only;
+- a failed run's error text has no source-owned bound, and when it is over
+  the log bound, custody is retained;
+- the advice live probe shares M9's private `operator_store` readers.
+
+---
+
 ## The change-review advice route is built, credential-free, under accepted ADR 0025
 
 The owner accepted [ADR 0025](adr/0025-consumer-runs-earn-a-permit.md) on

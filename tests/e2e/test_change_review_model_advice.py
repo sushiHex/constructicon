@@ -15,6 +15,9 @@ from pathlib import Path
 
 from examples.change_review import demo_commits
 
+from tests.substrate.test_codex_adapter import portable_binding as portable_binding
+from tests.substrate.test_codex_adapter import substituted_guard as substituted_guard
+
 ROOT = Path(__file__).parents[2]
 
 
@@ -63,3 +66,39 @@ def test_the_installed_entry_refuses_a_summary_outside_the_closed_list(tmp_path:
     )
     assert process.returncode == 1 and "Traceback" not in process.stderr
     assert json.loads(process.stdout)["refusal"] == ["advice.summary"]
+
+
+async def test_a_new_process_replays_a_completed_run_without_permit_or_host(
+    tmp_path: Path, portable_binding, substituted_guard,
+) -> None:
+    """Process-restart evidence: the installed entry, in a fresh interpreter,
+    with no permit and no host metadata, replays the scripted peer's run."""
+    from constructicon.api import change_review_advice as route
+    from tests.api.test_change_review_advice import DEMO, provider, turns
+    from tests.substrate import test_codex_adapter as adapter
+    from tests.substrate.test_codex_protocol import completed
+
+    native = adapter.clean_native(records=[completed(answer="Test the empty input.")])
+    executor = provider(tmp_path, portable_binding, native)
+    first = await route.advise(provider=executor, summary=DEMO)
+    assert first["replayed"] is False and first["result"]["status"] == "succeeded"
+    spent = len(turns(native))
+    assert spent == 1
+    summary = tmp_path / "summary.json"
+    summary.write_bytes(DEMO.model_dump_json().encode("utf-8"))
+    process = subprocess.run(
+        [sys.executable, "-m", "constructicon.api.change_review_advice", "--stage", "run",
+         "--summary", str(summary), "--journal", executor.qualification.journal],
+        cwd=ROOT, stdin=subprocess.DEVNULL, capture_output=True, timeout=120, check=False,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8",
+             "PYTHONPATH": os.pathsep.join((str(ROOT / "src"), str(ROOT)))},
+    )
+    assert process.returncode == 0, (process.stdout, process.stderr)
+    replayed = json.loads(process.stdout)
+    assert replayed["replayed"] is True
+    assert replayed["advice"] == first["advice"]
+    assert replayed["advice"]["advice"] == "Test the empty input."
+    for name in ("metering", "capability_accounting"):
+        assert replayed["result"][name] == first["result"][name]
+    assert replayed == {**first, "replayed": True}
+    assert len(turns(native)) == spent

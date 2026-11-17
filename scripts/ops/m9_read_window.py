@@ -1,4 +1,5 @@
-"""One supervisor for a same-boot M9 Codex READ. No native fallback or resume.
+"""One supervisor for a same-boot Codex READ by a reviewed consumer (M9 or
+change-review advice). No native fallback or resume.
 
 The trusted operator records the owner's decision. The adapter checks its
 scope and expiry, and losing the dispatch response is not evidence that the
@@ -21,6 +22,7 @@ from pathlib import Path
 from typing import Literal, Protocol, TypeVar
 
 from scripts.ops.claude_read_session import json_bytes, retain
+from scripts.ops.m9_read_command import CONSUMERS, M9
 
 SCHEMA_VERSION = 1
 MAX_PIN_WAIT = 15 * 60
@@ -76,6 +78,8 @@ class Qualification:
     candidate: bytes
     candidate_expires_at: datetime
     cutoff: float
+    # The reviewed consumer descriptor's closed id (m9_read_command.CONSUMERS).
+    consumer: str = M9.id
 
 
 @dataclass(frozen=True)
@@ -220,9 +224,12 @@ def run_window(
             and _utc(qualified.candidate_expires_at)
             and _utc(now)
             and type(qualified.cutoff) in (int, float)
-            and math.isfinite(qualified.cutoff),
+            and math.isfinite(qualified.cutoff)
+            and type(qualified.consumer) is str
+            and qualified.consumer in CONSUMERS,
             reason,
         )
+        consumer = CONSUMERS[qualified.consumer]
         cutoff = min(cutoff, qualified.cutoff)
         pin_cutoff = min(monotonic() + MAX_PIN_WAIT, cutoff - route_reserve)
         _require(now < qualified.candidate_expires_at, "expired")
@@ -239,7 +246,8 @@ def run_window(
                     qualified.candidate_expires_at,
                     now + timedelta(seconds=pin_cutoff - monotonic()),
                 ).isoformat(),
-                "procedure": "m9-codex-read",
+                "consumer": consumer.id,
+                "procedure": consumer.procedure,
                 "model": "gpt-6.1-sol",
                 "effort": "low",
                 "epochs": 1,
