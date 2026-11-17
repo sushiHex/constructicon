@@ -404,12 +404,12 @@ def test_pins_hold_only_for_the_route_reserve(tmp_path):
     assert first.run().cleanup == "clean"
     assert first.ops[1] == ("park-requested", 55.0)
     wider = Fake(tmp_path / "wider")
-    (tmp_path / "wider").mkdir()
+    (tmp_path / "wider").mkdir(mode=0o700)
     wider.qualification_cutoff = 1200
     assert wider.run(replace(LIMITS, window=1200)).cleanup == "clean"
     assert wider.ops[1] == ("park-requested", 1155.0)
     third = Fake(tmp_path / "third")
-    (tmp_path / "third").mkdir()
+    (tmp_path / "third").mkdir(mode=0o700)
     third.qualification_cutoff = 45.0
     result = third.run()
     assert result.reason == "budget"
