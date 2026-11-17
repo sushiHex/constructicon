@@ -11520,3 +11520,51 @@ closed #407 and, with it, the M8 milestone. The evidence covers one accepted
 attempt on one fixed task at one recorded revision. It shows that the bounded
 path carries a real model edit to acceptance. It does not measure a success
 rate, and it does not qualify another revision or boot.
+
+## Standing-approval READ accepted — generation 22 (#446)
+
+[ADR 0026](../../adr/0026-consumer-reads-spend-a-standing-approval.md) replaced
+the timed READ approval with a standing owner record. The generation-20 window
+had qualified and then expired unused while it waited for a human approval
+against a pin timer. #447 merged the record at operator revision `0e68b6a`.
+
+The owner issued one record, `30ff2324…80d80`, with three slots that expire on
+2026-11-24. The owner then selected one bounded window with no attendance
+required ([issuance](https://github.com/sushiHex/constructicon/issues/446#issuecomment-6958558617)).
+The generation-22 window ran without a human step:
+
+- It qualified a fresh boot on the retained controller `6bd6d57`.
+- It passed both record checks: before any process, and after qualification
+  against the actual pins.
+- It spent exactly slot 1 and made one READ.
+- The supervisor ended `read-settled` with clean withdrawal (floor 22) and a
+  fresh Off observation, and custody was released
+  ([acceptance](https://github.com/sushiHex/constructicon/issues/446#issuecomment-6958948970)).
+
+What the READ returned:
+
+- The consumer returned 604 bytes of advice on a bounded AST change summary.
+  That advice is not a correctness review of the source diff.
+- One source-scoped observation reports 5,932 input and 114 output tokens.
+  The served model, charge and estimate remain unknown.
+- A fresh-process permitless replay reproduced the completion. The only
+  difference was the replay flag.
+
+An independent offline check found no blocker in the evidence chain:
+
+- the slot marker name recomputed as H(record, slot);
+- the challenge, selection and claim chain;
+- all 82 capture statuses;
+- the advice in both the original and the replay captures;
+- the park and withdrawal digests.
+
+The whole challenge packet hash was not reconstructed. Source order places the
+slot claim after a successful record check.
+
+Generations 21 and 22 report the same run id. The run id derives from the
+instruction, and both windows advised on the same summary, so this is expected
+and not copied evidence.
+
+The record is unchanged, unrevoked and unsuspended, and slots 2 and 3 remain
+free. This is one accepted READ at one revision and boot. It does not measure
+advice quality or a success rate.
