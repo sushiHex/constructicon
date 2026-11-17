@@ -77,11 +77,14 @@ class AnySelection(StandingApproval):
         return None
 
 
-def any_selection(*, not_after=None):
+def any_selection(work, *, not_after=None):
+    """Placed in ``work`` like a real record: both check points re-read its file."""
     if not_after is None:  # the supervisor reads the real clock
         not_after = datetime.now(UTC).replace(microsecond=0) + timedelta(days=1)
     raw = record_bytes(not_after=not_after)
-    return AnySelection(raw, sha(raw), json.loads(raw), not_after)
+    path = work / "standing-approval.json"
+    path.write_bytes(raw)
+    return AnySelection(raw, sha(raw), json.loads(raw), not_after, path)
 
 
 # --- the accepting path -----------------------------------------------------------

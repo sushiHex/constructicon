@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from scripts.ops import m9_read_window
+from scripts.ops.claude_read_commands import sha
 from scripts.ops.claude_read_session import json_bytes
 from scripts.ops.m9_owner_approval import StandingApproval, issue
 from scripts.ops.m9_read_window import (
@@ -27,8 +28,13 @@ LIMITS = WindowLimits(
 )
 
 
-def standing(not_after, max_runs=3):
-    return StandingApproval.from_bytes(issue(view(), not_after=not_after, max_runs=max_runs))
+def standing(work, not_after, max_runs=3):
+    """A record loaded from its file in the custody directory, as the CLI loads it."""
+    raw = issue(view(), not_after=not_after, max_runs=max_runs)
+    path = work / ("standing-approval-" + sha(raw)[:16] + ".json")
+    if not path.exists():
+        path.write_bytes(raw)
+    return StandingApproval.load(path, sha(raw), work)
 
 
 class Crash(BaseException):
@@ -53,7 +59,7 @@ class Fake:
 
     @property
     def approval(self):
-        return standing(self.owner_expiry, self.max_runs)
+        return standing(self.work, self.owner_expiry, self.max_runs)
 
     def event(self, name, cutoff):
         assert self.tick < cutoff
@@ -246,6 +252,7 @@ def test_check_point_a_refuses_before_any_boundary_call(tmp_path, change, code):
     else:
         for slot in range(1, fake.max_runs + 1):
             (tmp_path / ("selection-" + fake.approval.decision(slot))).write_bytes(b"spent")
+    assert fake.approval.path.exists()  # the record itself lives in the custody directory
     before = set(tmp_path.iterdir())
     with pytest.raises(ValueError, match=f"^{code}$"):
         fake.run()
@@ -278,6 +285,59 @@ def test_check_point_b_refuses_actual_pins_by_name_and_suspends(tmp_path, change
     assert result.approval_suspended and suspended(tmp_path, fake)
     with pytest.raises(ValueError, match=r"^approval-suspended$"):
         Fake(tmp_path).run()
+
+
+def _revoke_by_file(approval, how):
+    if how == "deleted":
+        approval.path.unlink()
+    else:  # replaced: a different, still canonical record at the same name
+        approval.path.write_bytes(issue(view(), not_after=approval.not_after, max_runs=1))
+
+
+class _Loaded(Fake):
+    """A fake whose window runs one record loaded once, as the CLI loads it.
+
+    The base fixture reloads (and so rewrites) its record per access, which would
+    mask a deleted file; this one never rewrites it.
+    """
+
+    def __init__(self, work, revoke=None):
+        super().__init__(work)
+        self.loaded = standing(work, self.owner_expiry, self.max_runs)
+        self.revoke = revoke
+
+    @property
+    def approval(self):
+        return self.loaded
+
+    def qualify(self, cutoff):
+        qualified = super().qualify(cutoff)
+        if self.revoke is not None:
+            _revoke_by_file(self.loaded, self.revoke)
+        return qualified
+
+
+@pytest.mark.parametrize("how", ["deleted", "replaced"])
+def test_a_record_removed_after_load_refuses_at_check_point_a(tmp_path, how):
+    fake = _Loaded(tmp_path)
+    _revoke_by_file(fake.loaded, how)
+    with pytest.raises(ValueError, match=r"^approval-revoked$"):
+        fake.run()
+    assert fake.ops == [] and fake.native_calls == 0
+    assert not list(tmp_path.glob("selection-*")) and not (tmp_path / "active").exists()
+
+
+@pytest.mark.parametrize("how", ["deleted", "replaced"])
+def test_a_record_removed_during_qualification_refuses_at_check_point_b(tmp_path, how):
+    fake = _Loaded(tmp_path, revoke=how)
+    result = fake.run()
+    outcome = (result.reason, result.dispatch, result.cleanup)
+    assert outcome == ("approval-revoked", "not-issued", "clean")
+    # No claim, placement or dispatch; the existing cleanup path runs.
+    assert fake.names == ["qualify", "withdraw", "park", "check-park"]
+    assert fake.native_calls == 0
+    assert not list(tmp_path.glob("selection-*")) and not list(tmp_path.glob("claim-*"))
+    assert result.approval_suspended and fake.loaded.suspension(tmp_path).exists()
 
 
 @pytest.mark.parametrize(
@@ -411,7 +471,7 @@ def test_a_crash_after_the_claim_spends_the_slot_and_leaves_the_approval_suspend
 
 @pytest.mark.parametrize("max_runs", [1, 2])
 def test_two_concurrent_claimers_cannot_take_one_slot(tmp_path, max_runs):
-    approval = standing(datetime(2026, 11, 6, tzinfo=UTC), max_runs)
+    approval = standing(tmp_path, datetime(2026, 11, 6, tzinfo=UTC), max_runs)
     barrier = threading.Barrier(2)
     results = []
 

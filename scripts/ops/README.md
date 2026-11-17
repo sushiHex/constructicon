@@ -58,9 +58,12 @@ refunds it. A window that does not end accepted and clean leaves
 `suspended-<record digest>` behind. So does a crash, because the marker is
 written at admission. Every later window then refuses with
 `approval-suspended` until the owner issues a new record. To revoke a
-record, the owner deletes or replaces it (`approval-unreadable` or
-`approval-digest`) or creates `revoked-<record digest>` in the custody
-directory (`approval-revoked`). An expired record refuses with
+record, the owner deletes or replaces it, or creates `revoked-<record digest>`
+in the custody directory (`approval-revoked`). Before load, a deleted or
+replaced record refuses with `approval-unreadable` or `approval-digest`.
+After load, both check points re-read the record's file and refuse with
+`approval-revoked` if it is gone or no longer holds the loaded bytes. An
+expired record refuses with
 `approval-expired`, and a fully spent one with `approval-exhausted`.
 
 `PARK-NOW` in the custody directory requests a stop.

@@ -359,7 +359,7 @@ def test_supervisor_closes_window_with_real_generated_transport_after_lost_respo
 
     # M9 can hold no real standing record (its consumer is not the advice
     # route), so this transport regression spends a double's real slot.
-    approval = any_selection()
+    approval = any_selection(tmp_path)
 
     def no_human_wait(_seconds):
         pytest.fail("no window step waits for a human")

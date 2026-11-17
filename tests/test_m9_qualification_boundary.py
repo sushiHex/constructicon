@@ -453,7 +453,7 @@ def failed_window(tmp_path, monkeypatch, **options):
                           close=1, withdraw=9, park=10)
     # Qualification fails before a pin packet. M9 holds no real standing
     # record, so a double admits it; its real suspension must persist.
-    approval = any_selection()
+    approval = any_selection(custody)
     result = run_native_read(custody, host, approval, limits, run=twin)
     assert result.approval_suspended and approval.suspension(custody).is_file()
     assert not list(custody.glob("selection-*"))

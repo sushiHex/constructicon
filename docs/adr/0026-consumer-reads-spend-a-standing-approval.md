@@ -121,9 +121,13 @@ physical qualification. The `active` marker still serializes windows.
   refuses with `approval-suspended` until the owner issues a new record.
   A failed removal keeps the approval suspended, never the reverse.
 - **Revocation** is the owner's act. The owner deletes or replaces the
-  record (`approval-unreadable`, `approval-digest`) or creates
-  `revoked-<record digest>` in custody (`approval-revoked`). The marker
-  needs no content. Nothing removes it.
+  record, or creates `revoked-<record digest>` in custody. The marker needs
+  no content, and nothing removes it.
+  - Before load, a deleted or replaced record refuses with
+    `approval-unreadable` or `approval-digest`.
+  - After load, both check points re-read the record's file. If it is gone,
+    or no longer holds the loaded bytes, they refuse with
+    `approval-revoked`, as the marker does.
 
 Expiry, suspension and revocation are checked at both check points.
 
@@ -182,10 +186,12 @@ standing approval under this record:
 - **ADR 0025:87-91 (fact 4).** "The owner's approval of each exact dispatch
   is the only bound on task data and cost". The bound on task data becomes
   the instruction class: the pinned guard and summary builder plus
-  `instruction_max_bytes`. The bound on cost becomes `max_runs` × one
-  120-second turn (`READ_GRANTS.timeout_s`,
+  `instruction_max_bytes`. In place of a per-run decision, spend is bounded
+  by dispatch count and duration: at most `max_runs` dispatches of one
+  turn, each at most 120 seconds (`READ_GRANTS.timeout_s`,
   `src/constructicon/substrate/executors/codex_host.py:95-103`), under
-  `not_after`. Fact 4's conclusion stands: an *available* executor has no
+  `not_after`. Money and backend requests stay unknown, as the exposure
+  statement says. Fact 4's conclusion stands: an *available* executor has no
   such step, and executors stay unavailable.
 - **ADR 0025:113-116.** "Root placement is the owner's act." Root placement
   becomes the supervisor's act, performed only after both check points and
@@ -220,10 +226,12 @@ Two guarantees are traded, stated at their real strength:
 - **There is no same-hour positive consent.** The consent is the issuance,
   up to `not_after` before the run.
 
-Cost stays bounded by `max_runs` × one 120-second native turn, with no
-monetary field, because none is enforceable. That is three turns for the
-recommended issuance. Every window still pays its host start, startup
-qualification, withdrawal and park.
+What is bounded is the dispatch count and duration: at most `max_runs`
+one-turn dispatches, each at most 120 seconds, which is three for the
+recommended issuance. That is not a monetary bound. Money and backend
+requests stay unknown, there is no enforced monetary ceiling, and the record
+carries no monetary field because none is enforceable. Every window still
+pays its host start, startup qualification, withdrawal and park.
 
 ## What does not change
 

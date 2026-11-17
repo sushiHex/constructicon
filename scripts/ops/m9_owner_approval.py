@@ -21,7 +21,7 @@ import os
 import re
 import stat
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -182,6 +182,9 @@ class StandingApproval:
     sha256: str
     record: dict[str, Any]
     not_after: datetime
+    # The record's file. Both check points re-read it, so deleting or replacing
+    # it revokes the approval; a record never loaded from a file never stands.
+    path: Path | None = None
 
     @classmethod
     def load(cls, path: Path, sha256: str, work: Path) -> StandingApproval:
@@ -195,7 +198,7 @@ class StandingApproval:
             raise _refuse("unreadable") from exc
         if type(sha256) is not str or _HEX.fullmatch(sha256) is None or sha(raw) != sha256:
             raise _refuse("digest")
-        return cls.from_bytes(raw)
+        return replace(cls.from_bytes(raw), path=path)
 
     @classmethod
     def from_bytes(cls, raw: bytes) -> StandingApproval:
@@ -241,7 +244,19 @@ class StandingApproval:
         """The owner's explicit revocation: any entry at this name, whatever its content."""
         return work / ("revoked-" + self.sha256)
 
+    def _live(self) -> str | None:
+        """The record's file still holds exactly the loaded bytes."""
+        if self.path is None:
+            return "approval-unreadable"
+        try:
+            current = bounded(self.path, RECORD_LIMIT)
+        except (OSError, ValueError):
+            return "approval-revoked"
+        return None if current == self.raw else "approval-revoked"
+
     def _standing(self, work: Path, now: datetime, holder: str | None) -> str | None:
+        if (gone := self._live()) is not None:
+            return gone
         if not (_utc(now) and now < self.not_after):
             return "approval-expired"
         if os.path.lexists(self.revocation(work)):
