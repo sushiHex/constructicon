@@ -20,6 +20,29 @@ NOT_AFTER = NOW + timedelta(days=7)
 HOLDER = "f" * 32
 
 
+def forbid_supervisor_sleep(monkeypatch):
+    """No supervisor step may wait for a human.
+
+    Only the supervisor modules' own ``time`` is replaced, never the global
+    module: on POSIX ``subprocess`` polls with ``time.sleep``, and the adapter's
+    own subprocesses must keep the real one.
+    """
+    import time
+    import types
+
+    from scripts.ops import m9_native_read, m9_read_window
+
+    def no_human_wait(_seconds):
+        pytest.fail("no window step waits for a human")
+
+    proxy = types.SimpleNamespace(
+        **{name: getattr(time, name) for name in dir(time) if not name.startswith("__")},
+    )
+    proxy.sleep = no_human_wait
+    for module in (m9_read_window, m9_native_read):
+        monkeypatch.setattr(module, "time", proxy)
+
+
 def view(**overrides):
     """A ``selected_pins`` view, and the packet's shape for check point (b)."""
     instruction = "fixture instruction\n" * 4

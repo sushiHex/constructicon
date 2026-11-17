@@ -321,7 +321,7 @@ def test_supervisor_closes_window_with_real_generated_transport_after_lost_respo
     from scripts.ops.m9_native_read import run_native_read
     from scripts.ops.m9_read_window import Qualification, WindowLimits
 
-    from tests.test_m9_owner_approval import any_selection
+    from tests.test_m9_owner_approval import any_selection, forbid_supervisor_sleep
 
     events = []
     now = datetime.now(UTC)
@@ -361,10 +361,7 @@ def test_supervisor_closes_window_with_real_generated_transport_after_lost_respo
     # route), so this transport regression spends a double's real slot.
     approval = any_selection(tmp_path)
 
-    def no_human_wait(_seconds):
-        pytest.fail("no window step waits for a human")
-
-    monkeypatch.setattr(time, "sleep", no_human_wait)
+    forbid_supervisor_sleep(monkeypatch)
 
     guest = None
 

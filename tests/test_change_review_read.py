@@ -52,6 +52,7 @@ from tests.substrate.test_codex_adapter import portable_binding as portable_bind
 from tests.substrate.test_codex_adapter import substituted_guard as substituted_guard
 from tests.substrate.test_codex_protocol import completed
 from tests.test_m8_helper_contracts import fixture_contract
+from tests.test_m9_owner_approval import forbid_supervisor_sleep
 from tests.test_m9_qualification_boundary import ALIAS, BOOT, D2, PRIOR, RUNTIME, TARGET
 from tests.test_m9_read_transport import bash
 
@@ -506,10 +507,7 @@ class Platform:
         self.record = record
         approval = StandingApproval.load(*record, self.custody)
 
-        def no_human_wait(_seconds):
-            pytest.fail("no window step waits for a human")
-
-        self.monkeypatch.setattr(time, "sleep", no_human_wait)
+        forbid_supervisor_sleep(self.monkeypatch)
         try:
             result = run_native_read(self.custody, host, approval, LIMITS, run=self)
         finally:
