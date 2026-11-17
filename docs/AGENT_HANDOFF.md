@@ -43,11 +43,21 @@ the selection. Exercise this serialization through that entry before a live
 start; `Path.write_text` with its default Windows newline translation is not
 byte-preserving.
 
-This slice establishes offline result delivery, not live intake-to-reply
-completion. The existing tuple, pinned producer, standing record, controller
-and scope remain unchanged; no queue, ledger or runtime primitive was added.
-The stopped scope grants no retry. Current work and any successor selection
-remain in [#450](https://github.com/sushiHex/constructicon/issues/450).
+A separately selected successor then completed that same real request on
+generation 23, spending slot 2. The actual collector returned 539 bytes of whole
+advice and the route's 5,922 input / 100 output token observations; served model,
+charge and estimate remain unknown. An independent retained-evidence check
+reproduced acceptance, original/replay equality, request/reply binding and the
+slot claim. Withdrawal floor 23 and fresh Off/Ok preceded custody release.
+The exact JSON was sent privately to the authenticated requester's mailbox;
+this establishes transmission, not consumption acknowledgement.
+
+The existing tuple, pinned producer, standing record and controller remain
+unchanged; no queue, ledger or runtime primitive was added. The earlier stopped
+window was not retried: the successor had its own explicit bounded selection.
+Slot 3 is next in the record, but that does not grant an automatic later window.
+Evidence and any remaining delivery acknowledgement are in
+[#450](https://github.com/sushiHex/constructicon/issues/450).
 
 ---
 
