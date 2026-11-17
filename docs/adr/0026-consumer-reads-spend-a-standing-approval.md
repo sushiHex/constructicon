@@ -1,7 +1,8 @@
 # 0026 — A consumer READ spends a standing owner approval
 
-**Status:** proposed, 2026-11-17. Refs
-[#442](https://github.com/sushiHex/constructicon/issues/442). It refines
+**Status:** accepted by the owner, 2026-11-17. Refs
+[#442](https://github.com/sushiHex/constructicon/issues/442),
+[#446](https://github.com/sushiHex/constructicon/issues/446). It refines
 accepted [ADR 0025](0025-consumer-runs-earn-a-permit.md) and supersedes
 exactly the clauses listed under "Superseded".
 

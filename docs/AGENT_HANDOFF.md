@@ -16,7 +16,7 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
-## A consumer READ spends a standing owner approval (ADR 0026, proposed)
+## A consumer READ spends a standing owner approval (ADR 0026, accepted)
 
 For [#446](https://github.com/sushiHex/constructicon/issues/446): the generation-20
 window qualified, then expired unused at the timed pin approval. The owner then
@@ -51,8 +51,9 @@ What it deliberately did not do:
   still qualifies its own fresh boot and state.
 - The per-run permit and its law are unchanged.
 - M9 has no record, so its windows now refuse at admission.
-- No live window has yet spent a standing record. The ADR stays proposed until
-  the owner accepts it.
+- No live window has yet spent a standing record. The owner accepted the ADR
+  on 2026-11-17. Accepting it issues no record; issuance is a separate owner
+  act.
 
 ---
 
