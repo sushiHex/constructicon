@@ -16,6 +16,41 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Finished advice reaches the requester through checked retained evidence — #450
+
+The new offline `scripts/ops/change_review_reply.py` reads one finished native
+window's own private records. It derives the capture directory from the
+challenge, reproduces the accepted evidence digest through the existing closure,
+and binds the whole advice to the operator-produced packet's instruction and run.
+It publishes advice only after terminal dispatch, clean cleanup and release
+eligibility. Other finished windows retain their disposition as `not-delivered`,
+including a qualification refusal before any challenge exists.
+
+The accepting fixture uses the real packet producer and existing whole-chain
+fake window through teardown. It exercises a full 16,384-byte reply with JSON
+escaping and Unicode, plus evidence/packet tampering and strict scalar checks.
+The actual CLI also delivered the historical generation-22 advice whole:
+604 bytes. Its metering remains the route's observations, with unknown charge,
+estimate and served model preserved; no billing value is inferred.
+
+The real-change generation-23 dogfood did not reach the supervisor. Operator
+glue wrote host-values JSON with Windows CRLF, which the unchanged builder
+refused locally. No SSH, guest command, model turn, generation publication or
+slot spend occurred. A normal stop and independent Off observation preceded
+custody release. Writing UTF-8/LF bytes then passed the actual unchanged builder
+offline, preserving all 15 scripts and the summary with only a target delta in
+the selection. Exercise this serialization through that entry before a live
+start; `Path.write_text` with its default Windows newline translation is not
+byte-preserving.
+
+This slice establishes offline result delivery, not live intake-to-reply
+completion. The existing tuple, pinned producer, standing record, controller
+and scope remain unchanged; no queue, ledger or runtime primitive was added.
+The stopped scope grants no retry. Current work and any successor selection
+remain in [#450](https://github.com/sushiHex/constructicon/issues/450).
+
+---
+
 ## The standing record's first slot is spent; the rest need no new owner act
 
 [#446](https://github.com/sushiHex/constructicon/issues/446) closed with one
