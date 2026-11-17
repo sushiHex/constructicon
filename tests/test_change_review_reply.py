@@ -86,7 +86,10 @@ def test_an_accepted_clean_window_delivers_the_whole_advice_and_refuses_each_tam
     tmp_path, monkeypatch, portable_binding, substituted_guard, produced, checked,
 ):
     packet, record_out, (repository, controller, before, after) = produced
-    answer = "Test the empty input.\N{SNOWMAN}"
+    # At the reply bound: worst-case JSON escaping and non-ASCII, so neither the
+    # preview's truncation nor a capture ceiling can shorten what is delivered.
+    answer = "\x01" * (route.MODEL_ADVICE_MAX_BYTES - 3) + "\N{SNOWMAN}"
+    assert len(answer.encode("utf-8")) == route.MODEL_ADVICE_MAX_BYTES
     platform, host, result = window(tmp_path, monkeypatch, portable_binding, answer=answer)
     assert (result.reason, result.cleanup, result.custody_retained) == (
         "read-settled", "clean", False)
@@ -107,6 +110,7 @@ def test_an_accepted_clean_window_delivers_the_whole_advice_and_refuses_each_tam
         "advice": printed["advice"], "metering": printed["result"]["metering"],
     }
     assert delivered["advice"]["advice"] == answer
+    assert delivered["advice"]["reply_bytes"] == route.MODEL_ADVICE_MAX_BYTES
     assert delivered["metering"]["confirmed_charge"] is None
     assert delivered["metering"]["estimate"] is None
     native = next(work.glob("native-*"))
