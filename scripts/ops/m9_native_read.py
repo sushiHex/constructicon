@@ -18,7 +18,7 @@ if __name__ == "__main__":
 
 from scripts.ops.claude_read_commands import sha
 from scripts.ops.claude_read_session import json_bytes
-from scripts.ops.m9_owner_approval import ManualApproval, private_directory
+from scripts.ops.m9_owner_approval import StandingApproval, private_directory
 from scripts.ops.m9_read_transport import StagedRead
 from scripts.ops.m9_read_window import CloseProof, WindowLimits, run_window
 
@@ -35,14 +35,16 @@ LIMITS = WindowLimits(
 
 
 class NativeReadBoundary:
-    def __init__(self, host, owner, work: Path, *, run=None):
-        self.host, self.owner, self.work, self.run = host, owner, work, run
+    def __init__(self, host, work: Path, *, run=None):
+        self.host, self.work, self.run = host, work, run
         self._qualified = None
-        self._decision = None
         self._read = None
         self._captures = None
         self._placement_requested = False
         self._joined = False
+
+    def selected_pins(self):
+        return self.host.selected_pins()
 
     def qualify(self, cutoff):
         self._qualified = self.host.qualify(cutoff)
@@ -56,30 +58,21 @@ class NativeReadBoundary:
     def park_requested(self, cutoff):
         return os.path.lexists(self.work / "PARK-NOW")
 
-    def await_owner(self, challenge, cutoff):
-        if self._qualified is None:
-            raise ValueError("M9_READ_QUALIFICATION_MISSING")
-        return self.owner.await_decision(challenge, self._qualified.qualification.pins, cutoff)
-
-    def check_owner_decision(self, challenge, transport, cutoff):
-        self._decision = self.owner.verify(challenge, transport, cutoff)
-        return self._decision
-
     def check_live(self, qualification, cutoff):
         return self.host.check_live(self._current(qualification), cutoff)
 
-    def place(self, qualification, cutoff):
+    def place(self, qualification, decision, cutoff):
         bound = self._current(qualification)
-        if self._decision is None or self._read is not None:
+        if decision is None or self._read is not None:
             raise ValueError("M9_READ_AUTHORIZATION_NOT_SELECTED")
         # The guest's integer admission deadline rounds down, never up.
         admit_until = math.floor(
             min(
-                self._decision.expires_at.timestamp(),
+                decision.expires_at.timestamp(),
                 qualification.candidate_expires_at.timestamp(),
             )
         )
-        claim = self._decision.challenge_sha256
+        claim = decision.challenge_sha256
         root = self.work / ("native-" + claim)
         root.mkdir(mode=0o700)
         self._captures = root / "captures"
@@ -140,8 +133,8 @@ class NativeReadBoundary:
         return self.host.check_park(cutoff)
 
 
-def run_native_read(work, host, owner, limits, *, run=None):
-    return run_window(work, NativeReadBoundary(host, owner, work, run=run), limits)
+def run_native_read(work, host, approval, limits, *, run=None):
+    return run_window(work, NativeReadBoundary(host, work, run=run), limits, approval)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -150,6 +143,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--selection", type=Path, required=True)
     parser.add_argument("--selection-sha256", required=True)
+    parser.add_argument("--approval", type=Path, required=True)
+    parser.add_argument("--approval-sha256", required=True)
     parser.add_argument("--work", type=Path, required=True)
     parser.add_argument("--target", required=True)
     parser.add_argument("--alias", required=True)
@@ -158,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("the selected Hyper-V host requires Windows")
     try:
         private_directory(args.work)
+        approval = StandingApproval.load(args.approval, args.approval_sha256, args.work)
         host = QualificationBoundary(
             args.selection,
             args.selection_sha256,
@@ -165,10 +161,11 @@ def main(argv: list[str] | None = None) -> int:
             target=args.target,
             alias=args.alias,
         )
-        owner = ManualApproval(args.work)
-        result = run_native_read(args.work, host, owner, LIMITS)
+        result = run_native_read(args.work, host, approval, LIMITS)
     except (OSError, ValueError) as exc:
-        parser.exit(2, f"M9 window refused: {type(exc).__name__}\n")
+        # A standing-approval refusal names its field; nothing else is echoed.
+        named = str(exc).startswith("approval-") and str(exc).isascii() and len(str(exc)) < 64
+        parser.exit(2, f"M9 window refused: {str(exc) if named else type(exc).__name__}\n")
     print(json_bytes({**asdict(result), "record": str(result.record)}).decode("utf-8"), end="")
     return 0 if result.accepted_read_sha256 and not result.custody_retained else 1
 

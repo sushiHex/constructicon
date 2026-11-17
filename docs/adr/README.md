@@ -90,3 +90,10 @@ advice route, only as one owner-permitted run. The owner accepted it on
 2026-11-16 ([decision record](https://github.com/sushiHex/constructicon/issues/442#issuecomment-6914406703));
 acceptance authorizes credential-free construction of that one graph, and no
 live window, permit or model call.
+
+Accepted [ADR 0026](0026-consumer-reads-spend-a-standing-approval.md) has a
+consumer READ spend one counted slot of a standing, conditioned owner
+approval. The supervisor checks it mechanically before any process and
+again against the actual pins. It replaces the in-window manual approval
+of each challenge. It supersedes only ADR 0025's per-run approval clauses,
+keeps the rejection of a standing permit, and changes nothing under `src/`.

@@ -24,6 +24,7 @@ from constructicon.core.identity import json_value
 from constructicon.core.manifest import source_graph_hash_for
 from constructicon.substrate.executors import codex_host, operator_store
 from tests.operator_store_world import StoreWorld
+from tests.test_m9_owner_approval import any_selection
 from tests.test_m9_read_transport import bash
 
 BOOT = "01234567-89ab-cdef-0123-456789abcdef"
@@ -450,8 +451,12 @@ def failed_window(tmp_path, monkeypatch, **options):
     custody.mkdir(mode=0o700)
     limits = WindowLimits(window=100, qualify=8, placement=1, dispatch=1, proof=1,
                           close=1, withdraw=9, park=10)
-    # No owner method may be reached: qualification fails before a pin packet.
-    result = run_native_read(custody, host, Namespace(), limits, run=twin)
+    # Qualification fails before a pin packet. M9 holds no real standing
+    # record, so a double admits it; its real suspension must persist.
+    approval = any_selection(custody)
+    result = run_native_read(custody, host, approval, limits, run=twin)
+    assert result.approval_suspended and approval.suspension(custody).is_file()
+    assert not list(custody.glob("selection-*"))
     return result, host, twin, custody
 
 

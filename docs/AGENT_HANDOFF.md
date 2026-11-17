@@ -16,6 +16,47 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## A consumer READ spends a standing owner approval (ADR 0026, accepted)
+
+For [#446](https://github.com/sushiHex/constructicon/issues/446): the generation-20
+window qualified, then expired unused at the timed pin approval. The owner then
+directed that consumer READs stop depending on a human approval racing a timer.
+
+What it established:
+- **The approval is a record, not a live decision.** `StandingApproval`
+  (`scripts/ops/m9_owner_approval.py`) is a closed-key canonical record in the
+  custody directory, named by digest on the CLI. It pins:
+  - consumer, controller and runtime;
+  - the stable `host_key_alias`;
+  - graph, component, guard, capability, actor and scope;
+  - the full grants;
+  - an instruction byte bound;
+  - `max_runs`, `not_after` and the exposure statement.
+  Values that are fresh per window (target, boot, generation, provider,
+  binding, candidate) are forbidden keys.
+- **It is checked twice.** Before any process, against what the selection
+  fixes; after qualification, against the actual pins. A mismatch is a named
+  `approval-*` refusal. There is no in-window human step and no manual
+  fallback.
+- **Slots are spent, never refunded.** Each slot is claimed by exclusive
+  create of the existing `selection-<decision>` marker, with decision =
+  H(record, slot). A suspension marker is written at admission and removed
+  only on an accepted, clean end, so a crash or a failed run leaves the record
+  suspended. Revocation is a `revoked-<digest>` marker or removing the record.
+- **Retired:** `ManualApproval`, the `approval.json` exchange,
+  `MAX_PIN_WAIT`, `approval_not_after` and the restated challenge literals.
+
+What it deliberately did not do:
+- No `src/` change, so no adapter or application identity moves. Every window
+  still qualifies its own fresh boot and state.
+- The per-run permit and its law are unchanged.
+- M9 has no record, so its windows now refuse at admission.
+- No live window has yet spent a standing record. The owner accepted the ADR
+  on 2026-11-17. Accepting it issues no record; issuance is a separate owner
+  act.
+
+---
+
 ## The READ supervisor carries the advice route as a second, closed consumer
 
 For [#442](https://github.com/sushiHex/constructicon/issues/442), the existing

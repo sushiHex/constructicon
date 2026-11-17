@@ -498,6 +498,22 @@ class QualificationBoundary:
     def _need(self, ok: bool, code: str) -> None:
         _require(ok, code, self._prefix)
 
+    def selected_pins(self) -> dict[str, Any]:
+        """What the reviewed selection already fixes, before any process.
+
+        Standing-approval check point (a) compares the record with this, in
+        the shape of the packet ``qualify`` builds: the consumer, controller,
+        runtime and strict host-key alias, and the consumer's fixed pins
+        (``_advice_fixed``). M9 selects no consumer pins.
+        """
+        return {
+            "consumer": self._consumer.id,
+            "controller": self._selected["controller"],
+            "runtime": self._selected["runtime"],
+            "alias": self._alias,
+            "pins": dict(self._fixed),
+        }
+
     def _select_consumer(self, selection: Path, selected: dict[str, Any]) -> str:
         """Schema 3: the advice consumer's selected data; returns its permit path."""
         chosen = selected["consumer"]

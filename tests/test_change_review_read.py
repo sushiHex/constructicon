@@ -28,17 +28,19 @@ import sys
 import time
 import types
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from scripts.ops import m9_owner_approval as owner
 from scripts.ops import m9_qualification_boundary as boundary
 from scripts.ops import m9_read_closure as closure
 from scripts.ops import m9_read_command as command
 from scripts.ops.claude_read_session import json_bytes
 from scripts.ops.m9_native_read import run_native_read
-from scripts.ops.m9_owner_approval import ManualApproval
+from scripts.ops.m9_owner_approval import StandingApproval
 from scripts.ops.m9_read_window import WindowLimits
 
 from constructicon.api import change_review_advice as route
@@ -50,6 +52,7 @@ from tests.substrate.test_codex_adapter import portable_binding as portable_bind
 from tests.substrate.test_codex_adapter import substituted_guard as substituted_guard
 from tests.substrate.test_codex_protocol import completed
 from tests.test_m8_helper_contracts import fixture_contract
+from tests.test_m9_owner_approval import forbid_supervisor_sleep
 from tests.test_m9_qualification_boundary import ALIAS, BOOT, D2, PRIOR, RUNTIME, TARGET
 from tests.test_m9_read_transport import bash
 
@@ -68,7 +71,8 @@ LIMITS = WindowLimits(window=600, qualify=120, placement=120, dispatch=120, proo
                       close=120, withdraw=30, park=30)
 
 
-def selection(root: Path, *, summary: bytes = SUMMARY, **consumer) -> tuple[Path, str]:
+def selection(root: Path, *, summary: bytes = SUMMARY, target: str = TARGET, alias: str = ALIAS,
+              **consumer) -> tuple[Path, str]:
     """A schema 3 selection: the shared twelve, then consumer-pins and consumer-mint."""
     bound = route.bound_values(DEMO)
     phases, contracts = {}, {}
@@ -95,7 +99,7 @@ def selection(root: Path, *, summary: bytes = SUMMARY, **consumer) -> tuple[Path
     ]
     (root / "summary.json").write_bytes(summary)
     raw = json_bytes({
-        "schema_version": 3, "target": TARGET, "alias": ALIAS, "previous_boot": PRIOR,
+        "schema_version": 3, "target": target, "alias": alias, "previous_boot": PRIOR,
         "controller": "0" * 40, "d2": D2, "runtime": RUNTIME, "previous_generation": 11,
         "authorization_id": AUTH_ID, "phases": phases, "helper_contracts": contracts,
         "consumer": {
@@ -494,28 +498,23 @@ class Platform:
         log = self.guest / "fake-calls"
         return collections.Counter(log.read_text("ascii").split() if log.exists() else [])
 
-    def window(self, path: Path, digest: str):
-        host = boundary.QualificationBoundary(path, digest, self.tmp / "work", target=TARGET,
+    def window(self, path: Path, digest: str, *, target: str = TARGET, record=None):
+        host = boundary.QualificationBoundary(path, digest, self.tmp / "work", target=target,
                                               alias=ALIAS, run=self)
-        exchange = self.tmp / "exchange"
-        exchange.mkdir()
-        self.approvals = []
+        if record is None:
+            # The owner's issuance, from the reviewed selection, before the window.
+            record = issued(self.custody, host.selected_pins())
+        self.record = record
+        approval = StandingApproval.load(*record, self.custody)
 
-        def approve_on_poll(_seconds):
-            (packet,) = list(exchange.iterdir())
-            challenge = (packet / "challenge.json").read_bytes()
-            assert packet.name == sha256(challenge).hexdigest()
-            self.challenge = json.loads(challenge)
-            (packet / "approval.json").write_text(json.dumps(
-                {"decision": "approve", "challenge_sha256": packet.name}), encoding="utf-8")
-            self.approvals.append(packet.name)
-
-        self.monkeypatch.setattr(time, "sleep", approve_on_poll)
+        forbid_supervisor_sleep(self.monkeypatch)
         try:
-            result = run_native_read(self.custody, host, ManualApproval(exchange.resolve()),
-                                     LIMITS, run=self)
+            result = run_native_read(self.custody, host, approval, LIMITS, run=self)
         finally:
             self.server.close()
+        self.approval = approval
+        challenge = result.record / "challenge.json"
+        self.challenge = json.loads(challenge.read_bytes()) if challenge.exists() else None
         return host, result
 
     def turns(self) -> int:
@@ -526,6 +525,18 @@ def world(tmp_path, monkeypatch, binding, **options):
     platform = Platform(tmp_path, monkeypatch, binding, **options)
     path, digest = selection(tmp_path)
     return platform, path, digest
+
+
+def issued(custody: Path, selected: dict, *, days: float = 7, changes=None,
+           name: str = "standing-approval.json") -> tuple[Path, str]:
+    """A standing record from the issuance helper, placed in custody."""
+    not_after = datetime.now(UTC).replace(microsecond=0) + timedelta(days=days)
+    raw = owner.issue(selected, not_after=not_after, max_runs=3)
+    if changes:
+        record = {**json.loads(raw), **changes}
+        raw = json_bytes({key: value for key, value in record.items() if value is not None})
+    (custody / name).write_bytes(raw)
+    return custody / name, sha256(raw).hexdigest()
 
 
 def settled_read(platform, host):
@@ -565,7 +576,15 @@ def test_an_advice_read_settles_and_is_accepted_through_the_whole_chain(
         assert len(stdout) <= command.ADVICE.log_limit
     assert platform.challenge["consumer"] == "change-review-advice"
     assert platform.challenge["procedure"] == command.ADVICE.procedure
-    assert len(platform.approvals) == 1 and platform.turns() == 1
+    # No human step: one standing slot is spent, and an accepted, clean end
+    # leaves the approval usable for its remaining slots.
+    assert platform.challenge["approval_sha256"] == platform.approval.sha256
+    assert [path.name for path in platform.custody.glob("selection-*")] == [
+        "selection-" + platform.approval.decision(1)]
+    assert result.approval_suspended is False
+    assert not platform.approval.suspension(platform.custody).exists()
+    assert platform.approval.free_slot(platform.custody) == 2
+    assert platform.turns() == 1
     # One permitted assembly; one real turn; everything else a counted fixture.
     assert platform.counts == {
         "host-assembly-permitted": 1, "guest-dispatch": 1, "guest-replay": 1,
@@ -611,6 +630,16 @@ def test_a_failed_reply_settles_cleanly_and_is_never_accepted(
     original = json.loads(stdout)
     assert original["result"]["status"] == "failed" and original["advice"] is None
     assert not (platform.guest / "fake-authority").exists()
+    # Not accepted: the approval is suspended, and the next window refuses
+    # before any process until a new record is issued.
+    assert result.approval_suspended and platform.approval.suspension(platform.custody).exists()
+    calls = []
+    retry = boundary.QualificationBoundary(path, digest, tmp_path / "retry-work", target=TARGET,
+                                           alias=ALIAS, run=calls.append)
+    with pytest.raises(ValueError, match=r"^approval-suspended$"):
+        run_native_read(platform.custody, retry, StandingApproval.load(
+            *platform.record, platform.custody), LIMITS, run=calls.append)
+    assert calls == [] and not (tmp_path / "retry-work").exists()
 
 
 # --- refusals before dispatch ------------------------------------------------------
@@ -661,7 +690,10 @@ def test_drift_crlf_and_occupied_outputs_refuse_before_dispatch(
     assert platform.counts["ssh-guest-read"] == 0 and platform.counts["guest-dispatch"] == 0
     assert "host-assembly-permitted" not in platform.counts
     assert platform.counts["powershell-park"] == (cleanup == "clean")
-    assert not list(platform.tmp.glob("exchange/*/approval.json")) or reason == "claim-unproved"
+    # Every refusal here precedes the claim: no slot spent, but the approval
+    # is suspended because the window did not end accepted and clean.
+    assert not list(platform.custody.glob("selection-*"))
+    assert result.approval_suspended and platform.approval.suspension(platform.custody).exists()
     if options.get("occupy") == "attempt-before-placement":
         assert platform.live_probes == 2
         assert Path(platform.local(ATTEMPT)).read_bytes() == b"spent elsewhere"
@@ -681,6 +713,145 @@ def test_an_occupied_permit_leaf_refuses_placement_and_is_never_removed(
     assert (platform.guest / "fake-authority").read_bytes() == b"someone else's permit\n"
     assert platform.turns() == 0 and platform.counts["guest-dispatch"] == 0
     assert "rm" not in platform.guest_calls()
+
+
+# --- the standing approval: check point (a) before any process ---------------------
+
+
+def refused_before_any_process(tmp_path, path, digest, record, *, alias=ALIAS) -> str:
+    """Run the real entry chain; return the refusal and prove no process ran."""
+    custody = tmp_path / "custody"
+    calls = []
+    host = boundary.QualificationBoundary(path, digest, tmp_path / "work", target=TARGET,
+                                          alias=alias, run=calls.append)
+    before = set(custody.iterdir())
+    with pytest.raises(ValueError) as refused:
+        approval = StandingApproval.load(*record, custody)
+        run_native_read(custody, host, approval, LIMITS, run=calls.append)
+    assert calls == [], "check point (a) precedes every transport call"
+    assert set(custody.iterdir()) == before and not (tmp_path / "work").exists()
+    return str(refused.value)
+
+
+@pytest.mark.parametrize(("changes", "code"), [
+    ({"controller": "1" * 40}, "approval-controller"),
+    ({"runtime": "sha256:" + "9" * 64}, "approval-runtime"),
+    ({"source_graph": "sha256:" + "9" * 64}, "approval-source_graph"),
+    ({"component": "sha256:" + "9" * 64}, "approval-component"),
+    ({"guard": "sha256:" + "9" * 64}, "approval-guard"),
+    ({"capability": "codex-operator-write"}, "approval-capability"),
+    ({"actor": "static:someone-else"}, "approval-actor"),
+    ({"scope": "change-review/other"}, "approval-scope"),
+    ({"grants": {**route.READ_GRANTS.model_dump(mode="json"), "timeout_s": 300}},
+     "approval-grants"),
+    ({"instruction_max_bytes": 16}, "approval-instruction_max_bytes"),
+    ({"host_key_alias": "another-host-key"}, "approval-host_key_alias"),
+    ({"boot": BOOT}, "approval-forbidden-boot"),
+    ({"generation": 12}, "approval-forbidden-generation"),
+    ({"provider_revision": "sha256:" + "9" * 64}, "approval-forbidden-provider_revision"),
+    ({"operator_binding_digest": "sha256:" + "9" * 64},
+     "approval-forbidden-operator_binding_digest"),
+    ({"candidate": "sha256:" + "9" * 64}, "approval-forbidden-candidate"),
+    ({"target": TARGET}, "approval-forbidden-target"),
+    ({"reviewer": "someone"}, "approval-unknown-key"),
+], ids=lambda value: value if isinstance(value, str) else next(iter(value)))
+def test_a_record_that_does_not_fit_the_selection_refuses_before_any_process(
+    tmp_path, changes, code,
+):
+    path, digest = selection(tmp_path)
+    (tmp_path / "custody").mkdir(mode=0o700)
+    selected = boundary.QualificationBoundary(path, digest, tmp_path / "work", target=TARGET,
+                                              alias=ALIAS).selected_pins()
+    record = issued(tmp_path / "custody", selected, changes=changes)
+    assert refused_before_any_process(tmp_path, path, digest, record) == code
+
+
+@pytest.mark.parametrize("state", ["expired", "suspended", "revoked", "exhausted", "digest"])
+def test_an_expired_suspended_revoked_or_spent_record_refuses_before_any_process(
+    tmp_path, state,
+):
+    path, digest = selection(tmp_path)
+    custody = tmp_path / "custody"
+    custody.mkdir(mode=0o700)
+    selected = boundary.QualificationBoundary(path, digest, tmp_path / "work", target=TARGET,
+                                              alias=ALIAS).selected_pins()
+    record = issued(custody, selected, days=-1 if state == "expired" else 7)
+    approval = StandingApproval.load(*record, custody)
+    if state == "suspended":
+        approval.suspension(custody).write_bytes(b"an earlier window")
+    elif state == "revoked":
+        approval.revocation(custody).write_bytes(b"")
+    elif state == "exhausted":
+        for slot in range(1, approval.max_runs + 1):
+            (custody / ("selection-" + approval.decision(slot))).write_bytes(b"spent")
+    elif state == "digest":
+        record = (record[0], "0" * 64)
+    assert refused_before_any_process(tmp_path, path, digest, record) == "approval-" + state
+
+
+def test_a_different_host_key_alias_refuses_before_any_process(tmp_path):
+    path, digest = selection(tmp_path)
+    (tmp_path / "custody").mkdir(mode=0o700)
+    selected = boundary.QualificationBoundary(path, digest, tmp_path / "work", target=TARGET,
+                                              alias=ALIAS).selected_pins()
+    record = issued(tmp_path / "custody", selected)
+    # A reviewed selection for another host: its strict alias differs.
+    other_path, other_digest = selection(tmp_path, alias="another-host-key")
+    assert refused_before_any_process(
+        tmp_path, other_path, other_digest, record, alias="another-host-key",
+    ) == "approval-host_key_alias"
+
+
+def test_m9_has_no_standing_record_and_refuses_before_any_process(tmp_path):
+    from tests.test_m9_qualification_boundary import selected as m9_selection
+
+    advice_path, advice_digest = selection(tmp_path)
+    (tmp_path / "custody").mkdir(mode=0o700)
+    record = issued(tmp_path / "custody", boundary.QualificationBoundary(
+        advice_path, advice_digest, tmp_path / "work", target=TARGET, alias=ALIAS,
+    ).selected_pins())
+    (tmp_path / "m9").mkdir()
+    m9_path, m9_digest = m9_selection(tmp_path / "m9")
+    assert refused_before_any_process(tmp_path, m9_path, m9_digest, record) == "approval-consumer"
+    with pytest.raises(ValueError, match=r"^approval-consumer$"):
+        owner.issue(boundary.QualificationBoundary(
+            m9_path, m9_digest, tmp_path / "work", target=TARGET, alias=ALIAS,
+        ).selected_pins(), not_after=datetime.now(UTC) + timedelta(days=7))
+
+
+def test_a_new_dhcp_address_with_the_same_strict_alias_is_accepted(
+    tmp_path, monkeypatch, portable_binding, substituted_guard,
+):
+    """The record pins the host-key alias, never the per-boot address."""
+    platform = Platform(tmp_path, monkeypatch, portable_binding)
+    path, digest = selection(tmp_path)
+    record = issued(platform.custody, boundary.QualificationBoundary(
+        path, digest, tmp_path / "unused", target=TARGET, alias=ALIAS,
+    ).selected_pins())
+    moved = TARGET.rsplit(".", 1)[0] + ".99"
+    path, digest = selection(tmp_path, target=moved)  # the next boot's reviewed selection
+    _, result = platform.window(path, digest, target=moved, record=record)
+    assert (result.reason, result.dispatch, result.cleanup, result.custody_retained) == (
+        "read-settled", "terminal", "clean", False,
+    )
+    assert result.accepted_read_sha256 is not None and platform.turns() == 1
+    assert json.loads((result.record / "result.json").read_bytes())["approval_slot"] == 1
+
+
+def test_the_issuance_cli_writes_a_canonical_record_the_entry_accepts(tmp_path):
+    path, digest = selection(tmp_path)
+    custody = tmp_path / "custody"
+    custody.mkdir(mode=0o700)
+    out = custody / "standing-approval.json"
+    printed = io.StringIO()
+    with redirect_stdout(printed):
+        assert owner.main(["--selection", str(path), "--selection-sha256", digest,
+                           "--out", str(out)]) == 0
+    approval = StandingApproval.load(out, printed.getvalue().strip(), custody)
+    assert approval.max_runs == 3
+    assert timedelta(days=6) < approval.not_after - datetime.now(UTC) <= timedelta(days=7)
+    assert approval.record["host_key_alias"] == ALIAS and "target" not in approval.record
+    assert not (custody / "unused-issuance-work").exists()
 
 
 def test_m9_keeps_its_own_descriptor_and_a_scoped_site_is_closed():
