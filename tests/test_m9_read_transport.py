@@ -319,8 +319,9 @@ def test_supervisor_closes_window_with_real_generated_transport_after_lost_respo
     from types import SimpleNamespace
 
     from scripts.ops.m9_native_read import run_native_read
-    from scripts.ops.m9_owner_approval import ManualApproval
     from scripts.ops.m9_read_window import Qualification, WindowLimits
+
+    from tests.test_m9_owner_approval import any_selection
 
     events = []
     now = datetime.now(UTC)
@@ -334,6 +335,9 @@ def test_supervisor_closes_window_with_real_generated_transport_after_lost_respo
     )
 
     class Host:
+        def selected_pins(self):
+            return {"consumer": "m9"}
+
         def qualify(self, cutoff):
             return bound
 
@@ -353,22 +357,14 @@ def test_supervisor_closes_window_with_real_generated_transport_after_lost_respo
             events.append("check-park")
             return "c" * 64
 
-    exchange = tmp_path / "exchange"
-    exchange.mkdir()
-    approvals = []
+    # M9 can hold no real standing record (its consumer is not the advice
+    # route), so this transport regression spends a double's real slot.
+    approval = any_selection()
 
-    def approve_on_poll(_seconds):
-        packets = list(exchange.iterdir())
-        assert len(packets) == 1
-        packet = packets[0]
-        challenge = (packet / "challenge.json").read_bytes()
-        assert packet.name == sha256(challenge).hexdigest()
-        assert (packet / "pins.json").read_bytes() == qualification.pins
-        approval = {"decision": "approve", "challenge_sha256": packet.name}
-        (packet / "approval.json").write_text(json.dumps(approval), encoding="utf-8")
-        approvals.append(approval)
+    def no_human_wait(_seconds):
+        pytest.fail("no window step waits for a human")
 
-    monkeypatch.setattr(time, "sleep", approve_on_poll)
+    monkeypatch.setattr(time, "sleep", no_human_wait)
 
     guest = None
 
@@ -390,7 +386,7 @@ def test_supervisor_closes_window_with_real_generated_transport_after_lost_respo
 
     limits = WindowLimits(window=300, qualify=10, placement=60, dispatch=30, proof=30,
                           close=60, withdraw=10, park=10)
-    result = run_native_read(tmp_path, Host(), ManualApproval(exchange), limits, run=fake_host)
+    result = run_native_read(tmp_path, Host(), approval, limits, run=fake_host)
     assert (result.reason, result.dispatch, result.cleanup, result.custody_retained) == (
         "read-settled", "terminal", "clean", False,
     )
@@ -400,8 +396,10 @@ def test_supervisor_closes_window_with_real_generated_transport_after_lost_respo
         assert result.accepted_read_sha256 == m9_read_closure.accept_result(
             pins, projection, original_wire, b"", 0
         )
-    assert len(approvals) == 1
-    assert guest is not None
+    challenge = (result.record / "challenge.json").read_bytes()
+    assert guest is not None and guest.claim == sha256(challenge).hexdigest()
+    assert (tmp_path / ("selection-" + approval.decision(1))).is_file()
+    assert result.approval_suspended is replayed
     assert guest.events == ["place", "readback", "dispatch", "prove", "original",
                             "projection", "discard"]
     assert (guest.root / "fake-call").read_bytes() == b"invoked"

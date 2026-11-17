@@ -2,9 +2,10 @@
 
 ## M9 Codex READ
 
-`m9_native_read.py` composes one selected qualification with a manual owner
-approval, one possible native READ, evidence acceptance, withdrawal and
-verified park. The current qualification boundary starts with an already
+`m9_native_read.py` composes one selected qualification with one slot of the
+owner's standing approval
+([ADR 0026](../../docs/adr/0026-consumer-reads-spend-a-standing-approval.md)),
+one possible native READ, evidence acceptance, withdrawal and verified park. The current qualification boundary starts with an already
 started guest under separately held, reviewed VM custody. Follow the
 [VM custody procedure](../../docs/plans/handoffs/M8-vm-custody.md) for the start
 and address observation. The retained local `active` marker is not a substitute
@@ -21,39 +22,66 @@ captures, old grants, and a prior boot's approvals are not inputs. Keep the
 scope short enough for the earliest qualification deadline and reserve time for
 withdrawal and park. The CLI caps the window at 75 minutes once it starts.
 
-Once the supervisor publishes `pins.json` and `challenge.json`, run
-`sha256sum pins.json challenge.json` in the printed directory. Confirm the pins
-digest matches `pins_sha256` in `challenge.json` and the challenge digest matches
-the directory name. Show the owner those pins, that challenge digest, expiry,
-limits, and cost exposure. Wait
-for the owner's explicit go-ahead for that challenge before recording approval.
-The trusted operator records the decision; the runner verifies its scope and
-expiry without authenticating a separate signer. No key or second device is needed.
+### The standing approval
 
-From that challenge's directory, the operator can publish the approved record
-atomically. Replace `EXACT_CHALLENGE_SHA256` with the digest the owner approved:
+No human step runs inside a window and nothing waits for one. Before any
+window, the owner issues one standing record for the change-review advice
+consumer from a reviewed schema 3 selection:
 
 ```bash
-printf '%s\n' '{"decision":"approve","challenge_sha256":"EXACT_CHALLENGE_SHA256"}' > approval.pending
-mv -n approval.pending approval.json
+python -I -B scripts/ops/m9_owner_approval.py \
+  --selection PRIVATE_SELECTION_JSON --selection-sha256 REVIEWED_SELECTION_DIGEST \
+  --out STABLE_PRIVATE_CUSTODY_DIR/standing-approval.json < /dev/null
 ```
 
-The window ends without dispatch on no decision, decline, malformed input,
-expiry, or a mismatched digest. Do not replace the decision or retry that
-window. `PARK-NOW` in the custody directory requests a stop.
+It prints the record's SHA-256. The defaults are the recommended issuance:
+seven days (`--days`) and three runs (`--max-runs`). The record is canonical
+JSON (sorted keys, one trailing LF) with exactly these keys: `schema_version`
+(1), `consumer` (`change-review-advice`), `controller`, `runtime`,
+`source_graph`, `component`, `guard`, `capability`, `actor`, `scope`,
+`grants`, `instruction_max_bytes` (at most the route's 8,192), `max_runs`,
+`not_after` (UTC ISO 8601), `exposure` (the exact literal
+`subscription; backend requests unknown; no enforced monetary ceiling`) and
+`host_key_alias`. A key that is fresh per window (`boot`, `candidate`,
+`generation`, `operator_binding_digest`, `provider_revision`, `target`) or
+unknown is refused by name. The owner reviews the bytes and records the
+digest in an owner issue comment; there is no signing key. M9 cannot be
+issued a record, so every M9 window refuses with `approval-consumer`.
+
+The record must sit directly in the custody directory. The supervisor
+checks it before any process against what the selection fixes, and again
+after qualification against the actual pins. Any mismatch ends the window
+with `approval-<field>`, naming the field. It is never an escalation and
+there is no manual fallback. Each window spends the lowest unspent slot
+(`selection-<H(record digest, slot)>`, created exclusively) and never
+refunds it. A window that does not end accepted and clean leaves
+`suspended-<record digest>` behind. So does a crash, because the marker is
+written at admission. Every later window then refuses with
+`approval-suspended` until the owner issues a new record. To revoke a
+record, the owner deletes or replaces it (`approval-unreadable` or
+`approval-digest`) or creates `revoked-<record digest>` in the custody
+directory (`approval-revoked`). An expired record refuses with
+`approval-expired`, and a fully spent one with `approval-exhausted`.
+
+`PARK-NOW` in the custody directory requests a stop.
 
 The operator entry, after separate scope selection and the fresh start, is:
 
 ```bash
 python -I -B scripts/ops/m9_native_read.py \
   --selection PRIVATE_SELECTION_JSON --selection-sha256 REVIEWED_SELECTION_DIGEST \
+  --approval STABLE_PRIVATE_CUSTODY_DIR/standing-approval.json \
+  --approval-sha256 RECORDED_APPROVAL_DIGEST \
   --work STABLE_PRIVATE_CUSTODY_DIR \
   --target CHECKED_OPERATOR_AT_ADDRESS --alias CHECKED_HOST_KEY_ALIAS < /dev/null
 ```
 
-Use the same checked private custody directory for every window on the target.
-Only an accepted READ digest and verified cleanup yield exit zero. An unresolved
-dispatch or withdrawal retains custody; do not park or retry by inference.
+The `--target` address may change with every boot. The record pins only the
+strict host-key alias that `ssh -o StrictHostKeyChecking=yes -o
+HostKeyAlias=...` verifies. Use the same checked private custody directory for
+every window on the target. Only an accepted READ digest and verified cleanup
+yield exit zero. An unresolved dispatch or withdrawal retains custody. Do not
+park or retry by inference.
 The fake-host tests demonstrate the operator wiring. They do not qualify a
 private deployment bundle or authorize access to the VM.
 

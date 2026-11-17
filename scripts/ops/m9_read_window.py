@@ -1,9 +1,10 @@
 """One supervisor for a same-boot Codex READ by a reviewed consumer (M9 or
 change-review advice). No native fallback or resume.
 
-The trusted operator records the owner's decision. The adapter checks its
-scope and expiry, and losing the dispatch response is not evidence that the
-guest stopped.
+Each window spends one slot of the owner's standing approval (ADR 0026),
+checked before any process and again against the actual pins. No human step
+runs inside the window. The adapter checks the permit's scope and expiry, and
+losing the dispatch response is not evidence that the guest stopped.
 """
 
 from __future__ import annotations
@@ -19,13 +20,17 @@ from contextlib import suppress
 from dataclasses import dataclass, fields
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal, Protocol, TypeVar
+from typing import TYPE_CHECKING, Literal, Protocol, TypeVar
 
 from scripts.ops.claude_read_session import json_bytes, retain
 from scripts.ops.m9_read_command import CONSUMERS, M9
 
-SCHEMA_VERSION = 1
-MAX_PIN_WAIT = 15 * 60
+if TYPE_CHECKING:
+    from scripts.ops.m9_owner_approval import StandingApproval
+
+# 2: the challenge restates no card literals and names the standing approval;
+# the result names the approval, its spent slot and whether it is suspended.
+SCHEMA_VERSION = 2
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _T = TypeVar("_T")
 
@@ -84,7 +89,11 @@ class Qualification:
 
 @dataclass(frozen=True)
 class OwnerDecision:
-    """The recorded manual decision bound to the current challenge."""
+    """The slot this window spent of the owner's standing approval.
+
+    ``decision_sha256`` is H(approval digest, slot); ``expires_at`` is the
+    approval's ``not_after``.
+    """
 
     challenge_sha256: str
     decision_sha256: str
@@ -115,25 +124,27 @@ class WindowResult:
     cleanup: Literal["clean", "unknown"]
     custody_retained: bool
     accepted_read_sha256: str | None
+    # The standing approval stays suspended unless this window ended accepted and clean.
+    approval_suspended: bool = True
 
 
 class ReadBoundary(Protocol):
     """Each call must enforce its absolute monotonic deadline, including transport.
 
-    All calls are single shot. Qualification and checking cannot issue READ.
-    Cleanup accepts an absent qualification so the adapter can affirmatively
-    unwind a partially completed qualification. Each cleanup digest names a
-    checked receipt. Park verification is independent of the park request.
+    All calls are single shot. ``selected_pins`` runs no process. Qualification
+    and checking cannot issue READ. Cleanup accepts an absent qualification so
+    the adapter can affirmatively unwind a partially completed qualification.
+    Each cleanup digest names a checked receipt. Park verification is
+    independent of the park request.
     """
 
+    def selected_pins(self) -> dict[str, object]: ...
     def qualify(self, cutoff: float) -> Qualification: ...
     def park_requested(self, cutoff: float) -> bool: ...
-    def await_owner(self, challenge: bytes, cutoff: float) -> bytes | None: ...
-    def check_owner_decision(
-        self, challenge: bytes, transport: bytes, cutoff: float
-    ) -> OwnerDecision | None: ...
     def check_live(self, qualification: Qualification, cutoff: float) -> bool: ...
-    def place(self, qualification: Qualification, cutoff: float) -> None: ...
+    def place(
+        self, qualification: Qualification, decision: OwnerDecision, cutoff: float
+    ) -> None: ...
     def readback(self, qualification: Qualification, cutoff: float) -> bytes: ...
     def dispatch(self, qualification: Qualification, cutoff: float) -> None: ...
     def prove_remote(
@@ -168,10 +179,30 @@ def _now_utc() -> datetime:
     return datetime.now(UTC)
 
 
+def _claim_slot(
+    work: Path, approval: StandingApproval, claim_for: Callable[[int, str], bytes],
+) -> tuple[int, str, bytes] | None:
+    """Spend the lowest unspent slot by exclusive create; never refunded.
+
+    Two claimers cannot take one slot: the loser's create raises and it moves
+    on. A crash after the create leaves the slot spent.
+    """
+    for slot in range(1, approval.max_runs + 1):
+        decision = approval.decision(slot)
+        claim = claim_for(slot, decision)
+        try:
+            _retain(work / ("selection-" + decision), claim)
+        except FileExistsError:
+            continue
+        return slot, decision, claim
+    return None
+
+
 def run_window(
     work: Path,
     boundary: ReadBoundary,
     limits: WindowLimits,
+    approval: StandingApproval,
     *,
     monotonic: Callable[[], float] = time.monotonic,
     utc: Callable[[], datetime] = _now_utc,
@@ -181,6 +212,8 @@ def run_window(
     A caller must affirm protected ancestors (and a restrictive Windows ACL)
     and reuse this directory for that target. A retained
     active marker prevents another run until custody is resolved externally.
+    A refusal at approval check point (a) raises ``ValueError`` with its
+    closed ``approval-*`` code before any process, and retains nothing.
     """
     if not work.is_absolute() or not work.is_dir() or work != work.resolve(strict=True):
         raise ValueError("a canonical private custody directory is required")
@@ -189,6 +222,22 @@ def run_window(
     nonce = uuid.uuid4().hex
     active = work / "active"
     _retain(active, nonce.encode("ascii"))
+    # Check point (a): the record against what the selection fixes, before
+    # any process. Admission writes the suspension marker exclusively; only an
+    # accepted and clean end removes it, so a crash leaves the approval suspended.
+    try:
+        refusal = approval.admit(boundary.selected_pins(), work, utc())
+        if refusal is None:
+            try:
+                _retain(approval.suspension(work), nonce.encode("ascii"))
+            except FileExistsError:
+                refusal = "approval-suspended"
+    except BaseException:
+        active.unlink()
+        raise
+    if refusal is not None:
+        active.unlink()
+        raise ValueError(refusal)
     record = work / nonce
     record.mkdir(mode=0o700)
 
@@ -209,6 +258,7 @@ def run_window(
     qualified = None
     placed = False
     marker_uncertain = False
+    spent_slot: int | None = None
     dispatched: Literal["not-issued", "unknown", "terminal", "fenced"] = "not-issued"
     dispatch_transport = "not-called"
     reason = "qualification-unproved"
@@ -231,9 +281,14 @@ def run_window(
         )
         consumer = CONSUMERS[qualified.consumer]
         cutoff = min(cutoff, qualified.cutoff)
-        pin_cutoff = min(monotonic() + MAX_PIN_WAIT, cutoff - route_reserve)
+        # No human waits inside a window: the pins hold only for the route.
+        pin_cutoff = cutoff - route_reserve
         _require(now < qualified.candidate_expires_at, "expired")
         _require(monotonic() < pin_cutoff, "budget")
+        # Check point (b): exact equality against the actual pins bytes.
+        reason = "approval-unproved"
+        refusal = approval.confirm(qualified.consumer, qualified.pins, work, now, nonce)
+        _require(refusal is None, refusal or reason)
         challenge = json_bytes(
             {
                 "schema_version": SCHEMA_VERSION,
@@ -242,48 +297,25 @@ def run_window(
                 "pins_sha256": _sha(qualified.pins),
                 "candidate_sha256": _sha(qualified.candidate),
                 "candidate_expires_at": qualified.candidate_expires_at.isoformat(),
-                "approval_not_after": min(
-                    qualified.candidate_expires_at,
-                    now + timedelta(seconds=pin_cutoff - monotonic()),
-                ).isoformat(),
                 "consumer": consumer.id,
                 "procedure": consumer.procedure,
-                "model": "gpt-6.1-sol",
-                "effort": "low",
-                "epochs": 1,
-                "native_user_turns": 1,
-                "executor_seconds": 120,
-                "exposure": "subscription; backend requests unknown; no enforced monetary ceiling",
+                "approval_sha256": approval.sha256,
             }
         )
         challenge_sha = _sha(challenge)
         _retain(record / "challenge.json", challenge)
         reason = "park-check-unproved"
         _require(call(pin_cutoff, boundary.park_requested) is False, "park-requested")
-        reason = "owner-selection-unproved"
-        transport = call(pin_cutoff, boundary.await_owner, challenge)
-        _require(transport is not None, "no-selection")
-        decision = call(pin_cutoff, boundary.check_owner_decision, challenge, transport)
-        _require(
-            type(decision) is OwnerDecision
-            and decision.challenge_sha256 == challenge_sha
-            and _digest(decision.decision_sha256)
-            and _utc(decision.selected_at)
-            and _utc(decision.expires_at)
-            and now <= decision.selected_at < decision.expires_at,
-            "invalid-selection",
-        )
 
-        chosen_expiry = min(decision.expires_at, qualified.candidate_expires_at)
-        current = utc()
-        _require(_utc(current), "expired")
-        admission_end = monotonic() + (chosen_expiry - current).total_seconds()
+        selected_at = now
+        chosen_expiry = min(approval.not_after, qualified.candidate_expires_at)
+        admission_end = monotonic() + (chosen_expiry - selected_at).total_seconds()
 
         def check_admission() -> None:
             current = utc()
             _require(
                 _utc(current)
-                and decision.selected_at <= current < chosen_expiry
+                and selected_at <= current < chosen_expiry
                 and monotonic() < admission_end,
                 "expired",
             )
@@ -293,24 +325,34 @@ def run_window(
         _require(call(pin_cutoff, boundary.park_requested) is False, "park-requested")
         check_admission()
         _require(monotonic() < pin_cutoff, "budget")
-        claim = json_bytes(
-            {
-                "approval_kind": "manual-operator-recorded",
-                "challenge_sha256": challenge_sha,
-                "decision_sha256": decision.decision_sha256,
-                "checked_at": decision.selected_at.isoformat(),
-                "expires_at": decision.expires_at.isoformat(),
-            }
-        )
+
+        def claim_for(slot: int, decision_sha256: str) -> bytes:
+            return json_bytes(
+                {
+                    "approval_kind": "standing",
+                    "approval_sha256": approval.sha256,
+                    "slot": slot,
+                    "challenge_sha256": challenge_sha,
+                    "decision_sha256": decision_sha256,
+                    "checked_at": selected_at.isoformat(),
+                    "expires_at": approval.not_after.isoformat(),
+                }
+            )
+
         marker_uncertain = True
+        claimed = _claim_slot(work, approval, claim_for)
+        if claimed is None:
+            marker_uncertain = False
+            raise _Stop("approval-exhausted")
+        spent_slot, decision_sha, claim = claimed
         try:
-            _retain(work / ("selection-" + decision.decision_sha256), claim)
             _retain(work / ("claim-" + qualified.window_sha256), claim)
         except FileExistsError as exc:
             marker_uncertain = False
             raise _Stop("replayed-selection") from exc
-        save("claim", {"window_sha256": qualified.window_sha256})
+        save("claim", {"window_sha256": qualified.window_sha256, "slot": spent_slot})
         marker_uncertain = False
+        decision = OwnerDecision(challenge_sha, decision_sha, selected_at, approval.not_after)
 
         reason = "placement-unproved"
         placement_cutoff = min(
@@ -321,7 +363,7 @@ def run_window(
         _require(call(placement_cutoff, boundary.park_requested) is False, "park-requested")
         check_admission()
         placed = True  # A failed response may follow the effect.
-        call(placement_cutoff, boundary.place, qualified)
+        call(placement_cutoff, boundary.place, qualified, decision)
         readback = call(placement_cutoff, boundary.readback, qualified)
         _require(type(readback) is bytes and readback == qualified.candidate, "readback-mismatch")
         _require(call(placement_cutoff, boundary.park_requested) is False, "park-requested")
@@ -419,6 +461,13 @@ def run_window(
             if not cleaned:
                 reason = "park-unproved"
     custody_retained = not cleaned or marker_uncertain
+    # Suspension persists after any window that is not accepted and clean;
+    # a failed removal keeps the approval suspended, never the reverse.
+    suspended = True
+    if accepted_read is not None and not custody_retained:
+        with suppress(OSError):
+            approval.suspension(work).unlink()
+            suspended = False
     result = WindowResult(
         record,
         reason,
@@ -426,6 +475,7 @@ def run_window(
         "clean" if cleaned else "unknown",
         custody_retained,
         accepted_read,
+        suspended,
     )
     save(
         "result",
@@ -438,6 +488,9 @@ def run_window(
             "accepted_read_sha256": result.accepted_read_sha256,
             "custody_release_eligible": not custody_retained,
             "marker_uncertain": marker_uncertain,
+            "approval_sha256": approval.sha256,
+            "approval_slot": spent_slot,
+            "approval_suspended": suspended,
         },
     )
     if not custody_retained:
