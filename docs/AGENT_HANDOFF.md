@@ -29,11 +29,11 @@ What it established:
 - **The record carries no per-change value.** `source_graph` and `component`
   come from `advice_graph()` and `advice_definition()`
   (`src/constructicon/api/change_review_advice.py`, `bound_values`). A new
-  change summary alters only the instruction, its digest, the idempotency key
-  and the run id. None of those is a record key, so one record serves
-  different requests. Generations 21 and 22 share a run id because they
+  change summary changes only instruction-derived values: the instruction
+  and its size, its digest, the idempotency key and the run id. None of those
+  is a record key, so one record serves different requests. Generations 21 and 22 share a run id because they
   advised on the same summary.
-- **Later windows are pinned bytes, not rules.**
+- **Offline reference packages bound later windows.**
   - The packages for generations 23 and 24 were compiled offline, in advance,
     by the reviewed preparer. Only its namespace constants and input-directory
     literal changed.
@@ -44,11 +44,13 @@ What it established:
 - **Pre-start fit uses the existing pure API.** `StandingApproval.load`,
   `selected_pins()` and `admit()` are read-only. They refuse an expired,
   revoked, suspended or exhausted record before any VM start. Evaluating
-  `admit()` again at now + 5400 s refuses a start that could expire mid-window.
+  `admit()` again at now + 5400 s reserves the 90-minute window at check
+  time. A later change of state, input or clock can still refuse.
 - **Nothing new counts windows.** The lowest free slot maps slot 2 to
-  generation 23 and slot 3 to generation 24. `max_runs` refuses a fourth. A
-  window that is not accepted clean leaves the record suspended, which ends
-  the scope.
+  generation 23 and slot 3 to generation 24. `max_runs` refuses a fourth. Once
+  admitted, a window that is not accepted clean leaves the record suspended,
+  which ends the scope. A refusal before admission spends and suspends
+  nothing.
 
 What it deliberately did not do:
 - No code, record schema or ADR change. The scope stays private in custody,

@@ -11562,8 +11562,9 @@ The whole challenge packet hash was not reconstructed. Source order places the
 slot claim after a successful record check.
 
 Generations 21 and 22 report the same run id. The run id derives from the
-instruction, and both windows advised on the same summary, so this is expected
-and not copied evidence.
+instruction, and both windows advised on the same summary, so a shared id is
+expected. On its own, a shared id neither indicates nor rules out copied
+captures.
 
 The record is unchanged, unrevoked and unsuspended, and slots 2 and 3 remain
 free. This is one accepted READ at one revision and boot. It does not measure
