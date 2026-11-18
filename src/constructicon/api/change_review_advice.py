@@ -226,7 +226,8 @@ class ChangeSummaryV2(BaseModel):
                         for kind, part in zip(kinds.changed, parts, strict=True))
             )
         # An unchanged module AST cannot hold a public symbol change.
-        if not consistent or (self.module_ast_changed is False and any(self.counts.values())):
+        if not consistent or (self.module_ast_changed is False and (
+                any(self.counts.values()) or any(self.symbols.values()))):
             raise ValueError("the structural facts do not align with the summary")
         return self
 

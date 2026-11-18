@@ -804,9 +804,11 @@ def test_missing_detail_is_null_never_a_negative():
     {"kinds": {"added": ["function"], "removed": [], "changed": ["multiple"]}},
     {"scope": "top-level public functions and classes; AST comparison only"},
     {"module_ast_changed": False},
+    {"module_ast_changed": False, "counts": {"added": 0, "removed": 0, "changed": 0}},
 ], ids=["kinds-null", "parts-null", "module-null", "parts-short", "parts-unknown",
         "parts-empty", "parts-unsorted", "parts-repeated", "kinds-misaligned",
-        "multiple-with-parts", "v1-scope", "unchanged-module-with-changes"])
+        "multiple-with-parts", "v1-scope", "unchanged-module-with-changes",
+        "unchanged-module-with-listed-names"])
 async def test_an_inconsistent_structural_fact_refuses_at_the_node(change):
     payload = {**DEMO.model_dump(mode="json"), **change}
     with pytest.raises(ContractViolation) as refused:
