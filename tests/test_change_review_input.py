@@ -42,7 +42,7 @@ def test_packet_uses_the_actual_summary_and_instruction_producers(source_world, 
     out = tmp_path / "packet"
     record = prepare(repository, controller, before, after, "calc.py", out)
     raw = (out / "summary.json").read_bytes()
-    summary = advice.ChangeSummaryV1.model_validate_json(raw)
+    summary = advice.ChangeSummaryV2.model_validate_json(raw)
     bound = advice.bound_values(summary)
     assert record["summary_sha256"] == hashlib.sha256(raw).hexdigest()
     assert record["offline_pins"] == bound.projection()

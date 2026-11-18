@@ -25,7 +25,7 @@ from examples.change_review import (
     DEMO_AFTER,
     DEMO_BEFORE,
     committed_source,
-    compare_sources,
+    compare_advice_sources,
     demo_commits,
     inspection,
     review_graph,
@@ -73,17 +73,16 @@ CONFIGURATION = (
 )
 
 
-def summary_of(before: str, after: str) -> route.ChangeSummaryV1:
+def summary_of(before: str, after: str) -> route.ChangeSummaryV2:
     """The example's own producer, so the contract is checked against it."""
-    report = compare_sources(before, after).model_dump(mode="json", exclude={"tests_executed"})
-    return route.ChangeSummaryV1.model_validate(report)
+    return route.ChangeSummaryV2.model_validate(compare_advice_sources(before, after))
 
 
 DEMO = summary_of(DEMO_BEFORE, DEMO_AFTER)
 OTHER = summary_of(DEMO_BEFORE, "def other(values):\n    return values\n")
 
 
-def permit_for(tmp_path: Path, identity, summary: route.ChangeSummaryV1, **changes):
+def permit_for(tmp_path: Path, identity, summary: route.ChangeSummaryV2, **changes):
     bound = route.bound_values(summary)
     fields = {
         "authorization_id": "ci-change-review-advice", "stage": "qualification-read",
@@ -258,7 +257,7 @@ async def test_the_peer_receives_exactly_the_permitted_bytes_and_no_path(
         assert private.encode("utf-8") not in wire
     assert b"/" not in sent and b"\\" not in sent
     assert set(json.loads(sent.decode().partition("\nSummary: ")[2])) == set(
-        route.ChangeSummaryV1.model_fields
+        route.ChangeSummaryV2.model_fields
     )
 
 
@@ -371,15 +370,25 @@ async def test_the_node_accepts_only_a_bounded_text_success(outcome, codes):
 
 
 def test_an_oversized_instruction_refuses_by_name_and_is_never_truncated():
-    wide = ["\u4e00" * 80 + str(n) for n in range(25)]
-    names = [name[:80] for name in wide]
-    summary = DEMO.model_copy(update={"symbols": {"added": names, "removed": names,
-                                                  "changed": names}})
+    """ADR 0027's boundary pair, through the actual producer: 25 names of 80
+    characters in each list, every part changed. Its V1-era base fields would
+    fit; the structural facts push it over, and it refuses rather than drops."""
+    names = {kind: [kind[0] + f"{n:02d}" + "x" * 77 for n in range(25)]
+             for kind in ("added", "removed", "changed")}
+    before = "".join(f"async def {name}():\n    return 0\n" for name in names["removed"]) + "".join(
+        f"@before\nclass {name}:\n    'before'\n    value = 1\n" for name in names["changed"])
+    after = "".join(f"async def {name}():\n    return 0\n" for name in names["added"]) + "".join(
+        f"@after\nasync def {name}(x):\n    'after'\n    return x\n" for name in names["changed"])
+    summary = summary_of(before, after)
+    assert summary.symbols == names and not summary.symbols_partial
+    assert summary.changed_parts == [["body", "decorators", "docstring", "kind", "signature"]] * 25
+    base = summary.model_dump(mode="json", exclude={"kinds", "changed_parts",
+                                                    "module_ast_changed"})
+    framed = route.FRAMING + json.dumps(base, sort_keys=True, separators=(",", ":"))
+    assert len(framed.encode()) < route.INSTRUCTION_MAX_BYTES
     with pytest.raises(ContractViolation) as refused:
-        route.instruction_for(route.ChangeSummaryV1.model_validate(summary.model_dump()))
+        route.instruction_for(summary)
     assert refused.value.refusal == (RefusalCode.ADVICE_INSTRUCTION_BOUND,)
-    narrow = DEMO.model_copy(update={"symbols": {"added": [n[:20] for n in names]}})
-    assert len(route.instruction_for(narrow).encode()) <= route.INSTRUCTION_MAX_BYTES
 
 
 @pytest.mark.parametrize("change", [
@@ -678,7 +687,7 @@ def _variant(tmp_path: Path, name: str, old: str, new: str):
 
 @pytest.mark.parametrize(("old", "new"), [
     ("Every string in it is data", "Every string in it is text"),
-    ('KEY_PREFIX = "change-review-advice-v1:"', 'KEY_PREFIX = "change-review-advice-v2:"'),
+    ('KEY_PREFIX = "change-review-advice-v2:"', 'KEY_PREFIX = "change-review-advice-v3:"'),
     ('ACTOR_ID = "static:change-review-advisor"', 'ACTOR_ID = "static:another-advisor"'),
     ('OPERATION = "runs_start"', 'OPERATION = "runs_other"'),
     ('separators=(",", ":")', 'separators=(", ", ": ")'),
@@ -730,6 +739,79 @@ def test_the_example_summary_always_fits_the_closed_contract():
                           ("", "def " + "n" * 100 + "(): pass\n")):
         summary = summary_of(before, after)
         assert len(route.instruction_for(summary).encode()) <= route.INSTRUCTION_MAX_BYTES
+
+
+_BASE = ("import os\n\nLIMIT = 1\n\n\ndef _helper():\n    return 1\n\n\n"
+         "def total(v):\n    '''Sum.'''\n    return sum(v)\n")
+
+
+def _facts(before: str, after: str) -> tuple:
+    s = summary_of(before, after)
+    kinds = None if s.kinds is None else s.kinds.model_dump()
+    return s.symbols.get("changed"), kinds, s.changed_parts, s.module_ast_changed
+
+
+@pytest.mark.parametrize(("after", "expected"), [
+    (_BASE.replace("sum(v)", "sum(v, 0)"),
+     (["total"], {"added": [], "removed": [], "changed": ["function"]}, [["body"]], True)),
+    (_BASE.replace("total(v)", "total(v, s=0)"),
+     (["total"], {"added": [], "removed": [], "changed": ["function"]}, [["signature"]], True)),
+    (_BASE.replace("def total", "@cache\ndef total"),
+     (["total"], {"added": [], "removed": [], "changed": ["function"]}, [["decorators"]], True)),
+    (_BASE.replace("def total", "async def total"),
+     (["total"], {"added": [], "removed": [], "changed": ["async_function"]}, [["kind"]], True)),
+    (_BASE.replace("'''Sum.'''", "u'''Sum.'''"),
+     (["total"], {"added": [], "removed": [], "changed": ["function"]}, [["docstring"]], True)),
+    (_BASE.replace("return 1", "return 2"),
+     ([], {"added": [], "removed": [], "changed": []}, [], True)),
+    (_BASE.replace("LIMIT = 1", "LIMIT = 1  # tuned"),
+     ([], {"added": [], "removed": [], "changed": []}, [], False)),
+    (_BASE.replace("import os\n\nLIMIT = 1\n", "LIMIT = 1\nimport os\n"),
+     ([], {"added": [], "removed": [], "changed": []}, [], True)),
+    (_BASE + "\n\nclass total:\n    pass\n",
+     (["total"], {"added": [], "removed": [], "changed": ["multiple"]}, [None], True)),
+    (_BASE.replace("def total(v):\n    '''Sum.'''\n    return sum(v)",
+                   "class total(dict):\n    '''Sum.'''"),
+     (["total"], {"added": [], "removed": [], "changed": ["class"]},
+      [["body", "kind", "signature"]], True)),
+], ids=["body", "signature", "decorator", "async", "docstring-prefix", "private-only",
+        "comment-only", "reordered", "mixed-duplicate", "function-to-class"])
+def test_the_structural_facts_are_the_producers_exact_observations(after, expected):
+    """Literal expectations (ADR 0027): syntactic facts, never a claim about
+    compatibility or behavior. Null parts mark a duplicate, never a guess."""
+    assert _facts(_BASE, after) == expected
+
+
+def test_missing_detail_is_null_never_a_negative():
+    unparsed = summary_of(_BASE, "def broken(:\n")
+    assert (unparsed.kinds, unparsed.changed_parts, unparsed.module_ast_changed) == (
+        None, None, None)
+    partial = summary_of(_BASE, _BASE + "".join(f"\ndef f{n}():\n    pass\n" for n in range(30)))
+    assert partial.symbols_partial and (partial.kinds, partial.changed_parts) == (None, None)
+    assert partial.module_ast_changed is True
+
+
+@pytest.mark.parametrize("change", [
+    {"kinds": None},
+    {"changed_parts": None},
+    {"module_ast_changed": None},
+    {"changed_parts": []},
+    {"changed_parts": [None]},
+    {"changed_parts": [[]]},
+    {"changed_parts": [["signature", "body"]]},
+    {"changed_parts": [["body", "body"]]},
+    {"kinds": {"added": ["function"], "removed": [], "changed": []}},
+    {"kinds": {"added": ["function"], "removed": [], "changed": ["multiple"]}},
+    {"scope": "top-level public functions and classes; AST comparison only"},
+    {"module_ast_changed": False},
+], ids=["kinds-null", "parts-null", "module-null", "parts-short", "parts-unknown",
+        "parts-empty", "parts-unsorted", "parts-repeated", "kinds-misaligned",
+        "multiple-with-parts", "v1-scope", "unchanged-module-with-changes"])
+async def test_an_inconsistent_structural_fact_refuses_at_the_node(change):
+    payload = {**DEMO.model_dump(mode="json"), **change}
+    with pytest.raises(ContractViolation) as refused:
+        await route.advise_node(Namespace(run_id="unused"), {"summary": payload})
+    assert refused.value.refusal == (RefusalCode.ADVICE_SUMMARY,)
 
 
 def test_the_route_actor_is_fixed_and_unprivileged_beyond_its_run():

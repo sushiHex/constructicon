@@ -244,7 +244,7 @@ def _advice_fixed(selected: dict[str, Any], raw: bytes) -> dict[str, Any]:
     bytes, which a later or CRLF checkout does not reproduce.
     """
     try:
-        bound = route.bound_values(route.ChangeSummaryV1.model_validate_json(raw))
+        bound = route.bound_values(route.ChangeSummaryV2.model_validate_json(raw))
     except (ValueError, ContractViolation) as exc:  # not the closed summary, or over bound
         raise ValueError(_ADVICE + "SUMMARY_BYTES") from exc
     _require(str(bound.instruction_digest) == selected["instruction_digest"],

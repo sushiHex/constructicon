@@ -54,10 +54,8 @@ def prepare(repository: Path, controller: str, before: str, after: str,
         sources[name] = hashlib.sha256(selected).hexdigest()
     _, left = change_review.committed_source(repository, before, path)
     _, right = change_review.committed_source(repository, after, path)
-    report = change_review.compare_sources(left, right).model_dump(
-        mode="json", exclude={"tests_executed"}
-    )
-    summary = advice.ChangeSummaryV1.model_validate(report)
+    summary = advice.ChangeSummaryV2.model_validate(
+        change_review.compare_advice_sources(left, right))
     raw = _wire(summary.model_dump(mode="json"))
     bound = advice.bound_values(summary)
     record = {
