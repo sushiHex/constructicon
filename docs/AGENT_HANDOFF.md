@@ -16,6 +16,34 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Three V2 advice requests establish a framing bottleneck — #457
+
+The frozen historical selection ran once per case on generations 25–27 at
+unchanged controller/operator `01fbad1`. All three complete replies reached
+their requester and were independently reconstructed byte-for-byte. Each
+passed the frozen truthfulness and usefulness gates; none supplied the concrete
+condition plus expected observable result required by the separate specificity
+criterion. The deterministic sample is body-only changes in one code family,
+including two changes to the same file; it is not general model-quality proof.
+
+The smallest supported change asks for a concrete test scenario for a reported
+symbol and explicitly hypothetical behavior when the summary cannot ground it.
+Summary facts, exclusions, bounds, actor, graph shape and opaque replies stay
+unchanged. Focused fake-first checks prove instruction construction and existing
+route behavior, not that a model follows the new request. Instruction and source
+identities rotate; this framing has not been installed or live-qualified.
+
+All three windows ended with terminal accepted READs, clean cleanup, withdrawal
+floors 25–27 and independently observed parked state before custody release.
+The three-run record is affirmatively exhausted, not suspended. Observed totals
+are 18,237 input / 343 output tokens across three attempts; monetary charge and
+backend request count remain unknown. One initial borderline specificity pass
+was withdrawn before the next output: topics alone do not meet the frozen rule.
+Full bounded evidence and timing limits are in the
+[living record](plans/handoffs/M8-implementation-record.md#three-rule-selected-v2-advice-requests--457).
+
+---
+
 ## V2 structural advice reaches its requester on generation 24 — #455
 
 One selected window installed controller `01fbad1`, qualified the same fresh

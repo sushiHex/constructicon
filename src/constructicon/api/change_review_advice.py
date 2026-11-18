@@ -128,6 +128,9 @@ FRAMING = (
     "behavior.\n"
     "Reply in plain text, in at most a few short paragraphs, with the tests or follow-up "
     "this change needs.\n"
+    "For a reported symbol, give at least one concrete test scenario with an input or "
+    "condition and an expected observable result. When the summary does not specify "
+    "that behavior, explicitly label the scenario and its expected result as hypothetical.\n"
     "Summary: "
 )
 SCOPE_TEXT = "top-level public definition parts and whole-module AST comparison only"
