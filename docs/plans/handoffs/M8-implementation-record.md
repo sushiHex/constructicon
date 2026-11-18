@@ -11886,3 +11886,137 @@ The existing actual-producer oversized fixture measures 10,518 full instruction
 bytes (its base-fields framing is 7,829); it still refuses by name at 8,192,
 without truncation. Inputs close to that bound may newly refuse because framing
 grew. This is an explicit boundedness tradeoff, not an automatic repair.
+
+## Paired concrete-scenario framing and local preflight — #459
+
+The fixed #457 cases and summary bytes were reused in the same order with the
+framing merged in #458, controller/operator
+`6f4a06229d0cfc958aad790b1dba1ba621065b94`. The original rubric remained frozen at
+`dc5972f8c0f063cd219b359006b5a47f1976c571079a6c4a8fd4b3eb06a783f7`;
+the comparison addendum was frozen before output at
+`418566ac67d6619340db17f38ac581bf83c448d5d0a24140dd3023a8e3be7404`.
+It adds H: every expected behavior/result must be explicitly hypothetical,
+conditional or derivable from summary facts. S requires a named scenario with
+both a condition/input and an observable expected result that passes H.
+Every T/H gate must pass and at least two S passes are required for a positive
+batch result. Any truthfulness failure stops the batch after cleanup.
+
+The selected retention-only successor scope was
+[`96a0f0dd…`](https://github.com/sushiHex/constructicon/issues/459#issuecomment-6979202946),
+SHA-256 `96a0f0dda6c815bdda3adcbe831b0d9c99c03f478364743aafdb8ed8375cf14a`,
+14,999 bytes. It retained the installed controller and existing three-slot
+standing record
+`168ee808797240be137f3d983a6611f85742dbe01aa1256c24c3480601008138`
+(979 bytes), with no installation, login, store change, WRITE or retry.
+Generations 28–30 each allowed one low-effort `gpt-6.1-sol` READ with 120 executor
+seconds. Each successor waited for the prior accepted terminal READ, clean
+withdrawal/park, complete private delivery, consumption acknowledgment and all
+truthfulness gates. S failure alone would have permitted the next fixed case.
+Bulk implementation, reconstruction, scoring and independent code review used
+Codex; Claude supplied custody coordination only.
+
+| Case / generation | Selection SHA-256 | Accepted READ SHA-256 |
+| --- | --- | --- |
+| B1 / 28 | `9824232f0868a130ae04b4fc97da77d6523752d1cc295f21b359b6afaaf46568` | `cb48bc89a7138876e8c1cd0218b68c5f753aa665c4c45c83873e6c47d9c9f6a9` |
+| B2 / 29 | `9fa3b66c806f532d46aafa798755e9678a0022062aaa60c55964831fab1dccd4` | `833e29bfbcc4334e1d154d6a05569f42c15eee630b59038926e7b05704ea1a93` |
+| B3 / 30 | `b07146c15e3e268d2a8a22963d666e40373d7c02d57d8359301069b75a254fb6` | `f3856cf59833c1ce90fa7cc4261209d1a2d1f9133d11d53c386558a729368885` |
+
+Later inputs were derived before start from the prior checked boot, withdrawal
+floor and accepted selection, then serialized with the existing byte producer
+and pinned by hash. The actual per-case compiler built all 15 phases offline
+before start and again after endpoint discovery. After local-root normalization,
+the prestart selections differed from their historical references only in the
+measured predecessor boot; final selections differed from those checked
+prestart selections only in endpoint (B1 used its reviewed successor reference).
+All 15 script bodies and each summary remained byte-identical to the relevant
+reference. The actual constructor made no host call during local checks, and
+record admission covered now and the outer reservation end. Each supervisor
+launched with its full runtime and cleanup reserve remaining.
+
+Every final reply was reconstructed through the protected actual collector with
+normal private-directory/ACL checks intact, matching all retained wire bytes.
+Independent Codex scoring and root's private reply inspection agreed:
+
+| Case | T1 | T2 / T3 / H | Applicable U | GO | S | Observed input / output tokens | Start → terminal / checked delivery (seconds) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| B1 | pass | all pass | 4/4 | yes | pass | 6,124 / 187 | 296.34 / 339.36 |
+| B2 | pass | all pass | 3/3 | yes | pass | 6,113 / 150 | 459.44 / 476.19 |
+| B3 | **fail** | all pass | 4/4 | **no** | pass | 6,129 / 217 | 273.72 / 287.16 |
+
+B3 collectively attributed unchanged signatures to names including a newly
+added function. Its summary provides no prior signature for that added name.
+A narrower reading limiting the attribution to the changed functions was
+considered and rejected: it would turn ambiguous unsupported wording into a
+positive fact. This is a reply-fidelity failure, not proof of any hidden source
+behavior. Its behavioral expectations remained explicitly hypothetical, and
+its concrete scenarios passed H and S. No transport or summary-producer defect
+was established.
+
+| Case | Reply JSON bytes | Reply JSON SHA-256 | Advice bytes | Advice SHA-256 |
+| --- | --- | --- | --- | --- |
+| B1 | 2,702 | `1a2b0c344e1ef34ed5b196ffd2c2f2aa16b78213a90541b4f3c4b463bec57fe1` | 1,069 | `196cd16e94f1be0e5da6a9977fbb68f15398b2752d610bcbee34fdec53ec2f24` |
+| B2 | 2,485 | `8b06022489e7de873202aa1be1f423bcb55b7efc39c079ada161393a2c4e2ca9` | 835 | `bac320948c7fca2b2abbac1220c023260c641864d2eee8cbe1203382193e5feb` |
+| B3 | 2,864 | `8b90591b9811db3c781fd65efb35d4d95997c1d0e8278827aeb914f03a203d41` | 1,230 | `d5c14be8ef93fb3fb6f50aea871cce0da42ec6ea8c5e9a36588dde141cdc554f` |
+
+All three windows ended accepted and clean. Physical bindings matched each
+bootstrap's fresh boot, locked withdrawal floors were 28, 29 and 30, and fresh
+independent usage observed Off/Ok, zero uptime/checkpoints/VMConnect before
+custody release. There is no active marker or suspension; the record's lowest
+free slot is affirmatively absent after slot 3. No fourth model call occurred.
+Meters observed one attempt per case, 18,366 input / 554 output tokens total,
+from `codex_fresh_thread_total_v1`, with no partial/unavailable observations.
+Served model, confirmed charge, estimate and backend request count remain
+unknown. Timings include operator checks/collection, not pure model latency or
+measured active labor.
+
+**Decision:** the framing yielded concrete scenarios on this fixed sample
+(S 3/3 versus baseline 0/3), but the truthfulness failure prevents a positive
+batch-quality conclusion. Stop this investigation at the preregistered limit.
+Retain the already merged framing and opaque, untrusted advice contract; do not
+automatically add source facts, a semantic parser, another abstraction or a
+fourth tuning attempt. Availability remains a separate decision. These are
+stochastic paired observations, one per case: n = 3, all body-only in one code
+family, two in the same file. They establish neither causality nor generalized
+quality, and do not qualify production availability.
+
+### Operator failure and bounded preparation improvement
+
+The earlier selected #459 window installed `6f4a062` through the reviewed
+affirmative mismatch/LR9 route, installation and import checks, then stopped
+before qualification/model spending. A private Windows `Path.write_text`
+writer emitted CRLF and the actual pinned compiler refused the input bytes.
+The window obeyed its stop rule: same-boot locked withdrawal floor 27, park,
+fresh idle observation and custody release. Its retained artifacts were not
+rewritten, and no slot was spent. The later retention-only scope above was
+selected separately; no reinstallation or stopped-window replay occurred.
+
+The successor writer uses `json_bytes` plus byte writes, checks LF/no CR and
+readback, and was exercised offline through the actual writer-to-compiler join.
+Its real LF output built all phases; real CRLF text-writer output refused before
+an output package, as did an injected CR serializer. This is the specific
+preparation defect supported by evidence; it is separate from B3's reply-fidelity
+limitation.
+
+`scripts/ops/m9_native_read.py --preflight` now makes the existing local check
+available before a guest start. It reuses `QualificationBoundary` and
+`StandingApproval.admit` at now and reservation end. Optional pinned host-values
+are bounded and checked against the existing canonical LF producer, with only
+`previous_boot` and `previous_generation` compared to the constructor-validated
+selection snapshot. The output explicitly reports that qualification, private
+writer/compiler execution and fresh physical facts were not verified. It
+creates no process, window/slot claim, approval or physical authority; the
+native Windows path and supervisor remain unchanged. It supplements, rather
+than replaces, the actual private compiler and fresh host checks.
+
+Producer-grounded tests exercise the actual CLI accepting and refusing paths,
+CRLF text output, digest/script drift, predecessor mismatch including bool/int,
+reservation expiry and bounds, and non-Windows/native separation without any
+credential or host process. The final focused preflight file passed 19 cases;
+the prior combined approval/preflight run passed 52 cases, and two targeted
+actual-writer/existing fake full-chain accepting checks passed. Explicit Ruff
+checks cover the changed script and tests; no formatting sweep or duplicate
+full local suite was run. Independent Codex review found one introduced
+unnamed unreadable-input refusal; a narrow catch and actual-entry missing/
+oversized tests fixed the class, and the follow-up review cleared it. Other
+generic constructor refusals are pre-existing and were not widened here.
+Final-head full CI and review receipts belong in the delivery PR.

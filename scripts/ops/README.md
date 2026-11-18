@@ -22,6 +22,30 @@ captures, old grants, and a prior boot's approvals are not inputs. Keep the
 scope short enough for the earliest qualification deadline and reserve time for
 withdrawal and park. The CLI caps the window at 75 minutes once it starts.
 
+### Before-start local preflight
+
+Before starting the guest, use `m9_native_read.py` with `--preflight` and an
+explicit positive `--reserve-seconds`. Supply the existing selection, approval,
+work directory, target and alias arguments, including the independently selected
+`--selection-sha256` and `--approval-sha256`. This portable mode reuses the
+package constructor and source-only literal helper-contract checks, then checks
+the standing record against the selected pins both now and at the stated reservation's end.
+It reads local files without claiming a slot or running a host process.
+
+Optionally supply `--host-values` together with `--host-values-sha256` to check
+the exact pinned preparation input before start. Its bytes must match
+`claude_read_session.json_bytes` (sorted JSON and one trailing LF), written with
+`write_bytes`; CRLF output is refused, never repaired. Only `previous_boot` and
+`previous_generation` are compared with the checked selection. Other host-values
+fields remain uninterpreted; this is not a replacement private input schema.
+
+The result identifies the checked digests and reservation end. It does not run
+or verify execution of a private writer/compiler, establish fresh physical facts
+or qualification, acquire or release custody, issue approval or authorize a live
+window. Existing scope selection, physical checks and post-start qualification
+remain required. The native mode keeps its Windows restriction and existing
+supervisor behavior; omit the local preparation options when invoking it.
+
 ### The standing approval
 
 No human step runs inside a window and nothing waits for one. Before any

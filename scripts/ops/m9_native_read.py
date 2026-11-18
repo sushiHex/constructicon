@@ -9,6 +9,7 @@ import sys
 import time
 from contextlib import suppress
 from dataclasses import asdict
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 # Match the operator phase tools' isolated local entry.
@@ -16,7 +17,7 @@ if __name__ == "__main__":
     ROOT = Path(__file__).resolve().parents[2]
     sys.path[:0] = [str(ROOT), str(ROOT / "src")]
 
-from scripts.ops.claude_read_commands import sha
+from scripts.ops.claude_read_commands import bounded, parsed, sha
 from scripts.ops.claude_read_session import json_bytes
 from scripts.ops.m9_owner_approval import StandingApproval, private_directory
 from scripts.ops.m9_read_transport import StagedRead
@@ -137,6 +138,57 @@ def run_native_read(work, host, approval, limits, *, run=None):
     return run_window(work, NativeReadBoundary(host, work, run=run), limits, approval)
 
 
+def preflight(work, host, approval, reserve_seconds, *, host_values=None,
+              host_values_sha256=None):
+    """Check selected local bytes and record validity without claiming a window.
+
+    The constructor already checked the package and literal helper contracts.
+    This does not execute a private writer/compiler or verify fresh host facts.
+    """
+    if type(reserve_seconds) is not int or reserve_seconds <= 0:
+        raise ValueError("preflight-reserve-seconds")
+    now = datetime.now(UTC)
+    try:
+        end = now + timedelta(seconds=reserve_seconds)
+    except OverflowError:
+        raise ValueError("preflight-reserve-seconds") from None
+    input_digest = None
+    if host_values is not None:
+        try:
+            raw = bounded(host_values, 65536)
+        except (OSError, ValueError):
+            raise ValueError("preflight-host-values-unreadable") from None
+        if sha(raw) != host_values_sha256:
+            raise ValueError("preflight-host-values-digest")
+        # Producer: claude_read_session.json_bytes emits sorted JSON plus one
+        # LF as bytes. Never repair a text writer's CRLF output before checking.
+        try:
+            value = parsed(raw)
+            canonical = json_bytes(value)
+        except (ValueError, RecursionError):
+            raise ValueError("preflight-host-values-json") from None
+        if (type(value) is not dict or b"\r" in raw or raw != canonical):
+            raise ValueError("preflight-host-values-canonical")
+        for key in ("previous_boot", "previous_generation"):
+            # Compare only these known predecessor facts with the immutable
+            # constructor-validated snapshot, not a second host-values schema.
+            if key not in value or json_bytes(value[key]) != json_bytes(host._selected[key]):
+                raise ValueError("preflight-host-values-" + key)
+        input_digest = sha(raw)
+    selected = host.selected_pins()
+    for when in (now, end):
+        if refusal := approval.admit(selected, work, when):
+            raise ValueError(refusal)
+    return {
+        "status": "preflight-checked", "selection_sha256": host._selection_sha,
+        "approval_sha256": approval.sha256, "host_values_sha256": input_digest,
+        "reserve_seconds": reserve_seconds, "checked_until": end.isoformat(),
+        "contract_coverage": host.contract_coverage,
+        "qualification_performed": False, "private_writer_or_compiler_executed": False,
+        "fresh_host_facts_verified": False,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     from scripts.ops.m9_qualification_boundary import QualificationBoundary
 
@@ -148,8 +200,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--work", type=Path, required=True)
     parser.add_argument("--target", required=True)
     parser.add_argument("--alias", required=True)
+    parser.add_argument("--preflight", action="store_true",
+                        help="check selected local inputs only; no window or host process")
+    parser.add_argument("--reserve-seconds", type=int)
+    parser.add_argument("--host-values", type=Path)
+    parser.add_argument("--host-values-sha256")
     args = parser.parse_args(argv)
-    if os.name != "nt":
+    if args.preflight:
+        if args.reserve_seconds is None:
+            parser.error("--preflight requires --reserve-seconds")
+        if (args.host_values is None) != (args.host_values_sha256 is None):
+            parser.error("--host-values and --host-values-sha256 must be selected together")
+    elif any(value is not None for value in (
+        args.reserve_seconds, args.host_values, args.host_values_sha256,
+    )):
+        parser.error("local preparation options require --preflight")
+    if os.name != "nt" and not args.preflight:
         parser.error("the selected Hyper-V host requires Windows")
     try:
         private_directory(args.work)
@@ -161,10 +227,18 @@ def main(argv: list[str] | None = None) -> int:
             target=args.target,
             alias=args.alias,
         )
+        if args.preflight:
+            checked = preflight(
+                args.work, host, approval, args.reserve_seconds,
+                host_values=args.host_values, host_values_sha256=args.host_values_sha256,
+            )
+            print(json_bytes(checked).decode("utf-8"), end="")
+            return 0
         result = run_native_read(args.work, host, approval, LIMITS)
     except (OSError, ValueError) as exc:
-        # A standing-approval refusal names its field; nothing else is echoed.
-        named = str(exc).startswith("approval-") and str(exc).isascii() and len(str(exc)) < 64
+        # Only closed local/standing-approval refusals are echoed, never values.
+        prefixes = ("approval-", "preflight-") if args.preflight else ("approval-",)
+        named = str(exc).startswith(prefixes) and str(exc).isascii() and len(str(exc)) < 64
         parser.exit(2, f"M9 window refused: {str(exc) if named else type(exc).__name__}\n")
     print(json_bytes({**asdict(result), "record": str(result.record)}).decode("utf-8"), end="")
     return 0 if result.accepted_read_sha256 and not result.custody_retained else 1
