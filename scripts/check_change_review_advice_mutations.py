@@ -39,7 +39,7 @@ MUTANTS = (
      'or len(instruction.encode("utf-8")) > INSTRUCTION_MAX_BYTES', "or False",
      TEST + "test_an_oversized_instruction_refuses_by_name_and_is_never_truncated"),
     ("structural facts that do not align with the summary refuse (ADR 0027)",
-     ROUTE + "ChangeSummaryV2._aligned", "if not consistent:", "if False:",
+     ROUTE + "ChangeSummaryV2._aligned", "if not consistent or", "if False and",
      TEST + "test_an_inconsistent_structural_fact_refuses_at_the_node[multiple-with-parts]"),
     ("one permit, one journal",
      ROUTE + "_require_dedicated", "if (record.run_id != bound.run_id", "if (False",
