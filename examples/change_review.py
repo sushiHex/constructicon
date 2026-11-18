@@ -158,6 +158,90 @@ def compare_sources(before_source: str, after_source: str) -> ChangeSummary:
     })
 
 
+ADVICE_SCOPE = "top-level public definition parts and whole-module AST comparison only"
+_DEFINITION_KINDS = {ast.FunctionDef: "function", ast.AsyncFunctionDef: "async_function",
+                     ast.ClassDef: "class"}
+
+
+def _public_definitions(tree: ast.Module) -> dict[str, list[ast.AST]]:
+    groups: dict[str, list[ast.AST]] = {}
+    for node in tree.body:
+        if isinstance(node, tuple(_DEFINITION_KINDS)) and not node.name.startswith("_"):
+            groups.setdefault(node.name, []).append(node)
+    return groups
+
+
+def _kind(group: list[ast.AST]) -> str:
+    return _DEFINITION_KINDS[type(group[0])] if len(group) == 1 else "multiple"
+
+
+def _dump(value: Any) -> str:
+    if isinstance(value, list):
+        return "[" + ",".join(_dump(item) for item in value) + "]"
+    return ast.dump(value) if isinstance(value, ast.AST) else repr(value)
+
+
+def _changed_parts(before: Any, after: Any) -> list[str]:
+    """Which parts of one definition pair differ (ADR 0027, exact meaning)."""
+    parts = set()
+    if type(before) is not type(after):
+        parts.add("kind")
+    header = ("name", "body", "decorator_list")
+    # Function <-> class headers have different fields: they are incomparable.
+    if before._fields != after._fields or any(
+            _dump(getattr(before, field, None)) != _dump(getattr(after, field, None))
+            for field in before._fields if field not in header):
+        parts.add("signature")
+    if _dump(before.decorator_list) != _dump(after.decorator_list):
+        parts.add("decorators")
+    split = [(node.body[:1], node.body[1:]) if ast.get_docstring(node, clean=False) is not None
+             else ([], node.body) for node in (before, after)]
+    # The docstring is the leading string Expr node itself, prefix kind included.
+    if _dump(split[0][0]) != _dump(split[1][0]):
+        parts.add("docstring")
+    if _dump(split[0][1]) != _dump(split[1][1]):
+        parts.add("body")
+    return sorted(parts)
+
+
+def compare_advice_sources(before_source: str, after_source: str) -> dict[str, Any]:
+    """The advice route's bounded summary: V1's base fields plus ADR 0027's facts.
+
+    Local preflight only; the human-review summary and its port stay as they
+    are. Kinds and changed parts align by position with the symbol lists and
+    are null when those names are partial; the whole-module bit is null only
+    when either source does not parse.
+    """
+    report = compare_sources(before_source, after_source).model_dump(
+        mode="json", exclude={"tests_executed"})
+    report["scope"] = ADVICE_SCOPE
+    report.update(kinds=None, changed_parts=None, module_ast_changed=None)
+    if not report["comparison_available"]:
+        return report
+    try:
+        trees = ast.parse(before_source), ast.parse(after_source)
+        report["module_ast_changed"] = ast.dump(trees[0]) != ast.dump(trees[1])
+        if report["symbols_partial"]:
+            return report
+        before, after = (_public_definitions(tree) for tree in trees)
+        symbols = report["symbols"]
+        report["kinds"] = {
+            "added": [_kind(after[name]) for name in symbols["added"]],
+            "removed": [_kind(before[name]) for name in symbols["removed"]],
+            "changed": [_kind(before[name]) if len(before[name]) > 1 else _kind(after[name])
+                        for name in symbols["changed"]],
+        }
+        report["changed_parts"] = [
+            None if len(before[name]) > 1 or len(after[name]) > 1
+            else _changed_parts(before[name][0], after[name][0])
+            for name in symbols["changed"]
+        ]
+    except RecursionError:
+        # compare_sources parsed both; a structure too deep to compare is refused.
+        raise ValueError("source_structure_unbounded: the module is too deep to compare") from None
+    return report
+
+
 async def prepare_review(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[str, Any]:
     """Compose a bounded report and canonical advisor request, carrying GitRefs."""
 
@@ -349,9 +433,7 @@ async def model_advice(args: argparse.Namespace) -> dict[str, Any]:
 
     _, before = committed_source(args.repository, args.before_commit, args.path)
     _, after = committed_source(args.repository, args.after_commit, args.path)
-    summary = advice.ChangeSummaryV1.model_validate(
-        compare_sources(before, after).model_dump(mode="json", exclude={"tests_executed"}),
-    )
+    summary = advice.ChangeSummaryV2.model_validate(compare_advice_sources(before, after))
     return await advice.dispatch(args, summary)
 
 

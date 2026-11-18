@@ -97,3 +97,12 @@ approval. The supervisor checks it mechanically before any process and
 again against the actual pins. It replaces the in-window manual approval
 of each challenge. It supersedes only ADR 0025's per-run approval clauses,
 keeps the rejection of a standing permit, and changes nothing under `src/`.
+
+Accepted [ADR 0027](0027-bounded-structural-change-facts.md), for
+[#453](https://github.com/sushiHex/constructicon/issues/453), follows the
+owner-directed 2026-11-17 structural-advice delivery wave and independent review.
+It extends only the bounded advice summary with aligned kinds, changed-part
+facts and an exact whole-module AST-change bit. Acceptance authorizes
+credential-free construction only. Historical V1 evidence, the installed
+controller and standing approval remain unchanged; live operation is separately
+selected. The decision artifact is retained byte-for-byte after adoption.

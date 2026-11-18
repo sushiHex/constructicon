@@ -36,7 +36,7 @@ def produced(source_world, tmp_path, monkeypatch):
     raw = (packet / "summary.json").read_bytes()
     # The chain reads these module values at call time; ``selection``'s default
     # argument was bound to the old bytes, so it is passed explicitly below.
-    monkeypatch.setattr(chain, "DEMO", route.ChangeSummaryV1.model_validate_json(raw))
+    monkeypatch.setattr(chain, "DEMO", route.ChangeSummaryV2.model_validate_json(raw))
     monkeypatch.setattr(chain, "SUMMARY", raw)
     return packet, record, (repository, controller, before, after)
 
@@ -245,5 +245,27 @@ def test_a_failed_reply_is_not_delivered_and_keeps_its_disposition(
     assert reply.main([*argv, "--packet", str(packet)]) == 0
     assert json.loads(capsys.readouterr().out) == outcome
     assert reply.main([*argv, "--packet", str(tmp_path / "absent")]) == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "refused", "reason": "REPLY_PACKET_MISMATCH"}
+
+    # A closed summary within the read bound whose framed instruction is over its
+    # bound: the route's named ContractViolation is the packet's refusal, never a
+    # traceback past the command.
+    names = {kind: [kind[0] + f"{n:02d}" + "\N{GREEK SMALL LETTER LAMDA}" * 18 + "x" * 59
+                    for n in range(25)] for kind in ("added", "removed", "changed")}
+    wide = route.ChangeSummaryV2.model_validate({
+        **json.loads((packet / "summary.json").read_bytes()), "symbols": names,
+        "symbols_partial": True, "kinds": None, "changed_parts": None,
+    })
+    raw = producer._wire(wide.model_dump(mode="json"))
+    assert len(raw) <= reply.SUMMARY_LIMIT
+    with pytest.raises(route.ContractViolation):
+        route.bound_values(wide)
+    oversized = tmp_path / "packet-oversized"
+    shutil.copytree(packet, oversized)
+    (oversized / "summary.json").write_bytes(raw)
+    edit(oversized / "packet.json", lambda old: old.replace(
+        json.loads(old)["summary_sha256"].encode(), reply.hashlib.sha256(raw).hexdigest().encode()))
+    assert reply.main([*argv, "--packet", str(oversized)]) == 1
     assert json.loads(capsys.readouterr().out) == {
         "status": "refused", "reason": "REPLY_PACKET_MISMATCH"}

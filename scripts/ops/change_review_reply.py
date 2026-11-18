@@ -144,6 +144,7 @@ def _exact(value: object, names: set[str]) -> bool:
 def _packet(packet: bytes, summary: bytes, instruction: bytes) -> tuple[dict, Any]:
     """The prepared packet's change and the values the route derives from it."""
     from constructicon.api import change_review_advice as route
+    from constructicon.core.errors import ContractViolation
 
     record = _object(packet, PACKET)
     change = record.get("change")
@@ -161,8 +162,9 @@ def _packet(packet: bytes, summary: bytes, instruction: bytes) -> tuple[dict, An
         and record["execution_authorized"] is False, PACKET,
     )
     try:
-        bound = route.bound_values(route.ChangeSummaryV1.model_validate_json(summary))
-    except (ValueError, RecursionError) as error:
+        bound = route.bound_values(route.ChangeSummaryV2.model_validate_json(summary))
+    except (ValueError, RecursionError, ContractViolation) as error:
+        # ContractViolation: a closed summary whose instruction exceeds its bound.
         raise ReplyRefused(PACKET) from error
     pins = json.loads(json.dumps(bound.projection()))
     _need(bound.instruction.encode("utf-8") == instruction
