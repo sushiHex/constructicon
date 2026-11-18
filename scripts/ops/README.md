@@ -460,6 +460,24 @@ this path does not grant another operation or another attempt. Explicit frozen
 stop/recovery rules and bounded owner scope continue to apply.
 
 
+## Structural advice input versions
+
+Current advice preparation uses the V2 structural summary under
+[ADR 0027](../../docs/adr/0027-bounded-structural-change-facts.md). It adds
+aligned kinds/changed-part lists and an exact whole-module AST-change bit
+without transmitting source or repeating authored identifiers in the added
+metadata. The instruction budget stays 8,192 UTF-8 bytes, including framing;
+an oversized instruction gets a named refusal before a packet is published.
+
+Use reviewed input, qualification and reply tooling that matches the selected
+controller's V2 source and route pins; operator and controller revisions may
+differ. The input producer checks its imported source bytes against the selected
+Git blobs, so preserve those exact bytes, including line endings. The V2
+guard/component/graph pins differ from V1, so a V1 standing record cannot admit V2. Old
+packets and retained replies stay with their original pinned tooling; no
+automatic migration or fallback is performed. Credential-free V2 proof grants
+no installation, standing-record issuance, live qualification or model dispatch.
+
 ## Return a finished change-review advice reply
 
 After the native window ends, its run owner invokes the read-only collector:

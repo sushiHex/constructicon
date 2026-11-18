@@ -109,11 +109,28 @@ checkout example, not an installed CLI command or production executor route.
 ## Opt-in: model advice under an owner's permit
 
 The default commands above call no model, and nothing here changes them. The
-explicit `model-advice` subcommand instead hands the bounded summary (scope,
-hashes, syntax diagnostics, availability, symbol lists, counts and the partial
-flag; never source text, a `GitRef` or a path) to the installed entry
-`constructicon.api.change_review_advice`, which asks Codex READ for the advice in
-one turn ([ADR 0025](adr/0025-consumer-runs-earn-a-permit.md)). Its stages are
+explicit `model-advice` subcommand instead hands a bounded structural summary
+to the installed entry `constructicon.api.change_review_advice`, which asks
+Codex READ for advice in one turn
+([ADR 0025](adr/0025-consumer-runs-earn-a-permit.md),
+[ADR 0027](adr/0027-bounded-structural-change-facts.md)). Source text, a
+`GitRef` and paths stay local.
+
+The V2 advice producer keeps hashes, syntax status, public symbol lists,
+counts and partial reporting, and adds kinds, changed-part flags and an exact
+whole-module AST-change bit. Metadata aligns by position with the existing
+symbol lists. Unavailable or partial detail is null; when metadata is available,
+a duplicate group carries the multiple kind marker and null changed parts.
+Header, decorator, docstring and body flags describe AST differences. A class body flag does not identify a
+method, and none of these facts establishes compatibility, behavior or test
+coverage. The whole-module bit compares the complete ordered ASTs, including
+beyond the public names; it does not localize those changes. The human route's
+report above remains unchanged.
+
+The instruction still refuses above 8,192 UTF-8 bytes. Some large summaries
+that fit V1 do not fit V2; facts are never silently dropped to make them fit.
+Historical V1 packets and replies retain their original pinned tooling.
+Current V2 preparation does not upgrade or reinterpret them. Its stages are
 `--stage pins` (print what a permit would bind, beside the exact instruction),
 `--stage mint` (print a candidate permit; it installs nothing) and `--stage run`.
 
@@ -125,13 +142,16 @@ Anywhere else, or without that permit, each stage ends in a named refusal such
 as `advice.permit` or `advice.provider`, never a fallback to the human route,
 another vendor or an API. The reply is stored as model advice on its own
 contract, never as `constructicon.std/AdviceResponse`. This delivery adds no
-credential and no live authority, and has made no model call: its evidence is
+credential or live authority. Construction is
 [credential-free](../tests/api/test_change_review_advice.py), over a scripted
-peer.
+peer. Historical V1 live delivery is recorded in the
+[M8 implementation record](plans/handoffs/M8-implementation-record.md);
+it does not qualify this V2 component. A later live request requires its own
+matching controller, standing record and selected window.
 
 ### Prepare the exact input offline
 
-From the reviewed checkout and its project environment, use the packet preparer
+From a Git-byte-exact reviewed source image and its project environment, use the packet preparer
 before selecting a host window. For example, this compares the merged opt-in
 change itself; all three full commits must already exist locally.
 `REVIEWED_CONTROLLER_FULL_COMMIT` is the full commit of the reviewed checkout you
