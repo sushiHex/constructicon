@@ -11756,3 +11756,133 @@ comparison, vendor-conformance claim or production
 availability. The V1 record/history is preserved without spending its spare
 slot. The owning issue retains review and scoring evidence:
 [#455](https://github.com/sushiHex/constructicon/issues/455).
+
+## Three rule-selected V2 advice requests — #457
+
+On 2026-11-18 UTC, one selected three-run batch retained controller and operator
+`01fbad1c533afdde73e296a4e06f9e1c558cfedb` throughout the baseline. Scope SHA-256
+`d6d027b5ac276578267257c1d3f7537698e74e7788d7845265a290047fc2151c`
+and standing record
+`9fb208a23de8e08a85ab2c683da6816796b0cff25b21660a7203e9cb1311b111`
+were selected after offline preparation and independent review. The record
+allowed three runs until 2026-11-19 06:00 UTC. All three slots are spent;
+the actual admission function subsequently returned `approval-exhausted`,
+without a host call. It is not suspended and authorizes no further call.
+Selection and scope details belong to
+[#457](https://github.com/sushiHex/constructicon/issues/457#issuecomment-6968911075).
+
+The deterministic rule walks main `126a0d9` first-parent history newest first,
+selecting the lexicographically first eligible modified Python path under
+`src/constructicon` or `examples` per commit: both source blobs fit 32,768 bytes,
+the actual V2 comparison is available and nonpartial with a public-symbol
+change, and the instruction fits. The prior #455 pair is excluded. The first
+three eligible commits were fixed before outputs; eight commits were scanned.
+All selected changes are body-only and in the change-review code family, with
+two cases in the same file. No reselection or V1 quality comparison is claimed.
+The frozen rule and rubric digest is
+`dc5972f8c0f063cd219b359006b5a47f1976c571079a6c4a8fd4b3eb06a783f7`.
+
+| Case / generation | Historical pair | Path | Summary bytes / instruction bytes |
+| --- | --- | --- | --- |
+| B1 / 25 | `568a76ac01bc65d0c056f1980facd6552515a490` → `01fbad1c533afdde73e296a4e06f9e1c558cfedb` | `examples/change_review.py` | 623 / 1,523 |
+| B2 / 26 | `cf81ccf92d395cd704dcf9d8d29b6470ca469563` → `6bd6d5772bce5dd0ef093a857808980e78b50463` | `src/constructicon/api/change_review_advice.py` | 605 / 1,502 |
+| B3 / 27 | `6857f0d80f94aea353cf748db2d634f47be73705` → `cf81ccf92d395cd704dcf9d8d29b6470ca469563` | `examples/change_review.py` | 644 / 1,541 |
+
+| Case | Summary SHA-256 | Instruction SHA-256 |
+| --- | --- | --- |
+| B1 | `a815e7c6c194abfd61fe249cf80440ce645f838b2909271058d4837a6e2a8dfb` | `3933b4e76b47fb9aa81c7e0f290e0640467c4104a48c09c2bffaa1c88fa9743a` |
+| B2 | `c039e4f6ba16adf4ee9403cff51cfd1f227624ccbc6ee310e06b9bf14dd2617b` | `4cf026a4c90bf1dbbf45a3fb9e13cd6289ce5a8e05223d1618774cb1345d6985` |
+| B3 | `77c754d7017aee85a41c6e1ac22fd9894ce0f8fc5f0110ed6a34799cd1aacb93` | `66d7684af345f9693f0830af10fc597fe5879477e8259ea92b48798e76cca16b` |
+
+Each case used the actual input producer and independently checked source
+export. All 15 generated scripts and the summary matched the reviewed reference
+byte-for-byte; after local-path normalization only the measured endpoint and
+actual predecessor boot changed. Fresh usage, custody, boot, drift, retained
+installation and all selected qualification controls preceded each READ.
+There was no installation, login, WRITE, re-baseline or model retry. Each
+supervisor started with its full 4,500-second runtime plus 600-second cleanup
+reserve remaining inside the selected two-hour outer window.
+
+| Case | Selection SHA-256 | Accepted READ SHA-256 |
+| --- | --- | --- |
+| B1 | `c1aeded5307d1702aa82896f6d5fbef0fa19a4b652b4e9ff682837f99ab98f1e` | `616000435cf8dcd0ee2cbc36f66aa636826277ee8f4d8533886bc207e0b8a61d` |
+| B2 | `274dde8a1e3277d65ac2252e0427012e61bbc56f557cf9e93a5cf74455913be7` | `c150913031a0fae29cd739178cdf9a9be78542316a118d637d1a168f455380cf` |
+| B3 | `867d808d8b08befbd5dca90893a6bef185041ca14c73e7e8e9193538e1765aac` | `eded39526afc1a991d76648d84b8a61809dde413e287f24e41683cb880edc802` |
+
+All supervisors returned exit 0, terminal dispatch and clean cleanup. Same-boot
+checks, withdrawal readback at floors 25, 26 and 27, and fresh independent
+Off/Ok observations with zero uptime, checkpoints and local vmconnect processes
+preceded each custody release. Complete collector JSON was delivered privately;
+the requester acknowledged consumption and independently ran the pinned collector
+with its custody checks intact, reproducing all 2,214 / 2,169 / 2,367 bytes.
+Advice text and private ground truth remain private.
+
+| Case | Advice bytes | Reply JSON SHA-256 | Advice SHA-256 |
+| --- | --- | --- | --- |
+| B1 | 586 | `2f4d0c42d079ed97c7bac827588ac617c38c405bef410ac71e74a12ee2a0f85e` | `742e0389f7c767df9283603e36f806a4883e02f36bd2ce97768f94880f3c5432` |
+| B2 | 521 | `417d7c5f94313be43f7b9a1df52a4174df0dea91afe2aeb62ac63071119b4153` | `c998f1e0e04e834c4524d9f7dcfcc9c712adcb83ccdce395d90e9768141b3d8c` |
+| B3 | 730 | `e3d58058cfb9b98ff45daac0982510afef96d353b1a8e6a6a88a22bc51634b31` | `54a3bce4eda3cce92976951476199e6f95401b252dd9116505247e64d2260e58` |
+
+Frozen T1–T3 check fact fidelity, unsupported behavior/compatibility claims and
+invented identifiers or source specifics. Applicable usefulness items check
+added-name tests, body-change regression tests, module-localization limits and
+multiple named suggestions. GO requires all T gates and at most one U miss.
+Separate specificity S requires a reported-name scenario with a triggering
+condition/input and expected observable result; topics alone fail.
+
+| Case | T1–T3 | Applicable U | GO | S | Observed input / output tokens | Start → terminal / checked delivery (seconds) |
+| --- | --- | --- | --- | --- | --- | --- |
+| B1 | all pass | 4/4 | yes | fail | 6,081 / 109 | 381.62 / 438.56 |
+| B2 | all pass | 3/3 | yes | fail | 6,070 / 101 | 395.36 / 471.27 |
+| B3 | all pass | 4/4 | yes | fail | 6,086 / 133 | 611.69 / 661.00 |
+
+The requester withdrew an initial borderline B1 S pass before the B2 output:
+generic test topics do not supply both required elements. B3's correct inference
+that signatures are syntactically unchanged from body-only parts was scored as
+fact fidelity, rather than a claim that headers changed. Its assumed entry-point
+role for a named function falls outside the narrow frozen T3 inventory; all-T
+pass is not proof against every unsupported semantic inference.
+
+Meters observed one attempt per request from `codex_fresh_thread_total_v1`,
+totalling 18,237 input and 343 output tokens. Requested model was `gpt-6.1-sol`
+at low effort. Served model, confirmed charge, estimate and backend request
+count remain unknown. These timings include operator checks and collection;
+they are neither model latency nor active human labor. The first retained
+preparation artifacts at 04:03:47 UTC to record selection at 05:33:22 UTC span
+89m35s, including review/waiting; active preparation labor was not measured.
+
+Operator friction remains visible: an offline packet-path literal mismatch was
+corrected before fresh reference builds; a local selection comparison initially
+omitted the permitted endpoint delta. B3's original builder parent exit was lost
+from the observer output; its durable all-15-built report and each recorded
+tool result were checked before the actual constructor admitted the selection.
+Local launch/closeout observer syntax and shape assumptions were corrected
+without repeating any remote phase or model call. No success is inferred from
+an empty output or missing process status.
+
+All three S failures satisfy the frozen threshold for one framing refinement.
+The instruction now requests a concrete condition and expected observable
+result for a reported symbol, explicitly hypothetical where the summary cannot
+ground behavior. No new fact field, abstraction, provider, grant or availability
+change is introduced. This conforms to ADR 0027's syntactic summary and opaque
+advice contract; its accepted bytes remain untouched. Focused producer-grounded
+and fake-lifecycle checks establish construction and existing guards, not model
+compliance or improved live quality. Whole-module source identity and exact
+instruction bytes rotate their dependent pins. Existing packets/history remain
+on their original tooling; the exhausted record cannot admit this new version.
+No fourth model call, installation or new live qualification was performed.
+
+The refinement adds 246 instruction bytes: the unchanged B1–B3 summaries now
+construct 1,769 / 1,748 / 1,787-byte instructions. Their instruction digests,
+idempotency keys and RunIds change; actor, scope, grants, capability and summary
+bytes do not. The whole-module guard becomes
+`sha256:95fda0c08c3a8a2eec0bd532d0cacada0e906b769f8eed8d2d6c0b458b6995dc`,
+component
+`sha256:c4c8f4dab2a7711a5e7857229bf31f6aed4ccebc4c6707d33125d7ef02ade4c2`
+and source graph
+`sha256:26b83d0aeb74c85e6c2f8c49d3301220323968ac673837b90ef75d24e0a6ee3e`.
+No live provider/runtime identity rotation is inferred from these local values.
+The existing actual-producer oversized fixture measures 10,518 full instruction
+bytes (its base-fields framing is 7,829); it still refuses by name at 8,192,
+without truncation. Inputs close to that bound may newly refuse because framing
+grew. This is an explicit boundedness tradeoff, not an automatic repair.

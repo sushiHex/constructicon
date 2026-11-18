@@ -369,6 +369,33 @@ async def test_the_node_accepts_only_a_bounded_text_success(outcome, codes):
     assert sent[0].context == () and sent[0].response_schema is None
 
 
+def test_the_instruction_requests_a_concrete_scenario_without_inventing_behavior():
+    summary = summary_of(
+        "def calculate(value):\n    return value + 17\n",
+        "def calculate(value):\n    return value + 29\n",
+    )
+    assert summary.symbols["changed"] == ["calculate"]
+    assert summary.changed_parts == [["body"]]
+    instruction = route.instruction_for(summary)
+    framing, separator, body = instruction.partition("\nSummary: ")
+    assert separator
+    assert (
+        "For a reported symbol, give at least one concrete test scenario with an input or "
+        "condition and an expected observable result."
+    ) in framing
+    assert (
+        "When the summary does not specify that behavior, explicitly label the scenario "
+        "and its expected result as hypothetical."
+    ) in framing
+    assert body == json.dumps(
+        summary.model_dump(mode="json"), sort_keys=True, separators=(",", ":"),
+        ensure_ascii=False, allow_nan=False,
+    ) + "\n"
+    assert "return value" not in instruction
+    assert "\r" not in instruction and "/" not in instruction and "\\" not in instruction
+    assert len(instruction.encode("utf-8")) <= route.INSTRUCTION_MAX_BYTES
+
+
 def test_an_oversized_instruction_refuses_by_name_and_is_never_truncated():
     """ADR 0027's boundary pair, through the actual producer: 25 names of 80
     characters in each list, every part changed. Its V1-era base fields would
