@@ -16,6 +16,42 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## V2 structural advice reaches its requester on generation 24 — #455
+
+One selected window installed controller `01fbad1`, qualified the same fresh
+boot, spent the successor record's only slot and delivered the complete
+643-byte advice. The real source pair distinguishes a body-only edit from a
+signature/body edit and an added function. The actual producer's 676-byte
+summary and 1,572-byte instruction matched independent preparation; the final
+selection changed only the measured endpoint after local-path normalization,
+with all 15 scripts and the summary byte-identical to the reviewed reference.
+
+The controller replacement required LR8's affirmative differing-tree result
+before LR9; stage, judge, installed-tree verification and the service import
+check then passed. Guest staging checked an independently anchored manifest
+and all six script digests before any uploaded body was sourced or executed.
+The supervisor could start only with its full runtime plus cleanup reserve
+remaining. A verifier moved into an exported tree must itself match its selected
+Git blob before execution; an unverified export cannot certify itself.
+
+Withdrawal floor 24, terminal dispatch, clean cleanup and a fresh Off/Ok
+observation preceded custody release. The one-run V2 record is exhausted,
+not suspended. It grants no later run; the V1 record and retained history were
+not migrated or spent. Metering observed one attempt, 6,082 input and 115 output
+tokens; served model, charge, estimate and backend request count remain unknown.
+
+A whole-module AST-change bit does not locate changes outside the named
+definitions. The preselected rubric therefore rewards truthful limits rather
+than detection of hidden source facts. The requester acknowledged consumption,
+independently reconstructed the exact reply JSON and scored GO: all three
+truthfulness gates and all four usefulness items passed. Advice remains
+categorical rather than source-specific. This one case is an initial go/no-go
+signal, not general model quality or a comparison against a V1 model run.
+Evidence and independent scoring belong to
+[#455](https://github.com/sushiHex/constructicon/issues/455).
+
+---
+
 ## Advice summaries expose bounded structural facts — #453
 
 [ADR 0027](adr/0027-bounded-structural-change-facts.md) extends the advice input

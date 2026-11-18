@@ -11674,3 +11674,85 @@ migration or current-tool reinterpretation is supplied. The previous standing
 record cannot admit these new pins. This slice establishes no V2 installation,
 live qualification, successor standing record, vendor call or monetary charge.
 Existing V1 live evidence remains attributed to its original controller and run.
+
+
+## One V2 structural advice evaluation — generation 24 (#455)
+
+On 2026-11-18 UTC, the selected scope
+`3b93bffc6fbd659f2a975c020599bcbbdd30e8d41186281b90bbd2e11f59b195`
+completed one same-boot installation, qualification and READ at controller and
+operator `01fbad1c533afdde73e296a4e06f9e1c558cfedb`. The whole tree equals
+reviewed CI head `607ac97207afa62f63605146968399fd171eddf8` from #454; no product
+code changed for this evaluation. The exact successor standing record,
+`9d6eba17ec9b824e6cfa6e1cb658b5a59269696cc94c485670c272954535839d`,
+allowed one run until `2026-11-19T03:00:00+00:00`. Its slot 1 is spent and the
+record is exhausted, not suspended. No later automatic window is authorized.
+
+The source pair was `cc9ddf1d801a2e722f3a64b2771cf850d13bcf85` to
+`c95ca6aaf2e9770b8e46b55f24cb70cd68ffcc71`, at
+`src/constructicon/api/_maintenance_source.py`. The actual V2 producer and an
+independent preparation agreed on the 676-byte summary and 1,572-byte instruction.
+Summary SHA-256:
+`30848f627305c1a37aac0ae233d0c2ed13fc3e593a2becac7068780b4dd271cb`.
+Instruction digest:
+`sha256:dd3ae9c4c3dfa979ca621b612c18a3cb6137db34e059db89e5ced1dc56eaf7f0`.
+Run: `run-f920ed2b25d7fd378a34b449a5bd9715`.
+The rubric was fixed before dispatch, digest
+`4ca3ad0b2bce4e43c32331356be9cc88c4c2246a0b55caa6ea927a1178d7888a`.
+Neither the advice nor the private source ground truth is published here.
+
+The reviewed preparer built all 15 phases offline from that real packet. Both
+preparation environments matched locked Pydantic 2.13.4 / pydantic-core 2.46.4.
+Before invoking the source-export verifier, the preparer checked that verifier's
+bytes against its selected Git blob; a tampered verifier refused before launch.
+The actual post-discovery selection was
+`2dd90715923ca1fbbec6b0a1977c824f6c294a4cc5296c142e83dd3ee971f9a7`.
+After normalizing local output paths, only the observed endpoint differed from
+the reference, and all 15 scripts plus the summary remained byte-identical.
+
+Fresh usage, custody, boot, drift-tool and drift-output checks preceded guest
+staging. A literal digest anchored the staging manifest, then all six uploaded
+script digests matched before execution or sourcing. LR8 affirmatively observed
+an installed differing tree (`different: 1`), enabling the selected LR9 removal
+and refused-workspace preservation. R17 established current-main/first-parent
+provenance, matching helper bytes and all five wheel digests. R18 reported
+staged, ready, first-parent and installed, with `different: 0`. R19 passed as
+the service user with `outside: []`. Launch/runtime and stores were preserved;
+no checkpoint, login, re-baseline, WRITE or retry occurred.
+
+The operator scope reserved 120 minutes, with at most 35 minutes before the
+unchanged 75-minute supervisor and at least 10 minutes for cleanup. The launch
+gate positively checked at least 5,100 seconds remaining. The supervisor ran
+all selected controls and returned exit 0, `read-settled`, terminal dispatch,
+clean cleanup and release eligibility. Accepted READ SHA-256:
+`93c378758ffbd3e48a5eee8f394773845f2f5727d7fdee09f94aadba4a494f12`.
+
+The actual collector delivered 643 bytes of complete advice. Advice SHA-256:
+`9838b70bb6cdda54e0f9c7aefd3057118a42789cb2af30bdc7539b7b94ce8142`.
+Reply JSON SHA-256:
+`40c74ff4d2ff772d91fde55e604caab62f7f46afee977e84b93929d081f4bd9c`.
+Metering recorded one observed attempt and 6,082 input / 115 output tokens from
+`codex_fresh_thread_total_v1`. Requested model was `gpt-6.1-sol` at low effort;
+served model, confirmed charge and estimate remain null. Backend request count
+and a finite monetary ceiling are not established.
+
+Withdrawal readback affirmed floor 24, and installation/qualification records
+confirmed one unchanged fresh boot. The supervisor's positive closeout and a
+fresh independent Off/Ok observation with zero uptime, checkpoints and local
+vmconnect processes preceded
+custody release. Closeout SHA-256:
+`c03dc033e27fe4b82d2701130c8ee86c88b0f17461f0ae10c31db7869daa82f6`.
+The full collector JSON was sent privately; the requester acknowledged
+consumption and independently ran the current collector with its normal custody
+checks, reproducing all 2,292 JSON bytes and the complete advice. Independent
+scoring against the frozen rubric was GO: T1-T3 fact fidelity, no overclaim and
+no invented specifics all passed; U1-U4 signature targeting, added-function
+tests, correct module-bit limits and targeted suggestions all passed. The
+recommendations remain categorical, without source-specific parameter or
+branch detail. An initial comparison to the earlier V1 run was withdrawn as
+unverified: it was a different change and its text was not re-read. This is one
+preselected go/no-go case, not a general quality measurement, V1 model
+comparison, vendor-conformance claim or production
+availability. The V1 record/history is preserved without spending its spare
+slot. The owning issue retains review and scoring evidence:
+[#455](https://github.com/sushiHex/constructicon/issues/455).
