@@ -1,4 +1,8 @@
-"""Connect one verified qualification to the checked M9 READ guest phase."""
+"""Connect one verified qualification to the checked M9 READ guest phase.
+
+Use ``prepare-input --help`` for offline successor input preparation. Compile
+that input separately, then use ``--preflight`` to check the selected package.
+"""
 
 from __future__ import annotations
 
@@ -190,6 +194,11 @@ def preflight(work, host, approval, reserve_seconds, *, host_values=None,
 
 
 def main(argv: list[str] | None = None) -> int:
+    arguments = sys.argv[1:] if argv is None else argv
+    if arguments[:1] == ["prepare-input"]:
+        from scripts.ops.m9_read_preparation import main as prepare_main
+
+        return prepare_main(arguments[1:])
     from scripts.ops.m9_qualification_boundary import QualificationBoundary
 
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
@@ -232,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.work, host, approval, args.reserve_seconds,
                 host_values=args.host_values, host_values_sha256=args.host_values_sha256,
             )
-            print(json_bytes(checked).decode("utf-8"), end="")
+            sys.stdout.buffer.write(json_bytes(checked))
             return 0
         result = run_native_read(args.work, host, approval, LIMITS)
     except (OSError, ValueError) as exc:

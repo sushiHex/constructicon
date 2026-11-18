@@ -22,6 +22,30 @@ captures, old grants, and a prior boot's approvals are not inputs. Keep the
 scope short enough for the earliest qualification deadline and reserve time for
 withdrawal and park. The CLI caps the window at 75 minutes once it starts.
 
+### Preparing successor input offline
+
+`m9_native_read.py prepare-input` prepares one private host-values file from
+an independently pinned template and the records of a completed advice READ.
+Select `--template` / `--template-sha256`, `--previous-selection` /
+`--previous-selection-sha256`, the prior `--work`, `--prior-record` and
+`--prior-packet`, and a fresh `--out` file under a private directory.
+
+The reader uses the existing reply collector, the prior selection's canonical
+qualification directory and the producer's hash-linked qualification,
+withdrawal and park receipts. It derives only `previous_boot`,
+`previous_generation`, `prior_session` and `prior_label`; all other template
+fields remain opaque and unchanged. It validates before creating the output,
+writes canonical LF bytes exclusively, checks readback and prints the output
+digest. Existing or interrupted output is retained and never overwritten.
+
+This command replaces recurring input-writing and predecessor-binding glue.
+It does not compile a qualification package, copy a private compiler, observe
+the current host, establish current exclusive custody, issue approval or grant
+another attempt. Its historical park evidence is not a fresh idle observation.
+Run the separately selected compiler on the exact output bytes, then use the
+existing preflight on its selection and that pinned input. New physical facts
+remain unresolved until measured under a selected live scope.
+
 ### Before-start local preflight
 
 Before starting the guest, use `m9_native_read.py` with `--preflight` and an
@@ -530,3 +554,33 @@ Private JSON passed to the strict preparation builder must be UTF-8/LF bytes;
 use `write_bytes` rather than default Windows text newline translation. Exercise
 the actual serialization and unchanged builder entry offline before starting
 the VM. A local preparation refusal does not grant a retry of a stopped window.
+
+## Report a batch's recorded usage
+
+`change_review_batch_report.py` accepts one to 32 repeated
+`--window WORK RECORD PACKET` triplets, with the same private paths as the
+single-window collector above. Each input passes that collector again; the
+report reads no journal directly and stores no second accounting ledger.
+It emits bounded JSON without advice text, private paths or detail URIs.
+
+A repeated canonical custody/record pair contributes once and must still
+reproduce identical reply and packet bytes. Distinct windows count separately,
+even when they share a deterministic RunId: their native journals and attempts
+are separate observations. A conflicting duplicate refuses rather than
+silently choosing an accounting cut.
+
+`recorded_attempt_count` counts retained native attempts, not backend requests.
+Token values are known subtotals grouped by their original measurement source;
+Codex fresh-thread and Claude main-loop measurements are not combined into one
+unqualified total. Unknown axes stay null, while an observed zero stays zero.
+Coverage counts distinguish supported observations, unmeasured and legacy
+results, and windows whose reply was not delivered. Missing observations never
+establish zero usage or zero cost.
+
+Per-window metering values retain the producer's money and coverage fields.
+The current contract supplies no monetary amount; aggregate estimate and charge
+remain null/unknown. Elapsed time is also null/unavailable because the retained
+run-result metering has no timing field. Backend request count remains unknown.
+No price lookup, subscription-balance query, spending cap or model call is part
+of this report. Keep its usage data private unless deliberately sharing a
+bounded summary.

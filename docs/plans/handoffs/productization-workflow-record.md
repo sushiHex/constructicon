@@ -89,3 +89,124 @@ neither an old review nor an old CI run is represented as final-head evidence.
 
 No vendor binary, credential, model call, VM operation, controller installation,
 re-baseline or production deployment is part of this delivery.
+
+## Repeatable offline preparation and batch usage — #461
+
+The next offline wave follows #460 without another quality experiment. It
+extends the existing READ operator with `prepare-input` and adds a small batch
+projection over the existing protected reply collector. The graph, actor,
+grants and metering journal/schema remain unchanged. No executor or package
+source file is modified, and accepted design bodies are preserved. This is
+preparation and observation, not live authority.
+
+### Input production and composed evidence
+
+The caller independently pins a canonical template and a prior schema-3
+selection, and identifies that completed window's custody/record/packet. The
+existing collector reconstructs the accepted reply. The new reader derives the
+qualification directory from the prior selection digest, reconstructs the
+producer's exact qualification packet and identity, and compares their hashes
+with the window challenge. It checks completed capture statuses and empty
+stderr, matching boot and generation, selected cleanup source/bindings/script,
+locked withdrawal readback and the supervisor's withdrawal/park receipt hashes.
+The park receipt also reproduces the existing VM-usage parser's idle result.
+An active window or suspension blocks preparation.
+
+Only `previous_boot`, `previous_generation`, `prior_session` and `prior_label`
+are derived. Every other template field remains opaque and unchanged. All
+validation precedes an exclusive binary file claim; canonical LF output is
+read back and identified by digest. Existing/interrupted output is retained,
+never resumed or overwritten. Both this action and existing `--preflight`
+write binary JSON to stdout, avoiding Windows text newline translation.
+Neither step grants a slot, compiles a package or measures current host facts.
+The actual compiler and preflight remain separate steps; current custody,
+boot, generation, installation and model authority still require their own
+selected live scope and observations.
+
+The accepting tests use the actual committed-source packet producer and a
+complete fake-platform native window, including the real constructor,
+supervisor, guest command/closure and teardown. Those retained outputs feed
+the public writer, then a fixture compiler using real `assemble` and D2
+producers, then the actual constructor/approval preflight twice with external
+process calls denied. Exact refusal checks cover altered source, incomplete
+or mistyped completion, qualification/candidate mismatch, withdrawal and park
+evidence, active/suspension markers, canonical input bounds and occupied
+output. Genuine `TextIOWrapper` streams configured for CRLF translation test
+the binary stdout boundary portably. This fixture proves composition, not
+arbitrary historical shell semantics or physical host containment.
+
+A separate offline historical check exercised the new CLI against retained
+generation-29 records. It reproduced the pinned generation-30 before-start
+input SHA-256
+`0eefe24def14f0d58f70a8b8de855ef34379724f5176c6e2559afadaf2461d7f`
+byte-for-byte. The unchanged private compiler, pinned at
+`644bdd993561955870176ebd596bcc9888da75eb428486931a0019baad5def10`,
+ran once on those bytes and built all 15 scripts and the summary identically
+to the retained reference. After local-output-root normalization, its selection
+equaled the before-start selection
+`e7dea47166e4491c762b7f4504dba3ce58383beb463c49fb1c58da701421a6f5`.
+An initial observer compared against the later endpoint-discovered selection;
+its target-only difference was resolved by read-only comparison against the
+correct retained before-start reference. Writer and compiler were not repeated.
+Preflight affirmatively refused the exhausted standing record; its digest
+remained unchanged, with no active scope or suspension. This exercised only
+historical data: no new host observation, record issuance or model call.
+
+### Batch metering semantics
+
+`change_review_batch_report.py` accepts one to 32 custody/record/packet triplets.
+Every triplet passes the existing collector, including duplicates. A repeated
+canonical custody/record pair contributes once only when the complete reply
+and exact packet fingerprints agree. Different windows count separately even
+when deterministic RunIds match: their fresh journals are different native
+attempts. Conflicting duplicates refuse rather than selecting a convenient
+cut. No new store or accounting API is introduced.
+
+The bounded 32 KiB JSON view excludes advice, private paths and detail URIs.
+It retains per-window native metering values and immutable event cuts, counts
+coverage separately, and sums only source-scoped known token subtotals. An
+unknown axis stays null and an observed zero stays zero. Recorded attempts are
+not backend requests. The existing monetary contract permits no known amount;
+estimate and confirmed charge therefore remain null/unknown. Timing is
+null/unavailable because durable run-result metering retains no elapsed value.
+No prices, subscription balance, monetary ceiling or backend count are inferred.
+
+The real historical CLI check supplied all three #459 windows plus the first
+window again. Its 2,728-byte report counted four inputs, three unique windows,
+one duplicate and three recorded attempts, with exactly 18,366 known input /
+554 known output tokens under `codex_fresh_thread_total_v1`. Money, elapsed time
+and backend requests remained unknown. No raw advice or private path appeared.
+
+The tests also exercise two genuine fake-platform windows with the same RunId,
+partial counters, observed zero, legacy/unmeasured/unavailable coverage,
+conflicting duplicates, input/output bounds where the limits bind, and the
+actual CLI. An initial fixture reused a permanently closed acquisition across
+two windows; separate closure authorities corrected the fixture without
+relaxing product guards. The actual scripted peer's missing token observation
+was then asserted as unknown rather than summed as zero. A proposed RunId-only
+deduplication and a stronger coverage/count equivalence were rejected: neither
+follows the existing observation identity or all schema-valid legacy semantics.
+
+### Revision-unit reconciliation and delivery limits
+
+Issue #438's option-1 preservation contract was already selected on November
+16, and #444 had already published its acceptance metadata. A current issue
+comment reconciles that history; no accepted design text needs another edit.
+The coverage method remains explicit whole-module lists, preservation of all
+existing source inputs and kernel member laws, reviewed inventories and
+targeted sensitivity checks. An exact future extraction diff must identify its
+affected identities before implementation. The S3-4 exception, store-law
+authenticated-startup policy and launcher-split timing stay separately
+deferred. No extraction or pin change occurred here.
+
+Focused batch tests passed 13 cases, including genuine producer/collector/CLI
+composition. New preparation tests passed both accepting/composed and refusal
+cases; the combined preparation/existing preflight run passed 21 cases, with
+focused reruns covering the final binary-stream delta. Explicit Ruff checks
+cover the changed scripts/tests. Independent Codex boundary review found no
+actionable defects in the final source/test blobs; no duplicate full local
+suite was run. Final-head full code CI receipts belong in the delivery PR.
+The preparation census credits this concrete consumer only: historical
+OBSERVE/recovery/controller installation and other undemonstrated #308
+consumers remain open. No VM, vendor binary, account/credential operation,
+installation, live qualification, model call or production enablement occurred.

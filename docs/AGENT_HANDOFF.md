@@ -16,6 +16,44 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Repeatable offline predecessor input and batch metering — #461
+
+The existing READ entry now exposes `prepare-input`. It derives four
+predecessor fields from an independently selected prior package and the actual
+accepted READ, qualification, withdrawal and park records. It preserves the
+rest of the pinned template, validates before claiming one output file, writes
+canonical LF bytes exclusively and verifies readback. A historical park is not
+a fresh host observation or custody grant. Compilation and standing-approval
+preflight remain separate; the private qualification compiler was not ported.
+
+Actual producer/fake-platform teardown feeds the new writer, a small fixture
+composition through the existing packager/D2 producer, and repeatable preflight.
+Real CRLF-translating stdout wrappers exercise binary output from both the new
+action and preflight. Independent Codex boundary review found no defects.
+An offline historical check also reproduced the prior generation-30 input
+exactly and rebuilt all 15 scripts, summary and normalized before-start selection
+through the unchanged pinned private compiler. An initial observer used the
+post-discovery endpoint reference; read-only comparison against the correct
+before-start artifact resolved the target-only difference without repeating
+writer or compiler. The exhausted standing record still refused preflight.
+
+The new batch view delegates to the existing protected reply collector. Repeated
+canonical windows count once; separate windows with the same deterministic RunId
+count separately. Source-scoped known token subtotals and unknown axes retain
+their meaning. It emits no advice or private paths, claims no monetary/timing
+measurement and adds no ledger. Four historical inputs including one duplicate
+yielded three windows, three recorded attempts and 18,366 input / 554 output
+tokens; monetary amount, elapsed time and backend requests remained unknown.
+
+Revision-unit option 1 and its acceptance metadata were already delivered in
+#443/#444. No accepted design body or pin was changed. The remaining freeze,
+store-law startup and launcher-timing choices stay deferred in #438; historical
+OBSERVE/recovery/installation coverage stays open in #308. This wave made no VM,
+vendor, account, installation, live qualification or model call. Full evidence and
+limits are in the [workflow record](plans/handoffs/productization-workflow-record.md#repeatable-offline-preparation-and-batch-usage--461).
+
+---
+
 ## Paired advice gains scenarios but fails one fidelity gate — #459
 
 All three fixed cases completed at retained controller/operator `6f4a062` on
