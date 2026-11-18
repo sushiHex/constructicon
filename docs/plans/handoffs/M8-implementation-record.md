@@ -11645,3 +11645,32 @@ ran the same collector, reproducing the exact request, acceptance digest, whole
 reviewed `626021b` for this live proof. The successor permits no later automatic
 window. The owning issue retains the delivery record:
 [#450](https://github.com/sushiHex/constructicon/issues/450).
+
+
+## Credential-free structural advice input — #453
+
+ADR 0027 adds aligned kinds, changed-part lists and an exact whole-module
+AST-change bit to the advice input. The existing symbol lists carry the names;
+the metadata adds or repeats no authored identifiers. Nulls distinguish
+unavailable/partial detail and duplicate-definition ambiguity. A separate local
+advice producer keeps the human-review graph unchanged.
+
+The comparison separates syntactic question-answerability from model quality.
+Whole-module AST equality observes cross-category/public-definition ordering;
+grouped category comparisons do not. Docstring facts compare the leading
+expression AST, including literal prefix/kind. Class bodies remain opaque
+bodies, without a member inventory or semantic-correctness claim.
+
+The instruction remains at most 8,192 LF-only UTF-8 bytes and the reply at most
+16,384 bytes. A source-producer boundary pair of 5,800/5,900 source bytes and
+25 eighty-character names in each change bucket measured 6,985 bytes for V1,
+17,939 for name-keyed metadata and 9,673 for aligned metadata under V1 framing.
+Final V2 framing adds bytes; the instruction guard must refuse, never drop
+facts to fit. Current implementation/review evidence belongs to the delivery PR.
+
+The active V2 route has new instruction/component/graph identities. Retained
+V1 packets and journals remain on their original pinned tooling; no history
+migration or current-tool reinterpretation is supplied. The previous standing
+record cannot admit these new pins. This slice establishes no V2 installation,
+live qualification, successor standing record, vendor call or monetary charge.
+Existing V1 live evidence remains attributed to its original controller and run.

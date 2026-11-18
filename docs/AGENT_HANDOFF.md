@@ -16,6 +16,35 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Advice summaries expose bounded structural facts — #453
+
+[ADR 0027](adr/0027-bounded-structural-change-facts.md) extends the advice input
+with aligned symbol kinds, changed-part lists and an exact ordered whole-module
+AST-change bit. Names appear only in the existing symbol lists. Unknown detail
+is null; duplicate definition groups do not receive guessed kinds or part
+alignment. A separate local advice producer preserves the default human-review
+report and graph.
+
+The whole-module bit matters: reordering statements across categories, or
+reordering public definitions, changes the AST while leaving V1 symbol lists
+unchanged. Grouped category comparisons cannot prove whole-module equality.
+Docstring comparison includes the leading expression's AST, including literal
+prefix/kind; comparing only its value missed a real AST difference.
+
+The instruction keeps its 8,192-byte ceiling. A producer-grounded boundary case
+fits V1 but exceeds it after aligned V2 metadata. Named refusal is the contract;
+nothing is silently dropped. Changed metadata rotates the component, graph and
+controller identities. Historical V1 packets/replies retain their original
+pinned tooling, and V1 approvals do not admit the new pins.
+
+This establishes a structural input contract and credential-free integration.
+Model advice quality remains unmeasured. Class-body flags do not identify
+members or establish compatibility, semantics or test coverage. The reply,
+metering, grants and native lifecycle retain their contracts. No V2 live
+installation, qualification, standing record or model call is established.
+
+---
+
 ## Finished advice reaches the requester through checked retained evidence — #450
 
 The new offline `scripts/ops/change_review_reply.py` reads one finished native
