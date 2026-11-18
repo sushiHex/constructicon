@@ -16,6 +16,54 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Paired advice gains scenarios but fails one fidelity gate — #459
+
+All three fixed cases completed at retained controller/operator `6f4a062` on
+generations 28–30. Each complete reply was independently reconstructed exactly,
+consumed and scored by Codex, with root checking the premises. Specificity S
+passed 3/3 versus baseline 0/3, but B3 failed T1: a collective unchanged-signature
+attribution included a newly added function, whose prior signature the summary
+cannot establish. The other truthfulness gates passed; B1/B2 were GO and B3
+NO-GO. A narrower reading of the collective attribution was rejected because
+it would round unsupported wording up to a positive fact.
+
+The preregistered result is a stopped quality investigation, not a positive
+batch conclusion. Keep the already merged framing and opaque, untrusted advice
+contract; do not add source facts, a semantic parser or another tuning loop on
+this evidence. No transport or summary-producer defect was established. This
+does not qualify production availability or generalized model quality: one
+stochastic output per case, three body-only changes in one code family, two in
+the same file. The [living record](plans/handoffs/M8-implementation-record.md#paired-concrete-scenario-framing-and-local-preflight--459)
+retains the decision, bounded evidence and limits.
+
+All three windows ended accepted and clean with same-boot withdrawal, fresh
+parked observations and custody release. The three-slot record is exhausted,
+not suspended. Observed totals are 18,366 input / 554 output tokens across three
+attempts; served model, charge, estimate and backend request count remain
+unknown. No fourth call or automatic retry occurred.
+
+The existing operator entry has a portable `--preflight` mode. It checks the
+selected package and literal helper contracts through the real constructor and
+the standing approval at both now and the requested reservation's end. Optional
+pinned host-values bytes must use the existing canonical LF serializer; only
+the two predecessor fields are compared with the checked selection. It neither
+claims a slot nor starts a process, and reports that private writer/compiler
+execution, fresh physical facts and qualification were not verified. Native
+execution retains its existing Windows-only path and supervisor.
+
+This follows an operator preparation failure: a private Windows text writer
+emitted CRLF and the actual pinned compiler refused before qualification or a
+model call. That window was withdrawn and parked; it was not retried. The
+successor uses byte serialization, checks the actual writer-to-compiler join
+offline and derives later predecessor inputs from checked completed evidence.
+The public preflight catches local framing/admission defects before a start;
+it does not claim to execute that private compiler or replace fresh host checks.
+An independent Codex review found and verified the fix for unnamed unreadable
+host-values refusals. Focused producer-grounded accepting/refusing tests cover
+the new mode without credentials, processes or window claims.
+
+---
+
 ## Three V2 advice requests establish a framing bottleneck — #457
 
 The frozen historical selection ran once per case on generations 25–27 at
