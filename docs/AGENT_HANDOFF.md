@@ -16,6 +16,29 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Public projection reads reuse validated owner facts — #465
+
+Event pages mint their detail references from the complete sealed events they
+already read, rather than point-reading every event again. An addressed channel
+query similarly hashes its already-authorized immutable message. Channel inbox
+authorization and all later detail reads remain on the existing resolver path.
+No cache, new store, scheduler, schema or source of authority is introduced.
+
+Reply preparation still verifies the complete retained batch membership and
+seals, then addresses only the selected file's request. The returned status
+continues to cover the whole batch. Root V3 results and metering are unchanged.
+
+Producer-backed tests compare full detail bytes and digests, fixed cursor cuts,
+actor isolation and fresh refusal after a warm event/reply has been corrupted.
+The original implementation positively made two event point reads for a
+two-event page and two/four channel-delivery reads for request/reply summaries.
+These measured bounds, rather than a wall-clock CI deadline, guard repeated
+work. The [workflow record](plans/handoffs/productization-workflow-record.md#projection-read-performance--465)
+records the before/after profile and remaining limits. Mandatory journal-open
+seal audits, frozen plans, native availability and advice quality are unchanged.
+
+---
+
 ## One durable review run for an explicit file batch — #463
 
 The new `examples.change_review_batch` entry composes the existing single-file
