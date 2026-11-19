@@ -856,6 +856,19 @@ Receipt, event, command and accounting readers share one relationship projector.
 A complete read may reuse its proven histories and receipts within that owned
 SQLite snapshot; no proof cache survives a writer or an `await`.
 
+The synchronous `read_snapshot` owner also retains at most one most-recent
+successful immutable run-world proof. Its exact sealed run fields key the
+proof; lifecycle, liveness, actor and row-specific provenance checks remain
+outside it. The scope is bound to one connection, thread and owned transaction,
+disables reuse permanently after connection-local DML, and clears before
+rollback on every exit. Consumers perform reads only; they cannot change the
+schema, commit or restart the owned transaction.
+External commits leave the existing WAL view coherent; the next view proves
+its world afresh. Defensive copies protect nested manifest and input mappings.
+Write transactions and unowned transactions do not use this reuse path. Opening
+still audits the complete inventory; this removes repeated world proofs within
+that same audit, not any required fact or relationship check.
+
 Compatibility preserves exact writer bytes rather than normalizing them into
 today's shape. M1/M2 effect requests omit `run_id`, `manifest_hash`, and `mode`;
 M3–M5 requests carry `run_id` and `manifest_hash` but omit `mode`; current

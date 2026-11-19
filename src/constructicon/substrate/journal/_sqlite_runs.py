@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -47,6 +48,7 @@ from constructicon.substrate.journal._sqlite_base import (
     _durable_sequence,
     _durable_sqlite_boolean,
     _durable_text,
+    _read_snapshot_proofs,
     _run_state_fields,
 )
 from constructicon.substrate.journal._sqlite_commands import (
@@ -1027,6 +1029,33 @@ def run_facts_for_id(
 
 
 def validated_run_world(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+) -> ValidatedRunWorld:
+    """Reuse a successful world proof only inside its owning read snapshot."""
+
+    proofs = _read_snapshot_proofs(connection)
+    if proofs is None:
+        return _validated_run_world_uncached(connection, row)
+    # The exact fields sealed by run_world_fact_hash; lifecycle and liveness
+    # are deliberately outside this memo and still checked by their projectors.
+    key = tuple(row[name] for name in (
+        "run_id", "manifest_hash", "input_hash", "inputs_json", "created_at",
+        "creation_command_id", "origin_json",
+    ))
+    cached = proofs.worlds.get(key)
+    if cached is not None:
+        return deepcopy(cached)
+    world = _validated_run_world_uncached(connection, row)
+    # Frozen models contain mutable dictionaries. Keep the memo's copy private
+    # so a consumer cannot change the next projection's retained world. Retain
+    # only the most-recent success, bounding memory even during a full audit.
+    proofs.worlds.clear()
+    proofs.worlds[key] = deepcopy(world)
+    return world
+
+
+def _validated_run_world_uncached(
     connection: sqlite3.Connection,
     row: sqlite3.Row,
 ) -> ValidatedRunWorld:
