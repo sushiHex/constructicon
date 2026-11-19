@@ -29,7 +29,7 @@ from constructicon.core.control import (
 )
 from constructicon.core.errors import ContractViolation, JournalDamaged
 from constructicon.core.identity import Digest, JsonValue, canonical_json, digest, json_value
-from constructicon.core.journal import Journal
+from constructicon.core.journal import Journal, JournalEvent
 from constructicon.core.run import TERMINAL_EVENT_STATUSES, RunStatus
 from constructicon.runtime.registry import ComponentRegistry
 
@@ -228,6 +228,30 @@ class DetailResolver:
 
         reference = self.reference(actor, uri)
         return reference if isinstance(reference, DetailRef) else None
+
+    def event_reference(self, event: JournalEvent) -> DetailRef:
+        """Mint from a sealed event the owning query already authorized and read.
+
+        Hash the full event, exactly as the event detail resolver does. This
+        retains no proof: a later detail read still resolves and validates it.
+        """
+
+        return DetailRef(
+            uri=DetailAddress.event(event.run_id, event.seq),
+            digest=digest("detail", 1, json_value(event.model_dump(mode="json"))),
+        )
+
+    def channel_reference(self, message: ChannelMessage) -> DetailRef:
+        """Mint after the owning point query passed authorized_delivery.
+
+        Only the immutable message enters detail, never its mutable delivery
+        acknowledgement. Inbox rendering retains its own resolver auth path.
+        """
+
+        return DetailRef(
+            uri=DetailAddress.channel_message(message.message_id),
+            digest=digest("detail", 1, json_value(message.model_dump(mode="json"))),
+        )
 
     def accounting_reference(
         self, actor: AuthenticatedActor, payload: CapabilityAccountingDetail,

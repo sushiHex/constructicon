@@ -320,3 +320,123 @@ evidence that generated advice improves coverage. It changes no VM, account,
 credential, controller, qualification, accepted plan, production provider or
 stable component pointer. Broader historical preparation remains in #308 and
 the paired native-review quality limit remains in #459.
+
+## Projection read performance — #465
+
+### Measured premise and scope
+
+The terminal sixteen-file workflow from #463 supplied the retained baseline:
+212 events, 19 commands and a complete 60,247-byte canonical status response.
+Its prior unprofiled fresh CLI took 290.453 seconds, including 237.650 seconds
+in app-direct synchronous public reads. Events accounted for 115.071 seconds
+and channel-message reads for 70.106 seconds. The host fairness correction was
+already present; these are read-only costs after the root succeeded.
+
+One isolated read-only-source SQLite backup preserved the committed terminal
+cut for profiling. The initial directory-fingerprint guard was too broad:
+opening SQLite read-only created coordination sidecars, while the main database
+and committed logical content stayed unchanged. The sidecars were preserved;
+the guard was narrowed to actual source data and backup consistency. No status
+command had run before that preparation correction. The single cProfile run
+is distinguished from the earlier unprofiled baseline because instrumentation
+materially increases elapsed time. Production changes were prepared in a
+separate worktree to keep the profiled baseline frozen.
+
+Small producer-backed fixtures independently established the repeated work:
+a two-event page point-read both events again, a request summary read its
+delivery twice, and a reply summary read the reply and governing request twice
+each. Canonical detail bytes, actor isolation and warm corruption refusals
+passed on the baseline; only the three intended efficiency assertions failed.
+
+### Minimal change and integrity boundary
+
+The event query now hashes the complete sealed `JournalEvent` it already read,
+including schema version, structured path and timestamp. The addressed channel
+query hashes the immutable message only after `authorized_delivery` has checked
+its governing request, recipient, interaction and stored provenance. The shared
+summary renderer accepts that earned reference; inbox callers retain the
+existing resolver path. Mutable delivery acknowledgement state is excluded from
+message detail exactly as before.
+
+No proof survives the request. `details_read` still performs its existing
+caller/family authorization, fresh durable validation, digest comparison and
+actor-bound cursor/UTF-8 bounds. Fresh public queries still reload and validate
+their facts; there is no global or per-session cache. Mandatory journal-open
+inventory audits are unchanged. The full public URI and payload vocabulary,
+root V3 result and metering contract are unchanged.
+
+The batch reply entry checks the complete retained membership and seals, then
+looks up only its selected file before the mutation. The mutation remains the
+existing `channels_reply` command; the response still observes all members.
+This removes irrelevant pre-mutation reads without changing actor authority,
+the selected request's governance, idempotency or recovery law.
+
+Review rejected the premise that a selected reply must validate every unrelated
+file's request payload before mutation. The actual public command law already
+authorizes and plans one addressed request. Full sealed batch membership,
+selected binding and canonical payload checks remain; no wider authority is
+inferred from skipping unrelated reads. Event detail equivalence is tested
+separately from whole CLI output equality because the CLI does not publish the
+event page's detail references.
+
+### Proofs and measurement interpretation
+
+The new producer-backed cases pass exact chunked UTF-8 bytes and full-event or
+message digests, a late append excluded from the original actor-bound cursor
+cut, and fresh refusal after warming a reference then rewriting an event or
+deleting a reply's atomic acknowledgement. The three efficiency assertions that
+failed on the baseline now pass: zero event point rereads per returned page,
+one request delivery or two reply/governing-request deliveries per addressed
+summary. Later detail reads deliberately revalidate and are excluded from
+those reference-creation bounds.
+
+A real two-file fresh-process test selects the non-first member, proves one
+public message lookup before `channels_reply`, then exercises the actual
+mutation, same-key replay, changed-payload and cross-member conflicts, sibling
+isolation and final success. Non-members reach neither channel lookup nor
+mutation. The exact root result is preserved. Seven new cases and 33 selected
+existing authorization/cursor/detail/lifecycle cases passed in the isolated
+implementation worktree, whose source and test blobs match the canonical
+candidate. No duplicate full local suite was run.
+
+The single full cProfile baseline completed with exactly the retained stdout
+bytes and unchanged logical tables. It recorded 216 event point reads, 144
+channel-delivery calls, 246 required-reference resolutions and 1,150 run-world
+validations. Instrumented wall time was 1,054.625 seconds; the complete opening
+audit alone took 180.095 seconds under the profiler. Cumulative function times
+overlap and are not additive. These figures locate repeated proof work, not a
+wall-time regression or a claim that SQL engine execution dominates. The
+separate unprofiled candidate comparison supplies the actual observed speedup.
+
+### Observed result and remaining limits
+
+The candidate's unprofiled fresh terminal CLI returned in 153.787 seconds,
+compared with the prior unprofiled 290.453 seconds: 47% less elapsed time.
+All 60,247 stdout bytes matched, including every V3/metering field and cut 212.
+All logical tables remained identical, including 212 events and 19 commands;
+the original retained main database also stayed unchanged. This is one observed
+same-fixture comparison, not a universal latency SLA or a profiler-derived
+speed claim.
+
+| Public projection measure | Before | After |
+| --- | ---: | ---: |
+| Event pages, unprofiled seconds | 115.071 | 5.341 |
+| Addressed channel summaries, unprofiled seconds | 70.106 | 36.826 |
+| Event point reads in complete status | 216 | 4 |
+| Channel-delivery reads in complete status | 144 | 96 |
+| Required reference resolutions | 246 | 2 |
+| All detail resolutions | 282 | 38 |
+
+The candidate positively minted 212 event and 32 channel references in memory;
+the remaining four event point reads serve terminal/result resolution. Detail
+reads still perform their legitimate fresh message/governing-request checks.
+The unchanged open/audit took 56.347 seconds in the unprofiled candidate, and
+detail reads took 41.136 seconds. These remain substantial costs. No audit,
+identity normalization rule, integrity predicate, payload field, actor lock or
+cursor bound was weakened to obtain the reduction. No native provider or
+quality conclusion follows from these credential-free measurements.
+
+Independent review and exact-head full CI receipts are recorded in the delivery
+PR. Tests use durable-read bounds rather than flaky wall-time assertions. This
+wave makes no VM, model/vendor, account/credential, installation, qualification
+or accepted-plan change.

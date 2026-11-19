@@ -489,6 +489,12 @@ Opaque cursor schema 2 binds actor, endpoint, canonical query, calibrated
 checksum, snapshot bound, and continuation key. The checksum detects accidental
 corruption; it grants no authority. Run/event pages use immutable upper bounds,
 registry pages use `RegistryRevision`, and detail chunks remain digest-bound.
+An authorized event page or addressed channel query can mint a detail reference
+from the complete immutable fact it already validated. This avoids reloading
+that same fact merely to hash it. A reference retains no authority or cached
+proof: each later detail read authorizes the caller and validates the current
+durable fact again. Channel inbox references retain their governing-request
+authorization path; mutable acknowledgement state never enters message detail.
 
 Counterfactual admission first validates the retained source Graph under the
 source manifest's exact version lock. Preflight and compilation share one

@@ -541,7 +541,9 @@ async def execute(args: argparse.Namespace) -> dict[str, Any]:
             retained, manifest = retained_batch(system, control, run_id)
             if args.file_id not in retained:
                 raise ValueError("batch_file_unknown: select a file_id returned by this batch")
-            requests, partial = requests_for(control, run_id, retained, manifest)
+            requests, partial = requests_for(
+                control, run_id, {args.file_id: retained[args.file_id]}, manifest,
+            )
             request = requests.get(args.file_id)
             if request is None:
                 code = "batch_inbox_partial" if partial else "batch_request_missing"
