@@ -16,6 +16,39 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## One addressed batch member can use the existing native reply path — #471
+
+The new offline preparation entry selects an explicit retained file identity,
+checks its immutable request/world and re-reads exact committed source. It
+verifies V1 against the original input, then uses the actual V2 producer;
+no richer facts are inferred from V1. A separate controller-repository option
+locates the pinned producer sources without requiring controller objects in
+the reviewed repository. The original three packet files remain byte-identical;
+the extra pinned binding is data, never execution authority or a ledger.
+
+Handback invokes the actual private-window collector, joins its accepted clean
+result to the pinned packet and current request, and delegates one opaque reply
+to existing `ControlPlane` command law. Native and batch journals remain separate.
+The 4,096-byte UTF-8 batch bound is preserved: collector-valid larger native
+advice refuses before a reply, retaining its complete original evidence.
+Known-key replay/conflict remains Core-owned; stale unknown-key answers refuse
+before command claim. Raced replies can still record standard rejection metadata.
+Typed Core refusals retain closed codes; dispatch/reporting failures remain
+unverified, with known command metadata when available, rather than falsely
+implying no reply committed.
+
+Root and native-window usage are returned separately with original identities,
+cuts and source scopes. There is no fabricated root attribution, combined total
+or price. Real accepting fake-chain proofs retain 37/11 native token observations
+while batch-root usage stays unmeasured. They prove one native turn, exact
+selected writer/reply, replay and an untouched sibling; they do not call a vendor.
+The [workflow record](plans/handoffs/productization-workflow-record.md#one-member-batch-to-native-bridge--471)
+records the limits. Private custody remains trusted, not an atomic snapshot or
+attestation against a malicious operator. No permit, framing, adapter, core law,
+installed source, live window or quality-tuning decision changed.
+
+---
+
 ## Readable batch output stays a view of machine facts — #469
 
 The batch checkout entry adds opt-in `--format text`; its default JSON and exit
