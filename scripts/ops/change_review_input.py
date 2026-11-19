@@ -33,9 +33,11 @@ def _wire(value: object) -> bytes:
 
 
 def prepare(repository: Path, controller: str, before: str, after: str,
-            path: str, out: Path) -> dict:
+            path: str, out: Path, *, controller_repository: Path | None = None) -> dict:
+    controller_repository = repository if controller_repository is None else controller_repository
     if (re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", controller) is None
-            or change_review.git(repository, "cat-file", "-t", controller) != b"commit\n"):
+            or change_review.git(controller_repository, "cat-file", "-t", controller)
+            != b"commit\n"):
         raise ValueError("consumer input controller is not an exact commit")
     sources = {}
     for name, module in (
@@ -45,10 +47,12 @@ def prepare(repository: Path, controller: str, before: str, after: str,
         ("src/constructicon/core/identity.py", identity),
     ):
         observed = Path(module.__file__).read_bytes()
-        size = int(change_review.git(repository, "cat-file", "-s", f"{controller}:{name}"))
+        size = int(change_review.git(
+            controller_repository, "cat-file", "-s", f"{controller}:{name}"))
         if size != len(observed):
             raise ValueError("consumer input imported source differs from the selected commit")
-        selected = change_review.git(repository, "cat-file", "blob", f"{controller}:{name}")
+        selected = change_review.git(
+            controller_repository, "cat-file", "blob", f"{controller}:{name}")
         if observed != selected:
             raise ValueError("consumer input imported source differs from the selected commit")
         sources[name] = hashlib.sha256(selected).hexdigest()
@@ -68,12 +72,19 @@ def prepare(repository: Path, controller: str, before: str, after: str,
         "offline_pins_are_provisional": True,
         "execution_authorized": False,
     }
+    # Verify the consumer's actual packet contract before claiming output. Git
+    # paths can contain characters that the downstream reply contract refuses.
+    from scripts.ops.change_review_reply import _packet
+
+    packet = _wire(record)
+    instruction = bound.instruction.encode("utf-8")
+    _packet(packet, raw, instruction)
     # All validation precedes the exclusive claim. No overwrite or inferred reuse.
     out.mkdir(mode=0o700)
     for name, contents in (
         ("summary.json", raw),
-        ("instruction.txt", bound.instruction.encode("utf-8")),
-        ("packet.json", _wire(record)),
+        ("instruction.txt", instruction),
+        ("packet.json", packet),
     ):
         with (out / name).open("xb") as stream:
             stream.write(contents)
@@ -84,6 +95,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--repository", type=Path, required=True)
     parser.add_argument("--controller", required=True)
+    parser.add_argument("--controller-repository", type=Path)
     parser.add_argument("--before", required=True)
     parser.add_argument("--after", required=True)
     parser.add_argument("--path", required=True)
@@ -91,7 +103,8 @@ def main(argv: list[str] | None = None) -> int:
     options = parser.parse_args(argv)
     try:
         record = prepare(options.repository, options.controller, options.before,
-                         options.after, options.path, options.out)
+                         options.after, options.path, options.out,
+                         controller_repository=options.controller_repository)
     except (OSError, ValueError, ContractViolation):
         print(json.dumps({"status": "refused", "reason": "consumer-input-unproved"}))
         return 1

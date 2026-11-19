@@ -624,3 +624,110 @@ five files. Independent boundary review and exact-head full CI receipts belong
 to the delivery PR; the full local suite was not duplicated. No core source,
 identity/schema, accepted ADR/plan, installed controller, credential/account,
 VM, qualification or vendor/model execution changed.
+
+## One-member batch-to-native bridge — #471
+
+This application-level bridge connects the existing durable batch request to
+the existing single-request native-advice preparation and private reply
+collector. It selects one explicit file identity, not the first member or an
+automatic multi-call batch. Preparation re-reads exact source refs and compares
+regenerated V1 facts with the retained input before running the actual V2
+producer. Module-only changes, absent from V1 public-symbol comparison, remain
+real V2 facts rather than an invented V1 upgrade.
+
+`change_review_input.prepare` accepts an optional separate controller repository
+only for its existing exact-commit/four-module byte checks. The target repository
+still supplies the selected source blobs. Default behavior and all three packet
+files remain unchanged. The new preparation entry adds a bounded LF binding of
+root RunId, manifest/input hashes, selected file, exact immutable request/hash,
+source refs and three packet digests. It prints the raw binding SHA-256 for
+explicit handback selection. No mutable lifecycle fence is pinned: sibling
+progress cannot invalidate the stable request. Unknown/answered/terminal
+requests, source mismatch/unavailability and occupied outputs refuse.
+
+The handback entry checks that literal binding pin, exact shape, packet bytes
+and current immutable selection. It calls the existing collector over the
+window's own private custody records; a caller's delivered JSON is insufficient.
+Accepted change, summary, instruction and native run identity must match. The
+actual `ModelAdvicePayload` remains opaque, and UTF-8 advice must fit the
+unchanged 4,096-byte batch bound. The native 16,384-byte allowance is not widened
+or silently shortened. The original result remains retained on refusal.
+
+The only mutation is the existing fixed local actor's `channels_reply`. A
+positive existing command lookup under the caller's key allows Core to decide
+exact replay versus conflict for an answered request; an unknown key refuses
+before a claim. An unanswered terminal root refuses. All checks before that
+await are synchronous. Core retains the ordinary raced-writer law, including
+possible rejected-command metadata, followed by the existing settlement wait.
+No second scheduler, replay cache, command identity law or raw journal writer
+was introduced. Packets and original private evidence remain required for a
+bridge replay, rather than inferring lost provenance or making a new model call.
+
+Handback returns command metadata, wait/partial state, and separate batch-root
+and native-window metering. It preserves each original source/cut and native
+accepted-read/approval/window provenance. It does not move native usage into
+the human batch's root meter, allocate per-file usage, add unlike scopes,
+invent money or add a ledger. Raw advice is not in this response; it is retained
+through the normal batch channel. Input and output are each bounded to 64 KiB
+with named refusals and binary UTF-8/LF output. Private paths/advice do not enter
+diagnostics or public completion evidence.
+
+### Proofs and limits
+
+Six preparation cases and five existing input cases passed. They exercise a target
+repository without controller objects, exact separate-source validation, a
+real V2 module-only edit, byte-equivalent packet files, isolated CLI preparation,
+stable sibling progress and accepting/refusing source/request/output cases.
+
+Four end-to-end cases passed through real committed source and durable batch,
+actual preparation, the credential-free whole native chain and actual collector.
+The fixture substitutes platform/transport primitives, not accepted-result JSON.
+The accepting 4,096-byte UTF-8 response reaches the exact writer/reply and
+replays with one batch root and one native turn; the sibling stays unanswered.
+Real adapter folding retains 37 input / 11 output tokens in the separate native
+projection, with unknown charges/estimates and unmeasured batch-root usage.
+Collector-valid 4,097-byte multibyte advice refuses untruncated before the reply
+command. Actual non-delivery, bad SHA, changed packet, wrong selected request,
+changed custody evidence and stale unknown-key answers likewise refuse before
+the command. A known key reaches Core's payload conflict law. Actual CLI binary
+replay/refusal output is exercised using the same real evidence.
+
+Independent consequential review found no blocking defect in the source/evidence,
+UTF-8, await, command replay/race, private-data or usage boundaries. It explicitly
+rejected stronger interpretations: a trusted prepared checksum grants no physical
+authority, private file rereads are not an atomic snapshot against a malicious
+operator, and raced failures may retain Core rejection metadata. This is not a
+new attestation or permission system. Source/test identities and exact-head full
+CI receipts belong to the delivery PR. No duplicate full local suite, actual
+vendor/model/VM/account operation, native permit/installation/qualification,
+framing change, core contract or accepted ADR/plan edit belongs to this delivery.
+
+A bound-binding follow-up on the same accepting world proved that reporting
+can fail after Core has durably replied or replayed. Such dispatch/reporting
+exceptions now return an unverified outcome with target identity and known
+command metadata when available. An injected lost return after an actual Core
+replay also remains unverified; existing command, events, reply and native turn
+stay unchanged. The 64 KiB output guard is exercised one byte below the actual
+response size, not merely asserted on a small response.
+
+The narrow review of that correction reproduced one introduced classification
+defect: an affirmative typed Core conflict fell into the generic uncertain-error
+case. It is resolved by a separate controlled refusal carrying only closed
+fault codes. Private messages, repair text and details are not disclosed.
+Unexpected dispatch, reporting or cleanup failures still do not imply no effect.
+The accepting uncertainty path and typed-conflict path receive focused delta
+checks; unchanged whole-chain refusal proofs are retained rather than broadly
+rerun. Independent narrow re-review cleared this correction.
+
+Final source inspection also exposed a pre-existing producer/consumer
+compatibility gap. A newline-containing path is a legal retained batch/Git
+selection, but the existing native collector rejects it. Real Git objects
+reproduced successful packet publication followed by `REPLY_PACKET_MISMATCH`;
+no platform filename or native window was needed. The producer now validates
+its computed three byte strings through the actual collector before claiming
+the output directory, then writes those same bytes. It duplicates no path
+regex and changes no valid packet bytes, collector, core or native framing.
+A direct-producer and real parked-batch regression both refuse before output
+publication. Existing input/preparation compatibility cases and a narrow
+independent delta review cover this fix; final-head CI is rerun after the code
+delta rather than treating the superseded head as final evidence.

@@ -298,3 +298,74 @@ and compare its actual pins before a separately approved permit can be placed.
 No provider, operator binding, boot, generation, custody, qualification or cost
 observation is supplied by packet preparation. The existing owner challenge and
 cleanup obligations remain part of the separately selected live window.
+
+### Prepare and return advice for one batch member
+
+The local bridge selects one explicit `file_id` from a retained batch. It
+re-reads that member's exact committed sources, verifies the retained V1 facts
+and source refs, then calls the existing V2 producer. It never upgrades V1 facts
+into V2 facts. The controller repository may be separate from the reviewed
+repository; the selected controller must still contain the exact four imported
+producer/guard source files.
+
+```text
+python -I -B scripts/ops/change_review_batch_prepare.py --state BATCH_STATE_DIRECTORY --run-id RETAINED_BATCH_RUN_ID --file-id SELECTED_FILE_ID --controller REVIEWED_CONTROLLER_FULL_COMMIT --controller-repository CONTROLLER_REPOSITORY --out FRESH_PRIVATE_PACKET_DIRECTORY
+```
+
+The original `packet.json`, `summary.json` and `instruction.txt` retain their
+existing bytes. An additional `binding.json` selects the immutable batch world,
+file, exact request and packet digests. The preparer prints its raw
+`binding_sha256`; retain that pin with the packet. Preparation refuses unknown,
+answered or terminal requests, changed/unreadable sources and occupied output.
+Sibling progress does not invalidate the immutable selection. This binding is
+prepared data, not a permit, approval or new source of authority.
+The computed consumer packet must pass the existing collector's validator
+before its output directory is claimed. Batch-valid paths containing control
+characters, for example, cannot become unusable native packets or defer that
+refusal until after a model window.
+
+Native execution remains the existing separately selected one-request route,
+with its own dedicated journal, permit, custody and cleanup. The bridge does
+not launch a model, VM or window. After that window has finished, supply its
+actual private custody work and nonce-record paths:
+
+```text
+python -I -B scripts/ops/change_review_batch_reply.py --state BATCH_STATE_DIRECTORY --binding PRIVATE_PACKET_DIRECTORY/binding.json --binding-sha256 PREPARED_BINDING_SHA256 --work NATIVE_CUSTODY_WORK_DIRECTORY --record NATIVE_WINDOW_RECORD_DIRECTORY --key BATCH_REPLY_KEY
+```
+
+The existing collector checks the window's own retained result, challenge,
+capture, accepted-read and clean-close evidence. Caller-provided delivered JSON
+is never accepted. The bridge joins that result to the pinned packet and current
+exact batch request before sending opaque advice through `ControlPlane` as the
+existing local operator. It refuses a native reply above the batch's 4,096-byte
+UTF-8 bound, even though the native contract can retain 16,384 bytes. Full native
+evidence remains available; advice is never truncated, retuned or retried to fit.
+
+The reply command uses the supplied idempotency key. Repeat the original key
+and identical evidence to replay; a changed payload under a known key is a
+Core conflict. An already answered target with an unknown key refuses before
+claiming a command. If another writer wins after preflight, standard Core reply
+law decides the race; it can record a rejected command, but cannot replace the
+winning reply. The existing settlement wait and failed/cancelled/timed-out exit
+semantics remain. Keep the packet and original private window evidence for
+bridge replays; missing evidence refuses rather than starting another model run.
+An affirmative Core rejection returns a refusal with its closed fault codes,
+not private messages or payload details. Exceptions after reply dispatch or
+during settlement/reporting return `unverified`, not a claim of no effect.
+Known reply-command metadata is retained when available. A reporting failure
+does not undo a committed reply: inspect the retained batch and replay only
+the original key and inputs. Unexpected cleanup failures also remain unverified.
+
+The bounded JSON result returns reply-command metadata and separate
+`batch_root` / `native_window` usage, each with its own run identity and cut.
+Native observations are not inserted into the batch root or allocated as a
+per-file meter. No combined total, new ledger or inferred price is produced;
+unknown charges and backend requests remain unknown. Raw advice is absent from
+this handback response; ordinary batch status exposes the retained opaque
+advice. Binding inputs are bounded to 64 KiB and handback output to 64 KiB,
+including LF. CLI diagnostics use named reasons without private paths or advice.
+
+This is a trusted local-operator composition of existing contracts. Its checksum
+and private-file checks do not attest against a malicious operator rewriting
+every input or make an atomic filesystem snapshot. It adds no physical authority,
+live qualification, production availability or model-quality conclusion.
