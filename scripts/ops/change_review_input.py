@@ -72,12 +72,19 @@ def prepare(repository: Path, controller: str, before: str, after: str,
         "offline_pins_are_provisional": True,
         "execution_authorized": False,
     }
+    # Verify the consumer's actual packet contract before claiming output. Git
+    # paths can contain characters that the downstream reply contract refuses.
+    from scripts.ops.change_review_reply import _packet
+
+    packet = _wire(record)
+    instruction = bound.instruction.encode("utf-8")
+    _packet(packet, raw, instruction)
     # All validation precedes the exclusive claim. No overwrite or inferred reuse.
     out.mkdir(mode=0o700)
     for name, contents in (
         ("summary.json", raw),
-        ("instruction.txt", bound.instruction.encode("utf-8")),
-        ("packet.json", _wire(record)),
+        ("instruction.txt", instruction),
+        ("packet.json", packet),
     ):
         with (out / name).open("xb") as stream:
             stream.write(contents)

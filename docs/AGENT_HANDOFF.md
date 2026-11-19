@@ -25,6 +25,10 @@ no richer facts are inferred from V1. A separate controller-repository option
 locates the pinned producer sources without requiring controller objects in
 the reviewed repository. The original three packet files remain byte-identical;
 the extra pinned binding is data, never execution authority or a ledger.
+Composition testing exposed a pre-existing producer/collector gap: a valid Git
+path containing a newline could publish a packet the collector rejected.
+Preparation now applies the actual collector validator before claiming output,
+without duplicating its path policy or changing valid bytes.
 
 Handback invokes the actual private-window collector, joins its accepted clean
 result to the pinned packet and current request, and delegates one opaque reply

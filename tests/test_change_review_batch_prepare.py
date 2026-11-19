@@ -14,6 +14,7 @@ from examples import change_review as source
 from examples import change_review_batch as batch
 from scripts.ops import change_review_batch_prepare as bridge
 from scripts.ops import change_review_input as consumer
+from scripts.ops import change_review_reply as collector
 
 from constructicon.api import change_review_advice as advice
 from constructicon.core.run import RunStatus
@@ -198,3 +199,49 @@ async def test_isolated_preparation_entry_uses_durable_membership_and_reports_bi
         "binding_sha256": hashlib.sha256((out / "binding.json").read_bytes()).hexdigest(),
     }
     assert source.checked(control.runs_status(source.OPERATOR, run_id)).status is RunStatus.PARKED
+
+
+async def test_actual_collector_rejects_unusable_git_path_before_direct_or_bridge_output(
+    source_world, tmp_path,
+):
+    repository, controller, before, after = source_world
+    path = "odd\nname.py"
+    commits = []
+    for original in (before, after):
+        blob = source.git(repository, "rev-parse", f"{original}:calc.py").decode().strip()
+        # Fixture-only Git object construction; no invalid Windows file is made.
+        source.git(repository, "-c", "core.protectNTFS=false", "update-index", "--add",
+                   "--cacheinfo", f"100644,{blob},{path}")
+        tree = source.git(repository, "write-tree").decode().strip()
+        commits.append(source.git(repository, "commit-tree", tree, "-m", "alias fixture")
+                       .decode().strip())
+    # This is a real readable Git path and valid ordinary batch input. The
+    # downstream collector's exact packet contract is the narrower boundary.
+    files = batch.prepare_batch(repository, *commits, (path,))
+    assert next(iter(files.values())).before_ref.paths == (path,)
+    direct = tmp_path / "direct-invalid-path"
+    with pytest.raises(collector.ReplyRefused) as refused:
+        consumer.prepare(repository, controller, *commits, path, direct)
+    assert refused.value.code == collector.PACKET
+    assert not direct.exists()
+
+    system, control = source.assemble(tmp_path / "newline-review.db")
+    try:
+        versions = await source.register(control)
+        submission = source.checked(await control.runs_start(
+            source.OPERATOR, proposal=batch.batch_graph(versions, files),
+            inputs={f"change_{key}": value.model_dump(mode="json")
+                    for key, value in files.items()},
+            idempotency_key="newline-prepare-test",
+        ))
+        await source.wait_for(control, submission.run_id, allow_parked=True)
+        bridge_out = tmp_path / "bridge-invalid-path"
+        with pytest.raises(collector.ReplyRefused) as refused:
+            bridge.prepare_batch_input(
+                system, control, run_id=submission.run_id, file_id=next(iter(files)),
+                controller=controller, controller_repository=repository, out=bridge_out,
+            )
+        assert refused.value.code == collector.PACKET
+        assert not bridge_out.exists()
+    finally:
+        await control.shutdown()

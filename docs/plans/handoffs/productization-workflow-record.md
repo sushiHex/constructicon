@@ -674,8 +674,7 @@ diagnostics or public completion evidence.
 
 ### Proofs and limits
 
-Five preparation cases and five existing input cases passed, with a focused
-terminal/sibling delta check after the final assertion. They exercise a target
+Six preparation cases and five existing input cases passed. They exercise a target
 repository without controller objects, exact separate-source validation, a
 real V2 module-only edit, byte-equivalent packet files, isolated CLI preparation,
 stable sibling progress and accepting/refusing source/request/output cases.
@@ -719,3 +718,16 @@ Unexpected dispatch, reporting or cleanup failures still do not imply no effect.
 The accepting uncertainty path and typed-conflict path receive focused delta
 checks; unchanged whole-chain refusal proofs are retained rather than broadly
 rerun. Independent narrow re-review cleared this correction.
+
+Final source inspection also exposed a pre-existing producer/consumer
+compatibility gap. A newline-containing path is a legal retained batch/Git
+selection, but the existing native collector rejects it. Real Git objects
+reproduced successful packet publication followed by `REPLY_PACKET_MISMATCH`;
+no platform filename or native window was needed. The producer now validates
+its computed three byte strings through the actual collector before claiming
+the output directory, then writes those same bytes. It duplicates no path
+regex and changes no valid packet bytes, collector, core or native framing.
+A direct-producer and real parked-batch regression both refuse before output
+publication. Existing input/preparation compatibility cases and a narrow
+independent delta review cover this fix; final-head CI is rerun after the code
+delta rather than treating the superseded head as final evidence.

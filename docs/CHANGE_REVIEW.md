@@ -319,6 +319,10 @@ file, exact request and packet digests. The preparer prints its raw
 answered or terminal requests, changed/unreadable sources and occupied output.
 Sibling progress does not invalidate the immutable selection. This binding is
 prepared data, not a permit, approval or new source of authority.
+The computed consumer packet must pass the existing collector's validator
+before its output directory is claimed. Batch-valid paths containing control
+characters, for example, cannot become unusable native packets or defer that
+refusal until after a model window.
 
 Native execution remains the existing separately selected one-request route,
 with its own dedicated journal, permit, custody and cleanup. The bridge does
