@@ -115,70 +115,38 @@ source blob is checked before application state is created. Source code is
 never executed or placed in graph envelopes; the graph receives bounded facts
 and GitRefs. No model, provider or VM is called.
 
-The following Python walkthrough creates a two-file local Git sample in a fresh
-temporary directory and keeps its state for inspection. Run it from the same
-checkout environment in Bash/Git Bash; each entry call is a fresh process:
+Run the portable Python walkthrough from the checkout environment:
 
-```bash
-PYTHONIOENCODING=utf-8 uv run --no-active python - <<'PY'
-import json
-import os
-import subprocess
-import sys
-import tempfile
-from pathlib import Path
-
-from examples.change_review import git
-
-workspace = Path(tempfile.mkdtemp(prefix="constructicon-review-batch-"))
-repository = workspace / "source"
-state = workspace / "state"
-repository.mkdir()
-git(repository, "init", "--quiet")
-commits = []
-versions = [
-    {"alpha.py": "def alpha():\n    return 1\n",
-     "beta.py": "def beta():\n    return 2\n"},
-    {"alpha.py": "def alpha():\n    return 3\n\ndef extra():\n    return 4\n",
-     "beta.py": "def beta():\n    return 5\n"},
-]
-for files in versions:
-    for name, source in files.items():
-        (repository / name).write_bytes(source.encode("utf-8"))
-    git(repository, "add", "--", "alpha.py", "beta.py")
-    git(repository, "-c", "user.name=Example", "-c", "user.email=example@example.invalid",
-        "commit", "--quiet", "-m", "batch sample")
-    commits.append(git(repository, "rev-parse", "HEAD").decode("ascii").strip())
-
-def entry(*arguments):
-    child = subprocess.run(
-        [sys.executable, "-m", "examples.change_review_batch", "--state", str(state),
-         *arguments], stdin=subprocess.DEVNULL, capture_output=True,
-        env={**os.environ, "PYTHONIOENCODING": "utf-8"}, timeout=45, check=True,
-    )
-    return json.loads(child.stdout)
-
-submit = ("submit", "--repository", str(repository), "--before-commit", commits[0],
-          "--after-commit", commits[1], "--path", "alpha.py", "--path", "beta.py",
-          "--key", "walkthrough-batch-1")
-batch = entry(*submit)
-run_id = batch["run_id"]
-assert batch["result"]["status"] == "parked"
-for index, file in enumerate(batch["files"]):
-    entry("reply", "--run-id", run_id, "--file-id", file["file_id"],
-          "--advice", "Scripted operator example: inspect the changed behavior and add tests.",
-          "--key", f"walkthrough-advice-{index}")
-finished = entry("status", "--run-id", run_id)
-replayed = entry(*submit)
-assert finished["result"]["status"] == "succeeded"
-assert replayed["run_id"] == run_id and replayed["submission"]["command"]["replayed"]
-print(json.dumps({"state_directory": str(state), "run_id": run_id,
-                  "status": finished["result"]["status"],
-                  "files": [{"path": f["path"], "status": f["status"]}
-                            for f in finished["files"]],
-                  "metering": finished["result"]["metering"]}, indent=2))
-PY
+```text
+uv run --no-active python -m examples.change_review_walkthrough
 ```
+
+It retains a new temporary workspace containing two real commits, a two-file
+review and its journal. Every submit, reply and status call is a fresh process.
+It answers the second file first, shows partial completion, completes the first
+file, and demonstrates same-key replay. Advice is explicitly scripted operator
+text; this walkthrough calls no model and measures no native usage or price.
+It prints readable reports and the retained workspace for later inspection.
+
+Use `--workspace <new-directory>` to select the location. The directory must
+not exist; an occupied path is refused rather than reused or overwritten.
+The printed command arguments are escaped data, suitable for a Python
+`subprocess.run` argument list, rather than shell text to paste blindly.
+
+For ordinary batch commands, put `--format text` before the subcommand to
+select the readable view. The default remains JSON:
+
+```text
+--state <state-directory> --format text status --run-id <returned-run-id>
+```
+
+The text view renders the same already-observed response. It performs no
+additional Git or journal reads and starts no workers. It shows each file
+identity and status, the retained added/removed/changed names and counts,
+syntax/comparison limits and opaque advice marked untrusted. Static facts do
+not establish runtime behavior, useful coverage, or correctness of an advice
+claim. A successful workflow means the advice was recorded, not that the code
+is correct or approved for merge.
 
 For an existing repository, use the same module with these argument shapes:
 
@@ -216,11 +184,37 @@ its original key to resume through the existing recovery law.
 batch metering and accounting cut. Per-file usage is explicitly unknown; the
 batch total is never multiplied or divided among files. Scripted advice creates
 no native observations, so unmeasured usage is not a zero-cost claim.
+The readable view places root metering once, separately from file results. It
+retains the event cut, coverage, attempt count and each source's known token
+subtotals and observation counts. Missing observations remain unknown; tokens
+are not prices or backend-request counts. Estimates, confirmed charges and
+per-file attribution remain explicitly unknown. The view adds no ledger or
+price calculation.
 Responses are capped at 256 KiB including their final LF. Large per-file payloads
 are explicitly omitted with `partial`, `limitations` and per-file `omitted`
 markers while detail references remain; the root result is preserved. Metadata
 that cannot fit refuses by name. Detail reads are bounded at 4 MiB. These are
 application projection bounds, not changes to the kernel's contracts.
+
+The text view has its own explicit omission notices within the same 256 KiB
+bound. Individual metadata values have a 4 KiB rendering budget; each optional
+file-details block has 12 KiB. An oversized value or block is replaced by a
+named omission rather than a shortened claim. File identities/statuses,
+partial markers and root metering remain
+visible when optional facts or advice do not fit. Terminal control characters
+and other non-ASCII data are escaped. Use JSON and retained detail references
+for complete machine-readable data; text formatting does not change the saved
+response or grant authority.
+
+The separate native framing comparison in #459 observed concrete scenarios in
+three of three cases versus zero of three before, but truthfulness passed in
+only two of three versus three of three before. One reply grouped an added
+function into an unsupported unchanged-signature claim. That stopped the
+investigation without a positive batch-quality conclusion. The existing framing
+and opaque advice contract were retained; no further tuning or semantic advice
+checker is part of this workflow. Displaying structural facts beside advice
+does not establish that the advice agrees with those facts. These small,
+stochastic observations do not establish generalized model quality.
 
 The local state uses the existing journal only. Keep the checkout available for
 unfinished-run recovery. There is no batch scheduler, sidecar ledger, new

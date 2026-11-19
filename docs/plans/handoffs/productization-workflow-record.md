@@ -541,3 +541,86 @@ CI receipts belong to the delivery PR. No schema, identity, actor, cursor,
 audit predicate, installed source, accepted plan, native attempt or production
 enablement changed. Native advice truthfulness remains the separate limitation
 established by #459; these timing results do not improve that verdict.
+
+## Readable batch workflow and portable walkthrough — #469
+
+The batch checkout entry now offers `--format text` before the subcommand;
+default output remains the existing canonical JSON. Both formats use the same
+single execution/observation result and exit-status law. The pure text view
+opens no journal, reads no Git object, starts no worker and performs no effect.
+It adds no provider, scheduler, ledger, authority or public core contract.
+
+The report identifies the root and selected commits, every file identity and
+status, retained V1 AST facts, analysis provenance, failures and opaque advice
+marked untrusted. V1 provides public-name comparison, counts, parser failures
+and truncation notices; it has no V2 definition-parts or module-change facts.
+The view does not recompute or invent them. A successful workflow means advice
+was recorded, not that code is correct, tested or approved for merge. The known
+native framing trade-off from #459 is documented without reopening its stopped
+investigation or claiming that nearby facts mechanically verify advice.
+
+Root metering appears once at its own retained cut. Source-scoped known token
+subtotals, intent/observation categories and coverage retain their producer
+meaning. Unknown prices, estimates, charges, backend requests and per-file
+attribution remain unknown; empty observations are not zero cost. The report
+neither sums unlike source scopes nor allocates a root total among files.
+
+Terminal data is JSON-escaped, including controls, bidi and non-ASCII values.
+The final report is bounded to 256 KiB including LF, metadata values to 4 KiB,
+and each optional file-details block to 12 KiB. Omissions have named notices;
+root/file identities and statuses, partial markers, metering and actionable
+existing recovery guidance precede optional payloads. Retained detail references
+remain available when payloads are omitted. Oversized metadata that still cannot
+fit refuses explicitly. No payload is silently shortened into a complete claim.
+
+The portable `examples.change_review_walkthrough` creates an exclusive new
+workspace, two real commits and a two-file durable review. It prints escaped
+paths before child execution and runs the existing submit/reply/status commands
+in fresh processes with binary UTF-8 transport. The second member is answered
+first, partial completion remains visible, the later answer finishes the root,
+and same-key submit/reply replay retains one RunId and root result/metering.
+Advice is explicitly scripted operator data. The workspace is retained on
+success or failure; occupied directories/files are refused. Child timeouts allow
+the existing 180-second settlement budget plus 120 seconds for synchronous
+projection/shutdown, rather than the old documentation's insufficient 45 seconds.
+Printed command arguments are data for a Python subprocess, not shell source.
+
+### Evidence and limits
+
+Nineteen focused cases pass against real batch producers and real journal/public
+metering projections, including distinct observation sources, partial axes,
+observed zero tokens and unknown subtotals. Default JSON bytes, failed/cancelled
+and timed-out exit codes, one execute call, no response mutation, parser limits,
+opaque incorrect advice and terminal-control/bidi escaping are covered. Legal
+4,096-byte astral advice binds the 12 KiB optional-block bound. The final report
+bound and oversized-metadata refusal are exercised at inputs where they bind;
+identities, partial markers, usage and retained references survive omission.
+
+Three end-to-end cases pass through the actual walkthrough entry and fresh
+JSON/text status commands. The two real source commits, exact blob hashes,
+file/reply associations and scripted advice are checked independently. Human
+fact names/counts and metering fields match retained JSON, as does the complete
+pure-rendered text. One run, event history and root V3 result/metering remain
+unchanged by the status views and replays. Existing workspace directories and
+files are preserved on refusal. The walkthrough's ordinary console line
+endings are interpreted as text; batch JSON/text protocol output is compared
+as its actual binary UTF-8 bytes.
+
+One offline format check used the prior completed sixteen-file response, not a
+new run or journal query. Its 60,247 JSON bytes (SHA-256
+`bfa9ffeef0298de8e014e5cf37ab4556b6822ccea1dc052e287f2fbcba989f29`)
+produce 16,714 report bytes, all sixteen file identities and one root metering
+section, with `report_partial: false`. The input file and response remained
+unchanged. This is selected readable content, not a replacement lossless
+serialization; complete protocol metadata remains in JSON/detail references.
+
+The verified source blobs are the batch CLI at
+`ebc729b4d00a274e21d3444f138d5b8491b07deb`, renderer at
+`ac9596587dd276e76178b79c9620df15b7b2c8c2` and walkthrough at
+`a06a471f8a1a383e78a3e35eea445381f4508647`. Unit and end-to-end test blobs are
+`e2f977da5eea2354dfe20eabd9e4ccedc4228361` and
+`24b908d7c5c562e3f573d68165d15da77353b5b8`. Explicit Ruff checks passed for all
+five files. Independent boundary review and exact-head full CI receipts belong
+to the delivery PR; the full local suite was not duplicated. No core source,
+identity/schema, accepted ADR/plan, installed controller, credential/account,
+VM, qualification or vendor/model execution changed.
