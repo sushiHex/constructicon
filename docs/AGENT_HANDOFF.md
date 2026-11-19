@@ -36,6 +36,13 @@ can precede root settlement. Reply now joins root settlement before shutdown.
 The accepting sixteen-file probe also disproved the inherited single-file
 15-second wait assumption; healthy progress had no node failures. These were
 application observation defects, not evidence for changing durable kernel law.
+Completing the maximum-size batch then exposed a pre-existing host starvation
+case: two answered requests at one parked fence could make the pump reject a
+different cause yet keep waking itself without yielding to its selected worker.
+A bounded fake-first regression reproduced eight scans with zero worker starts.
+One cooperative yield between pump rounds fixes the class while preserving the
+first-cause and event-fence laws. The existing reply facts remain recoverable;
+no command replay or second scheduler is needed.
 The [workflow record](plans/handoffs/productization-workflow-record.md#durable-explicit-file-batches--463)
 records the final observation policy and measured acceptance limits. Native
 review quality, per-file native metering and production enablement remain

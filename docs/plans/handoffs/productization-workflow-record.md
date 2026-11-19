@@ -287,6 +287,34 @@ Maximum-size lifecycle timing and final-head CI receipts belong in the delivery
 PR; these measurements are application observations, not a kernel performance
 guarantee.
 
+The actual maximum-size submit returned exit 0 with all sixteen inspections
+completed and all sixteen advisor requests parked, a 37,640-byte response and
+309.1 seconds of CLI wall time. The first fresh-process reply retained its
+advice and returned the explicit timeout response after 416.6 seconds of CLI
+work. Remaining replies were recorded through one public control-plane process
+to avoid repeating the same expensive restart proof fifteen times.
+
+That accepting path exposed a pre-existing `RunHost` starvation defect. All
+fifteen remaining requests positively had canonical replies; the latest parked
+wait and current journal event fence both equalled 148, with no owner or lease.
+The explicit reply cause differed from the scan's first answered cause. At the
+same fence, `launch()` correctly rejects a different cause, but its wake flag
+could make the pump repeat synchronous scans without yielding to an already
+created worker. Missing replies, a newer event fence and a held lease were
+independently ruled out. Owning-process pump health was not directly observed;
+the source premise was then reproduced with the existing host test doubles.
+
+The bounded regression recorded eight consecutive scans with zero attempts or
+worker starts on old source, then failed an assertion after a synchronous scan
+guard released the loop. A mere async timeout cannot bound a non-yielding loop.
+The minimal fix adds one cooperative yield between pump rounds. It changes no
+cause selection, event fence, command, authority or graph scheduling law, and
+all 24 affected host tests pass. Independent review covers this exact delta;
+the retained sixteen-file run supplies the final real-journal recovery proof.
+The earlier head's full CI passed but does not qualify the later host change;
+new final-head CI receipts belong in the delivery PR. Projection and restart
+latency are separately tracked in #465, without a cache or validation bypass.
+
 This delivery is credential-free operator advice, not native model review or
 evidence that generated advice improves coverage. It changes no VM, account,
 credential, controller, qualification, accepted plan, production provider or

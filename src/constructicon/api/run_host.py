@@ -299,6 +299,10 @@ class RunHost:
             if self._closed:
                 return
             await self._wait_for_work(next_expiry)
+            # A superseded launch can keep the wake flag set, making the wait
+            # return synchronously. Give already-created workers and their
+            # teardown a turn before scanning the same durable fence again.
+            await asyncio.sleep(0)
 
     def _scan_committed_resumes(self) -> datetime | None:
         store = self._control_store
