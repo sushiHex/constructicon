@@ -16,6 +16,33 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## One durable review run for an explicit file batch — #463
+
+The new `examples.change_review_batch` entry composes the existing single-file
+review graph for one to sixteen committed Python paths. All source preflight
+finishes before creating state. Stable repository/path identities address each
+file; one start key binds the complete graph and inputs. Separate submit,
+status and reply processes reuse the existing command journal and fixed local
+actor. Status reconstructs membership from sealed public inputs and manifest,
+then uses canonical request identities; it starts no recovery workers.
+
+The root V3 result and metering projection remain unchanged and appear once.
+Per-file usage is explicitly unknown. Partial payloads are marked rather than
+silently truncated, and unfinished children of a cancelled or failed root are
+reported as not completed. No source executes and no model is called.
+
+Fresh-process tests exposed a final-reply shutdown race: a child checkpoint
+can precede root settlement. Reply now joins root settlement before shutdown.
+The accepting sixteen-file probe also disproved the inherited single-file
+15-second wait assumption; healthy progress had no node failures. These were
+application observation defects, not evidence for changing durable kernel law.
+The [workflow record](plans/handoffs/productization-workflow-record.md#durable-explicit-file-batches--463)
+records the final observation policy and measured acceptance limits. Native
+review quality, per-file native metering and production enablement remain
+outside this delivery.
+
+---
+
 ## Repeatable offline predecessor input and batch metering — #461
 
 The existing READ entry now exposes `prepare-input`. It derives four

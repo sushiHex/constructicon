@@ -165,6 +165,8 @@ For a runnable workflow that compares committed Python changes, parks for
 operator advice and completes after a process restart, follow the
 [durable change-review example](docs/CHANGE_REVIEW.md). It needs no model
 login and reports the existing metering fields without inventing usage or cost.
+The same guide includes a [bounded multi-file workflow](docs/CHANGE_REVIEW.md#review-a-bounded-file-batch)
+with one durable batch run, per-file replies and read-only status across restarts.
 
 ### Run a small workflow
 
