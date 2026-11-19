@@ -6,10 +6,15 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TypeVar, cast
+from threading import get_ident
+from typing import TYPE_CHECKING, TypeVar, cast
+
+if TYPE_CHECKING:
+    from constructicon.substrate.journal._sqlite_runs import ValidatedRunWorld
 
 from pydantic import BaseModel
 
@@ -119,6 +124,37 @@ _ModelT = TypeVar("_ModelT", bound=BaseModel)
 _UNIX_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
+@dataclass
+class _ReadSnapshotProofs:
+    """One most-recent successful world proof owned by a synchronous read view."""
+
+    connection: sqlite3.Connection
+    owner_thread_id: int
+    initial_total_changes: int
+    worlds: dict[tuple[object, ...], ValidatedRunWorld] = field(default_factory=dict)
+    active: bool = True
+    disabled: bool = False
+
+
+_READ_SNAPSHOT_PROOFS: ContextVar[_ReadSnapshotProofs | None] = ContextVar(
+    "constructicon_read_snapshot_proofs", default=None,
+)
+
+
+def _read_snapshot_proofs(connection: sqlite3.Connection) -> _ReadSnapshotProofs | None:
+    proofs = _READ_SNAPSHOT_PROOFS.get()
+    if (proofs is None or not proofs.active or proofs.disabled
+            or proofs.connection is not connection or proofs.owner_thread_id != get_ident()):
+        return None
+    # Check the thread before touching the connection: a copied Context must
+    # never let a memo hit bypass SQLite's own cross-thread restriction.
+    if not connection.in_transaction or connection.total_changes != proofs.initial_total_changes:
+        proofs.disabled = True
+        proofs.worlds.clear()
+        return None
+    return proofs
+
+
 @contextmanager
 def read_snapshot(connection: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     """Hold one consistent view of the store across a multi-statement read.
@@ -138,12 +174,20 @@ def read_snapshot(connection: sqlite3.Connection) -> Iterator[sqlite3.Connection
 
     A caller already inside a write transaction holds a snapshot by definition
     and must not open a second one.
+
+    This synchronous scope owns BEGIN and rollback. Consumers must not commit,
+    restart the transaction, or retain its proof context beyond this scope.
     """
 
     connection.execute("BEGIN")
+    proofs = _ReadSnapshotProofs(connection, get_ident(), connection.total_changes)
+    token = _READ_SNAPSHOT_PROOFS.set(proofs)
     try:
         yield connection
     finally:
+        proofs.active = False
+        proofs.worlds.clear()
+        _READ_SNAPSHOT_PROOFS.reset(token)
         connection.rollback()
 
 

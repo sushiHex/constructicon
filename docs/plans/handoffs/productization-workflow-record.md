@@ -440,3 +440,104 @@ Independent review and exact-head full CI receipts are recorded in the delivery
 PR. Tests use durable-read bounds rather than flaky wall-time assertions. This
 wave makes no VM, model/vendor, account/credential, installation, qualification
 or accepted-plan change.
+
+## Owned snapshot proof reuse — #467
+
+### Scope and evidence-led design
+
+This bounded follow-up uses #465's retained completed sixteen-file journal and
+existing profile. It does not repeat the full expensive profile or a native
+attempt. The profile attributes most cold-opening work to channel-fact,
+effect and attestation inventory paths repeatedly proving the same immutable
+run world. The complete opening audit proves that one world 212 times in the
+retained fixture. Checkpoint reads were comparatively cheap (0.766 profiled
+seconds), so no checkpoint batching or materialization rewrite was introduced.
+Profiler cumulative times overlap and are not unprofiled latency measurements.
+
+`read_snapshot` now owns one most-recent successful world proof from BEGIN to
+rollback. The scope requires the exact connection and owning thread, an active
+transaction and unchanged connection-local write count. Local DML disables
+reuse permanently for that view. Every exit deactivates and clears it before
+rollback, including exception exits and retained copies of a closed Context.
+The synchronous owner permits reads only and forbids consumers from changing
+the schema, committing or restarting its transaction. The implementation does
+not claim to detect arbitrary violations of that private ownership contract.
+All three existing consumers respect it.
+
+The key contains the exact seven fields sealed by `run_world_fact_hash`.
+Successful immutable manifest/input/origin/creation-plan proofs alone are
+reused. Row-specific provenance, lifecycle, liveness and actor/governing-request
+authorization remain outside the memo. Defensive copies protect nested mutable
+models on publication and on hits. Retaining only the most recent success
+bounds memory during large multi-run audits. Failures publish nothing; writes
+and unowned transactions follow the original full-proof path. Mandatory opening
+inventories still visit and validate every required fact and relationship.
+
+The batch reader now requests the existing maximum detail chunk size instead
+of 16,000 bytes. Its cumulative byte bound and exact JSON reconstruction remain
+unchanged. A producer-backed 72,225-byte UTF-8 event required five chunks on the
+baseline and two on the candidate, with identical reconstructed bytes, digest,
+cursor cuts and declared total.
+
+### Snapshot and corruption boundaries
+
+A public command-backed creation producer and a legacy producer exercise
+successful world reuse and actual eviction with two worlds. Repeated A,A,B,B
+projections perform two complete world proofs; A,B,A performs three. Mutating
+returned nested inputs, manifests or creation plans cannot poison later hits.
+Changing a dependent manifest or creation command with all seven key fields
+unchanged causes fresh refusal after the local write; restoring bytes does not
+re-enable reuse within that view. Failed proofs are not memoized. Fresh public
+reads also refuse dependent corruption after a prior successful read.
+
+A real writer commits a terminal transition while an established WAL read
+snapshot remains open. An independent fresh connection witnesses the exact
+event and its positive durable seal before the reader is released. The old
+view remains coherent and the next view on the same connection observes the
+new transition with a fresh proof. Nested different connections, exception
+exit, a copied Context on another thread, write transactions and closed-context
+replay cannot share the owning proof. Opening still refuses a corrupted
+non-world event after successful world validation.
+
+The twelve new snapshot cases passed, together with the producer-backed detail
+case. A focused selection of 129 existing cases passed, including the public
+projection/opening disposal-damage matrix, resealed relationship contradictions,
+two accounting interleavings, creation/replay, world mutation guards and mutation
+inventory target/collection checks. Ruff and strict mypy passed for the changed
+substrate files; Ruff passed for the example and new tests. Full local verification
+was not duplicated; final-head broad verification belongs to CI.
+
+### Observed result and limits
+
+One unprofiled fresh terminal status completed in 56.442 seconds, down from
+153.787 seconds on the preceding candidate: 63% less elapsed time. This meets
+the 60-second working target on this retained fixture; it is neither a latency
+SLA nor a wall-clock CI assertion. All 60,247 stdout bytes matched SHA-256
+`bfa9ffeef0298de8e014e5cf37ab4556b6822ccea1dc052e287f2fbcba989f29`.
+Every logical table was unchanged, including 212 events, 19 commands and all
+V3/accounting/metering cuts at 212. The original retained main file was unchanged.
+
+| Unprofiled phase | Before, seconds | After, seconds |
+| --- | ---: | ---: |
+| Cold assembly and complete opening audit | 56.347 | 9.081 |
+| Detail reads | 41.136 | 18.365 |
+| Addressed channel summaries | 36.826 | 16.910 |
+| Event pages | 5.341 | 2.983 |
+
+The complete opening audit invoked the original heavy world-proof body once,
+instead of its previously attributed 212 same-world validations. The whole
+status invoked that body 133 times across its distinct read views; reuse did
+not become session-wide. Detail reads fell from 34 to 33 because the retained
+22,758-byte result now fits one permitted chunk. This comparison used the same
+retained logical snapshot, not another reconstructed run or a new profile.
+
+The measured source blobs were `_sqlite_base.py` at
+`bda2697e150fd49a19ce8f338bf49322696a59b9`, `_sqlite_runs.py` at
+`6c6e31aa6b2f769d40daf96881780fc5b4d24876`, and the batch example at
+`422a364a3b684c765fe74725e877d68f8cf2d5db`. The snapshot test blob was
+`a1575acaefeb25b7138824dd379f7f746b8fd0e4`; the detail test blob was
+`a8bca86a36e79fc9e939baa845a283d210639362`. Independent review and exact-head
+CI receipts belong to the delivery PR. No schema, identity, actor, cursor,
+audit predicate, installed source, accepted plan, native attempt or production
+enablement changed. Native advice truthfulness remains the separate limitation
+established by #459; these timing results do not improve that verdict.

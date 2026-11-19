@@ -17,6 +17,7 @@ from typing import Any
 
 from constructicon.api import Constructicon
 from constructicon.api.control import ControlPlane
+from constructicon.api.detail import MAX_DETAIL_BYTES as MAX_DETAIL_CHUNK_BYTES
 from constructicon.core.address import ExecutionPath, RunId
 from constructicon.core.channel import ChannelMessage, reply_message_id, request_message_id
 from constructicon.core.control import (
@@ -134,7 +135,7 @@ def read_detail(control: ControlPlane, reference: DetailRef) -> Any:
                 OPERATOR,
                 reference,
                 cursor=cursor,
-                max_bytes=16_000,
+                max_bytes=MAX_DETAIL_CHUNK_BYTES,
             )
         )
         if chunk.total_bytes > MAX_DETAIL_BYTES:

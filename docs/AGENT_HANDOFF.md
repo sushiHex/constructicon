@@ -16,6 +16,33 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Immutable world proofs belong to one owned read view — #467
+
+The synchronous SQLite read owner now retains only its most recent successful
+immutable run-world proof. Reuse is connection-, thread- and transaction-scoped;
+connection-local DML permanently disables it for that view, and every exit
+clears it before rollback. Defensive copies prevent callers from changing the
+next result through nested manifest, input or creation-plan mappings. Complete
+opening audits, row-specific provenance and actor/governing-request checks
+remain mandatory. Write and unowned transactions prove each world normally.
+
+A concurrent commit does not invalidate an already established WAL snapshot.
+Tests positively witness the new committed event and seal from an independent
+connection while the old view remains coherent, then prove that the next view
+sees the transition. Replaying a closed Context cannot revive its proof. Fresh
+reads still reject dependent corruption even when all seven run-world fields
+are unchanged. Retaining one world, rather than every world encountered in an
+opening audit, bounds memory without losing the measured same-run locality.
+
+Batch detail reads also request the existing maximum chunk size. A real
+72,225-byte UTF-8 event reconstructs exactly in two chunks instead of five;
+the cumulative byte bound is unchanged. The
+[workflow record](plans/handoffs/productization-workflow-record.md#owned-snapshot-proof-reuse--467)
+records the retained-workload comparison and remaining limits. These offline
+changes make no native availability, advice-quality or production claim.
+
+---
+
 ## Public projection reads reuse validated owner facts — #465
 
 Event pages mint their detail references from the complete sealed events they
