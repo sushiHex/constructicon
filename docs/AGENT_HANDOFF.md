@@ -16,6 +16,37 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Readable batch output stays a view of machine facts — #469
+
+The batch checkout entry adds opt-in `--format text`; its default JSON and exit
+semantics remain unchanged. The pure renderer consumes the already-observed
+response once. It opens no journal, fetches no Git object and starts no worker.
+Normal output shows selected commits, all file identities/statuses, retained V1
+AST facts and untrusted advice. Detail references appear when needed for partial
+or omitted data. Neither a successful workflow nor nearby structural facts
+verify the advice or approve a merge.
+
+Root metering appears once at its own cut, preserving each source's known token
+subtotals, observation categories and coverage. Unknown prices, backend requests
+and per-file attribution stay unknown. There is no new ledger or provider.
+Escaped data cannot manufacture terminal control or report lines; field, block
+and whole-report budgets produce explicit omission markers. The retained
+sixteen-file JSON renders from 60,247 to 16,714 bytes without report omissions
+or changing its input response. This is a format observation, not a new latency
+or native-quality claim.
+
+A portable Python walkthrough replaces the shell-specific documentation sample.
+Its actual entry proves two real commits across fresh submit/reply/status
+processes, non-first-member completion, partial status, later completion and
+same-key replay with one RunId and unchanged root result/metering. Occupied
+workspace files/directories refuse without changes. Advice is explicitly
+scripted; all state is retained for inspection. The
+[workflow record](plans/handoffs/productization-workflow-record.md#readable-batch-workflow-and-portable-walkthrough--469)
+records the proof boundaries. #459's stopped quality investigation remains
+stopped; no native attempt, installation or production enablement follows.
+
+---
+
 ## Immutable world proofs belong to one owned read view — #467
 
 The synchronous SQLite read owner now retains only its most recent successful

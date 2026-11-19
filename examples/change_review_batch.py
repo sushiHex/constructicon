@@ -49,6 +49,7 @@ from examples.change_review import (
     register,
     review_graph,
 )
+from examples.change_review_batch_text import render_batch_text
 
 MAX_FILES = 16
 MAX_RESPONSE_BYTES = 256 * 1024
@@ -581,6 +582,7 @@ async def execute(args: argparse.Namespace) -> dict[str, Any]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", type=Path, required=True)
+    parser.add_argument("--format", choices=("json", "text"), default="json")
     commands = parser.add_subparsers(dest="command", required=True)
     submit = commands.add_parser(
         "submit", help="compare explicit committed files and park for advice"
@@ -600,10 +602,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     reply.add_argument("--advice", required=True)
     reply.add_argument("--key", required=True)
     try:
-        response = asyncio.run(execute(parser.parse_args(argv)))
+        args = parser.parse_args(argv)
+        response = asyncio.run(execute(args))
         # Write the protocol bytes directly: a Windows text wrapper may expand
         # LF to CRLF and violate the byte bound checked by bounded_response.
-        sys.stdout.buffer.write((canonical_json(response) + "\n").encode("utf-8"))
+        output = (
+            render_batch_text(response)
+            if args.format == "text"
+            else canonical_json(response) + "\n"
+        )
+        sys.stdout.buffer.write(output.encode("utf-8"))
         if response["result"]["status"] in {"failed", "cancelled"}:
             return 1
         return 2 if response.get("wait_status") == "timed_out" else 0
