@@ -270,10 +270,7 @@ class _ControlQueries:
                     if event.payload is not None
                     else None
                 ),
-                detail=self._details.required_reference(
-                    actor,
-                    DetailAddress.event(run_id, event.seq),
-                ),
+                detail=self._details.event_reference(event),
             )
             for event in visible
         )
@@ -497,7 +494,9 @@ class _ControlQueries:
         delivery = authorized_delivery(self._journal, actor, message_id)
         if isinstance(delivery, ControlRejected):
             return delivery
-        return self._channel_summary(actor, delivery)
+        return self._channel_summary(
+            actor, delivery, detail=self._details.channel_reference(delivery.message),
+        )
 
     def registry_versions(
         self,
@@ -780,6 +779,8 @@ class _ControlQueries:
         self,
         actor: AuthenticatedActor,
         delivery: ChannelDelivery,
+        *,
+        detail: DetailRef | None = None,
     ) -> ChannelMessageSummary:
         """One page row and one addressed read render through one law."""
 
@@ -798,7 +799,7 @@ class _ControlQueries:
             schema_hash=message.contract.schema_hash,
             created_at=message.envelope.created_at,
             acknowledged=delivery.acknowledged,
-            detail=self._details.required_reference(
+            detail=detail if detail is not None else self._details.required_reference(
                 actor,
                 DetailAddress.channel_message(message.message_id),
             ),
