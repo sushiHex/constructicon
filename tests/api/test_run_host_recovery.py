@@ -334,6 +334,65 @@ async def eventually(predicate: Callable[[], bool], message: str) -> None:
     raise AssertionError(message)
 
 
+async def test_distinct_answered_causes_at_one_fence_cannot_starve_the_selected_worker() -> None:
+    clock = AsyncClock()
+    run_id = RunId("run-two-answered-causes")
+    scan_facts: list[tuple[int, int]] = []
+    scan_guard = RuntimeError("bounded scan guard: worker never received an event-loop turn")
+
+    class BoundedJournal(FakeJournal):
+        def parked_waits(self, **kwargs: Any) -> list[ParkedWait]:
+            # A non-yielding pump also prevents asyncio timeouts from firing.
+            # Stop it synchronously after affirmative observations, so a
+            # regression fails an assertion rather than hanging the suite.
+            scan_facts.append((len(system.attempted), len(system.started)))
+            if len(scan_facts) >= 8 and not system.attempted:
+                raise scan_guard
+            return super().parked_waits(**kwargs)
+
+    journal = BoundedJournal([
+        record(str(run_id), clock, created_offset=0, status=RunStatus.PARKED),
+    ])
+    first_request, explicit_request = (digest("test-request", 1, n) for n in (1, 2))
+    first_reply, explicit_reply = (digest("test-reply", 1, n) for n in (1, 2))
+    journal.event_seqs[run_id] = 148
+    journal.parked[run_id] = (first_request, explicit_request)
+    journal.replies = {first_request: first_reply, explicit_request: explicit_reply}
+    system = FakeSystem(journal, clock)
+    host = host_for(system)
+    contexts: list[dict[str, Any]] = []
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: contexts.append(context))
+    selected_cause = AttemptCause(kind="channel_reply", id=str(explicit_reply))
+    try:
+        # The explicit caller chose the second reply, whereas the durable
+        # scan chooses the first. The same-fence first-cause law must remain.
+        assert host.launch(
+            run_id,
+            expected_event_seq=148,
+            allowed_statuses=frozenset({RunStatus.PARKED}),
+            cause=selected_cause,
+        ) == "queued"
+        await eventually(
+            lambda: bool(system.attempted) or host.pump_failure is not None,
+            "neither the selected worker nor the bounded scan guard ran",
+        )
+        assert host.pump_failure is None, {
+            "scan_facts_before_guard": scan_facts,
+            "pump_failure": str(host.pump_failure),
+        }
+        assert scan_facts and scan_facts[0] == (0, 0)
+        assert system.attempted == system.started == [run_id]
+        assert system.causes[run_id] == selected_cause
+        assert journal.records[run_id].status is RunStatus.SUCCEEDED
+        assert system.max_running == 1
+        assert contexts == []
+    finally:
+        await host.shutdown()
+        loop.set_exception_handler(previous_handler)
+
+
 @pytest.mark.parametrize("status", [RunStatus.FAILED, RunStatus.PARKED])
 async def test_capacity_full_explicit_resume_is_retained_without_waiter_tasks(
     status: RunStatus,

@@ -106,6 +106,126 @@ process death after reply-command completion, fresh-process recovery and replay,
 no source execution, conflicting-key refusal and input bounds. This is a
 checkout example, not an installed CLI command or production executor route.
 
+## Review a bounded file batch
+
+`python -m examples.change_review_batch` reviews one to sixteen explicitly
+selected files at the same two full commit SHAs. It composes the existing
+single-file review graphs inside one root Graph and one durable RunId. Every
+source blob is checked before application state is created. Source code is
+never executed or placed in graph envelopes; the graph receives bounded facts
+and GitRefs. No model, provider or VM is called.
+
+The following Python walkthrough creates a two-file local Git sample in a fresh
+temporary directory and keeps its state for inspection. Run it from the same
+checkout environment in Bash/Git Bash; each entry call is a fresh process:
+
+```bash
+PYTHONIOENCODING=utf-8 uv run --no-active python - <<'PY'
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+from examples.change_review import git
+
+workspace = Path(tempfile.mkdtemp(prefix="constructicon-review-batch-"))
+repository = workspace / "source"
+state = workspace / "state"
+repository.mkdir()
+git(repository, "init", "--quiet")
+commits = []
+versions = [
+    {"alpha.py": "def alpha():\n    return 1\n",
+     "beta.py": "def beta():\n    return 2\n"},
+    {"alpha.py": "def alpha():\n    return 3\n\ndef extra():\n    return 4\n",
+     "beta.py": "def beta():\n    return 5\n"},
+]
+for files in versions:
+    for name, source in files.items():
+        (repository / name).write_bytes(source.encode("utf-8"))
+    git(repository, "add", "--", "alpha.py", "beta.py")
+    git(repository, "-c", "user.name=Example", "-c", "user.email=example@example.invalid",
+        "commit", "--quiet", "-m", "batch sample")
+    commits.append(git(repository, "rev-parse", "HEAD").decode("ascii").strip())
+
+def entry(*arguments):
+    child = subprocess.run(
+        [sys.executable, "-m", "examples.change_review_batch", "--state", str(state),
+         *arguments], stdin=subprocess.DEVNULL, capture_output=True,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"}, timeout=45, check=True,
+    )
+    return json.loads(child.stdout)
+
+submit = ("submit", "--repository", str(repository), "--before-commit", commits[0],
+          "--after-commit", commits[1], "--path", "alpha.py", "--path", "beta.py",
+          "--key", "walkthrough-batch-1")
+batch = entry(*submit)
+run_id = batch["run_id"]
+assert batch["result"]["status"] == "parked"
+for index, file in enumerate(batch["files"]):
+    entry("reply", "--run-id", run_id, "--file-id", file["file_id"],
+          "--advice", "Scripted operator example: inspect the changed behavior and add tests.",
+          "--key", f"walkthrough-advice-{index}")
+finished = entry("status", "--run-id", run_id)
+replayed = entry(*submit)
+assert finished["result"]["status"] == "succeeded"
+assert replayed["run_id"] == run_id and replayed["submission"]["command"]["replayed"]
+print(json.dumps({"state_directory": str(state), "run_id": run_id,
+                  "status": finished["result"]["status"],
+                  "files": [{"path": f["path"], "status": f["status"]}
+                            for f in finished["files"]],
+                  "metering": finished["result"]["metering"]}, indent=2))
+PY
+```
+
+For an existing repository, use the same module with these argument shapes:
+
+```text
+--state <state-directory> submit --repository <repository> --before-commit <sha> --after-commit <sha> --path package/a.py --path package/b.py --key batch-1
+--state <state-directory> status --run-id <returned-run-id>
+--state <state-directory> reply --run-id <returned-run-id> --file-id <returned-file-id> --advice "Add a boundary test." --key answer-1
+```
+
+Paths must be distinct and satisfy the single-file source contract above. Their
+order is canonicalized: reordered identical submissions with the same key replay
+the same batch. A changed batch with that key refuses as a control-plane
+conflict. A file identity depends on repository and path, not its commits or
+position. Reply only to a file identity returned by that batch. Identical reply
+keys/payloads replay; changed advice under an existing key conflicts. The actor
+is fixed by the local transport, never supplied as an argument.
+
+Status reads retained inputs, the admitted manifest, events and canonical
+request/reply identities through public APIs. It starts no workers and performs
+no Git reads. A completed file's advice remains visible while another file is
+pending. Reply waits for its file and root to settle; shutdown does not invent
+cancellation. Interrupted commands recover through the existing control-plane
+command law when the corresponding mutation is retried. Submit and reply allow
+180 seconds for settlement polling, pausing up to one second between iterations
+and using the public run-state query rather than repeatedly rendering complete
+status.
+This is a polling budget, not a total command wall-time limit: synchronous
+projection and shutdown work may take longer. If the budget expires, exit code
+2 returns the retained RunId and submission/reply receipt with
+`wait_status: "timed_out"`, `partial: true` and a named limitation. It does not
+cancel or submit another run. Inspect status or retry the same mutation with
+its original key to resume through the existing recovery law.
+
+`result` retains the existing V3 producer projection unchanged, including its
+batch metering and accounting cut. Per-file usage is explicitly unknown; the
+batch total is never multiplied or divided among files. Scripted advice creates
+no native observations, so unmeasured usage is not a zero-cost claim.
+Responses are capped at 256 KiB including their final LF. Large per-file payloads
+are explicitly omitted with `partial`, `limitations` and per-file `omitted`
+markers while detail references remain; the root result is preserved. Metadata
+that cannot fit refuses by name. Detail reads are bounded at 4 MiB. These are
+application projection bounds, not changes to the kernel's contracts.
+
+The local state uses the existing journal only. Keep the checkout available for
+unfinished-run recovery. There is no batch scheduler, sidecar ledger, new
+primitive, native opt-in or quality/merge approval in this entry.
+
 ## Opt-in: model advice under an owner's permit
 
 The default commands above call no model, and nothing here changes them. The

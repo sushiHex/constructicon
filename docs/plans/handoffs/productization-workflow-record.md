@@ -210,3 +210,113 @@ The preparation census credits this concrete consumer only: historical
 OBSERVE/recovery/controller installation and other undemonstrated #308
 consumers remain open. No VM, vendor binary, account/credential operation,
 installation, live qualification, model call or production enablement occurred.
+
+## Durable explicit-file batches — #463
+
+### Composition and durable identity
+
+`examples.change_review_batch` accepts one to sixteen distinct canonical paths
+at exact before/after commits. Every committed blob passes the existing source
+boundary and analysis before the entry opens application state. The root Graph
+contains inline copies of the existing single-file graph with renamed boundary
+ports and exact existing component pins. It adds no primitive, scheduler,
+workflow representation, store or accounting API.
+
+A file identity binds canonical repository and path, independently of commits
+or batch position. A single caller start key binds the complete graph and
+inputs: reordered identical paths replay; a changed batch conflicts. Replies
+select retained member identities and delegate through `ControlPlane` as the
+fixed local actor. Public sealed inputs and manifest reconstruct membership
+even when a start command is prepared before `RunStarted`. Canonical channel
+identity functions address requests directly, without scanning inbox history.
+Request payloads must positively match the retained per-file input. Status
+starts no workers, performs no Git reads and never reconciles a command.
+
+### Truthful projection and acceptance
+
+The response preserves the producer's complete V3 result, including root
+metering and its accounting cut, exactly once. Per-file usage remains unknown;
+no division, multiplication, invented zero cost or price calculation occurs.
+Sealed preflight analysis is distinguished from completed output. A retained
+request alone means awaiting advice, not a positive parked checkpoint. Explicit
+child completion and failure survive a failed/cancelled root; other unfinished
+children become not completed. Advice from a completed sibling remains visible.
+
+The public response limit is 256 KiB including its final LF. Payload omission
+sets partial/limitation/per-file omission markers and preserves the root result;
+metadata that still exceeds the limit refuses. Public detail reads have a 4 MiB
+cumulative bound. Binary UTF-8 stdout avoids Windows CRLF expansion breaking
+the advertised byte bound.
+
+Focused tests exercise real Git and fresh CLI processes, reordered replay,
+changed-batch and reply conflicts, file/request association, source nonexecution,
+syntax-error facts, prepared-start recovery and three reply crash seams. Fault
+proofs distinguish the retained plan, domain mutation and completed command;
+status remains observational at each seam. Bounds bind in the fixtures, and a
+real CRLF-translating text wrapper exercises the output boundary. The documented
+two-file clean-checkout walkthrough also ran successfully, including final root
+success, replay and unknown monetary usage.
+
+The first implementation assumed a child checkpoint meant the root had settled.
+The final-reply accepting test disproved that assumption; shutdown could abandon
+a still-running root. The reply observer now joins root settlement. Existing
+parked-run cancellation semantics were preserved after a fixture incorrectly
+assumed parked cancellation was available; the actual cancellation test uses a
+fresh running run before its first park. Prepared-command completion is also
+distinguished from replay of an already committed response.
+
+The maximum-size probe exposed another application assumption: the single-file
+15-second wait did not support sixteen children. A continuation observed healthy
+progress through fourteen children at 180 seconds without a node failure.
+Repeated synchronous summary/detail rendering competed with the worker: a
+public summary query took about 3.45 seconds on that fixture, versus about
+0.49 seconds for the existing public run-state query. No kernel guard was
+weakened and no new caching/store layer was introduced.
+
+Settlement now polls the existing public run-state query with a one-second
+pause between iterations and one shared 180-second budget for submit and reply. Reply
+also requires its positive child checkpoint before accepting a parked root.
+The admitted manifest is loaded through the existing public system query once,
+bounded and checked against the public run summary's seals, rather than
+re-rendered for every detail page. The timeout response retains the exact root
+result and submission/reply receipt, marks partial/timed-out, and exits 2.
+Same-key recovery remains available; no cancellation, new run or automatic
+mutation retry is introduced. The polling budget is not a command wall-time
+guarantee because synchronous projection and shutdown have their own cost.
+Maximum-size lifecycle timing and final-head CI receipts belong in the delivery
+PR; these measurements are application observations, not a kernel performance
+guarantee.
+
+The actual maximum-size submit returned exit 0 with all sixteen inspections
+completed and all sixteen advisor requests parked, a 37,640-byte response and
+309.1 seconds of CLI wall time. The first fresh-process reply retained its
+advice and returned the explicit timeout response after 416.6 seconds of CLI
+work. Remaining replies were recorded through one public control-plane process
+to avoid repeating the same expensive restart proof fifteen times.
+
+That accepting path exposed a pre-existing `RunHost` starvation defect. All
+fifteen remaining requests positively had canonical replies; the latest parked
+wait and current journal event fence both equalled 148, with no owner or lease.
+The explicit reply cause differed from the scan's first answered cause. At the
+same fence, `launch()` correctly rejects a different cause, but its wake flag
+could make the pump repeat synchronous scans without yielding to an already
+created worker. Missing replies, a newer event fence and a held lease were
+independently ruled out. Owning-process pump health was not directly observed;
+the source premise was then reproduced with the existing host test doubles.
+
+The bounded regression recorded eight consecutive scans with zero attempts or
+worker starts on old source, then failed an assertion after a synchronous scan
+guard released the loop. A mere async timeout cannot bound a non-yielding loop.
+The minimal fix adds one cooperative yield between pump rounds. It changes no
+cause selection, event fence, command, authority or graph scheduling law, and
+all 24 affected host tests pass. Independent review covers this exact delta;
+the retained sixteen-file run supplies the final real-journal recovery proof.
+The earlier head's full CI passed but does not qualify the later host change;
+new final-head CI receipts belong in the delivery PR. Projection and restart
+latency are separately tracked in #465, without a cache or validation bypass.
+
+This delivery is credential-free operator advice, not native model review or
+evidence that generated advice improves coverage. It changes no VM, account,
+credential, controller, qualification, accepted plan, production provider or
+stable component pointer. Broader historical preparation remains in #308 and
+the paired native-review quality limit remains in #459.
