@@ -536,15 +536,15 @@ jobs:
           set -euo pipefail
           if [ ! -f "$RUNNER_TEMP/codex.tar.gz" ]; then
             curl --fail --location --retry 2 --output "$RUNNER_TEMP/codex.tar.gz" \
-              https://github.com/openai/codex/releases/download/rust-v0.160.1/codex-package-x86_64-unknown-linux-musl.tar.gz
+              https://github.com/openai/codex/releases/download/rust-v0.172.0/codex-package-x86_64-unknown-linux-musl.tar.gz
           fi
-          printf '%s  %s\n' 340801565906a7028f6baaa9ab6853addaef221f0016a1417a7c1ffdd96c21f0 "$RUNNER_TEMP/codex.tar.gz" | sha256sum --check --strict
+          printf '%s  %s\n' 63e3b00065ed7f62166d0522e17f663cb866a31d80d03e63365482ed34a1d991 "$RUNNER_TEMP/codex.tar.gz" | sha256sum --check --strict
           sudo install -d -m 0755 /var/lib/constructicon-m8-launch/native-codex
           sudo tar --no-same-owner -xzf "$RUNNER_TEMP/codex.tar.gz" -C /var/lib/constructicon-m8-launch/native-codex
           sudo chmod -R go-w /var/lib/constructicon-m8-launch/native-codex
           curl --fail --location --retry 2 --output "$RUNNER_TEMP/codex-models.json" \
-            https://raw.githubusercontent.com/openai/codex/d27764b82f7118f674371e6d6e76271d9d606edb/codex-rs/models-manager/models.json
-          printf '%s  %s\n' fd219bd9f061278275f528939f82f54d2eb97df4b25c23b022adbe48813d920b "$RUNNER_TEMP/codex-models.json" | sha256sum --check --strict
+            https://raw.githubusercontent.com/openai/codex/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/models-manager/models.json
+          printf '%s  %s\n' d50b6749506d97e5f334dbabcb666eb1689f423cf3e88cfabdcf3c536b873068 "$RUNNER_TEMP/codex-models.json" | sha256sum --check --strict
           sudo install -m 0444 "$RUNNER_TEMP/codex-models.json" /var/lib/constructicon-m8-launch/codex-models.json
       - name: Save pinned codex archive
         if: success() && steps.codex-cache.outputs.cache-hit != 'true'
