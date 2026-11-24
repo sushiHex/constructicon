@@ -97,6 +97,20 @@ def workflow(tmp_path: Path) -> Path:
     return path
 
 
+LANE = (
+    b'"""A lane."""\nPREPARE_FAMILY = "sol"\nPREPARE_MODEL = "gpt-6-sol"\n'
+    b'PREPARE_EFFORT = "medium"\nOTHER_MODEL = "gpt-6-sol"\n'
+    b'def local():\n    PREPARE_MODEL = "not the module\'s seal"\n'
+)
+
+
+@pytest.fixture
+def lane(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    path = tmp_path_factory.mktemp("lane") / "codex_lane.py"
+    path.write_bytes(LANE)
+    return path
+
+
 def test_the_greatest_published_stable_release_is_chosen() -> None:
     github = GitHub(
         [
@@ -136,9 +150,11 @@ def test_a_tag_peels_to_its_commit(target: dict, commit: str) -> None:
     assert bump.peel(target, GitHub([])) == commit
 
 
-def test_a_bump_rewrites_only_the_acquisition_step_to_the_verified_pin(workflow: Path) -> None:
+def test_a_bump_rewrites_only_the_acquisition_step_to_the_verified_pin(
+    workflow: Path, lane: Path
+) -> None:
     before = workflow.read_bytes()
-    report = bump.bump(None, workflow, GitHub([release("rust-v0.160.1")]), dry_run=False)
+    report = bump.bump(None, workflow, lane, GitHub([release("rust-v0.160.1")]), dry_run=False)
     after = workflow.read_bytes()
     pin = bump.artifacts.vendor_pin(after)
     assert pin["version"] == "0.160.1" and pin["catalog_commit"] == COMMIT
@@ -159,27 +175,44 @@ def test_a_bump_rewrites_only_the_acquisition_step_to_the_verified_pin(workflow:
     }
     assert report["re_observe"] == list(bump.RECORDED)
     assert sorted(workflow.parent.iterdir()) == [workflow]
+    # The seal moves to the new catalog's choice for its family, and nothing else does.
+    assert lane.read_bytes() == LANE.replace(
+        b'PREPARE_MODEL = "gpt-6-sol"\nPREPARE_EFFORT = "medium"\n',
+        b'PREPARE_MODEL = "gpt-6.1-sol"\nPREPARE_EFFORT = "low"\n',
+    )
+    assert report["sealed"] == {
+        "from": {"PREPARE_FAMILY": "sol", "PREPARE_MODEL": "gpt-6-sol",
+                 "PREPARE_EFFORT": "medium"},
+        "to": {"PREPARE_FAMILY": "sol", "PREPARE_MODEL": "gpt-6.1-sol", "PREPARE_EFFORT": "low"},
+    }  # fmt: skip
+    assert sorted(lane.parent.iterdir()) == [lane]
 
 
-def test_a_dry_run_writes_nothing(workflow: Path) -> None:
+def test_a_dry_run_writes_nothing(workflow: Path, lane: Path) -> None:
     before = workflow.read_bytes()
-    report = bump.bump(None, workflow, GitHub([release("rust-v0.160.1")]), dry_run=True)
-    assert report["changed"] and workflow.read_bytes() == before
+    report = bump.bump(None, workflow, lane, GitHub([release("rust-v0.160.1")]), dry_run=True)
+    assert report["changed"] and workflow.read_bytes() == before and lane.read_bytes() == LANE
+    assert report["sealed"]["to"]["PREPARE_MODEL"] == "gpt-6.1-sol"
 
 
-def test_line_endings_survive_a_bump(workflow: Path) -> None:
+def test_line_endings_survive_a_bump(workflow: Path, lane: Path) -> None:
     workflow.write_bytes(workflow.read_bytes().replace(b"\n", b"\r\n"))
-    bump.bump(None, workflow, GitHub([release("rust-v0.160.1")]), dry_run=False)
+    lane.write_bytes(LANE.replace(b"\n", b"\r\n"))
+    bump.bump(None, workflow, lane, GitHub([release("rust-v0.160.1")]), dry_run=False)
     data = workflow.read_bytes()
     assert b"\n" not in data.replace(b"\r\n", b"")
     assert bump.artifacts.vendor_pin(data.replace(b"\r\n", b"\n"))["version"] == "0.160.1"
+    assert lane.read_bytes() == LANE.replace(
+        b'PREPARE_MODEL = "gpt-6-sol"\nPREPARE_EFFORT = "medium"\n',
+        b'PREPARE_MODEL = "gpt-6.1-sol"\nPREPARE_EFFORT = "low"\n',
+    ).replace(b"\n", b"\r\n")
 
 
-def test_mixed_line_endings_refuse(workflow: Path) -> None:
+def test_mixed_line_endings_refuse(workflow: Path, lane: Path) -> None:
     workflow.write_bytes(workflow.read_bytes().replace(b"\n", b"\r\n", 1))
     before = workflow.read_bytes()
     with pytest.raises(ValueError, match="mixes line endings"):
-        bump.bump(None, workflow, GitHub([release("rust-v0.160.1")]), dry_run=False)
+        bump.bump(None, workflow, lane, GitHub([release("rust-v0.160.1")]), dry_run=False)
     assert workflow.read_bytes() == before
 
 
@@ -193,18 +226,18 @@ def test_mixed_line_endings_refuse(workflow: Path) -> None:
     ],
 )
 def test_a_downgrade_or_a_changed_pinned_version_refuses(
-    workflow: Path, found: list, requested: str | None, message: str
+    workflow: Path, lane: Path, found: list, requested: str | None, message: str
 ) -> None:
     before = workflow.read_bytes()
     with pytest.raises(ValueError, match=message):
-        bump.bump(requested, workflow, GitHub(found), dry_run=False)
-    assert workflow.read_bytes() == before
+        bump.bump(requested, workflow, lane, GitHub(found), dry_run=False)
+    assert workflow.read_bytes() == before and lane.read_bytes() == LANE
 
 
 def test_the_pinned_release_unchanged_is_a_no_op(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, lane: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(bump, "apply", lambda *_: pytest.fail("an unchanged pin was rewritten"))
+    monkeypatch.setattr(bump, "commit", lambda *_: pytest.fail("an unchanged pin was rewritten"))
     pin = {
         "codex_url": f"{DOWNLOAD}/rust-v0.153.4/{bump.ASSET}", "codex_sha256": DIGEST,
         "catalog_url": CATALOG_URL, "catalog_sha256": hashlib.sha256(CATALOG).hexdigest(),
@@ -212,16 +245,16 @@ def test_the_pinned_release_unchanged_is_a_no_op(
     workflow = tmp_path / "m8-containment.yml"
     workflow.write_bytes(workflow_with(bump.artifacts.render_vendor_step(pin)))
     before = workflow.read_bytes()
-    report = bump.bump(None, workflow, GitHub([release("rust-v0.153.4")]), dry_run=False)
+    report = bump.bump(None, workflow, lane, GitHub([release("rust-v0.153.4")]), dry_run=False)
     assert not report["changed"] and report["re_observe"] == []
-    assert workflow.read_bytes() == before
+    assert workflow.read_bytes() == before and lane.read_bytes() == LANE
 
 
-def test_a_current_pin_whose_catalog_moved_refuses(workflow: Path) -> None:
+def test_a_current_pin_whose_catalog_moved_refuses(workflow: Path, lane: Path) -> None:
     github = GitHub([release("rust-v0.160.1")])
     github.responses[PIN_A["catalog_url"]] = OLD_CATALOG + b" "
     with pytest.raises(ValueError, match="no longer matches its digest"):
-        bump.bump(None, workflow, github, dry_run=False)
+        bump.bump(None, workflow, lane, github, dry_run=False)
 
 
 @pytest.mark.parametrize(
@@ -234,7 +267,9 @@ def test_a_current_pin_whose_catalog_moved_refuses(workflow: Path) -> None:
         ("tree tag", "names a tree"),
     ],
 )
-def test_every_digest_and_the_peel_must_agree(workflow: Path, fault: str, message: str) -> None:
+def test_every_digest_and_the_peel_must_agree(
+    workflow: Path, lane: Path, fault: str, message: str
+) -> None:
     before = workflow.read_bytes()
     found = [release("rust-v0.160.1", digest="1" * 64 if fault == "github disagrees" else DIGEST)]
     sums = {
@@ -245,11 +280,13 @@ def test_every_digest_and_the_peel_must_agree(workflow: Path, fault: str, messag
     if fault == "bytes differ":
         github.responses[f"{DOWNLOAD}/rust-v0.160.1/{bump.ASSET}"] = b"tampered"
     with pytest.raises(ValueError, match=message):
-        bump.bump(None, workflow, github, dry_run=False)
+        bump.bump(None, workflow, lane, github, dry_run=False)
     assert workflow.read_bytes() == before
 
 
-def test_an_edit_made_while_the_bump_fetches_is_never_overwritten(workflow: Path) -> None:
+def test_an_edit_made_while_the_bump_fetches_is_never_overwritten(
+    workflow: Path, lane: Path
+) -> None:
     github = GitHub([release("rust-v0.160.1")])
 
     def editing(url: str, limit: int) -> bytes:
@@ -257,14 +294,69 @@ def test_an_edit_made_while_the_bump_fetches_is_never_overwritten(workflow: Path
             workflow.write_bytes(workflow.read_bytes() + b"# edited\n")
         return github(url, limit)
 
-    with pytest.raises(ValueError, match="changed during the bump"):
-        bump.bump(None, workflow, editing, dry_run=False)
+    with pytest.raises(ValueError, match=r"m8-containment\.yml changed during the bump"):
+        bump.bump(None, workflow, lane, editing, dry_run=False)
     assert workflow.read_bytes().endswith(b"# edited\n")
     assert bump.artifacts.vendor_pin(workflow.read_bytes())["version"] == "0.153.4"
     assert sorted(workflow.parent.iterdir()) == [workflow]
+    assert lane.read_bytes() == LANE and sorted(lane.parent.iterdir()) == [lane]
 
 
-def test_a_second_copy_of_the_step_outside_any_step_refuses(workflow: Path) -> None:
+def test_a_seal_edited_while_the_bump_fetches_leaves_both_files(
+    workflow: Path, lane: Path
+) -> None:
+    github = GitHub([release("rust-v0.160.1")])
+    before = workflow.read_bytes()
+
+    def editing(url: str, limit: int) -> bytes:
+        if url == PIN_A["catalog_url"]:
+            lane.write_bytes(LANE + b"# edited\n")
+        return github(url, limit)
+
+    with pytest.raises(ValueError, match=r"codex_lane\.py changed during the bump"):
+        bump.bump(None, workflow, lane, editing, dry_run=False)
+    assert workflow.read_bytes() == before and lane.read_bytes() == LANE + b"# edited\n"
+    assert sorted(workflow.parent.iterdir()) == [workflow]
+    assert sorted(lane.parent.iterdir()) == [lane]
+
+
+@pytest.mark.parametrize(
+    ("seal", "message"),
+    [
+        # An indented assignment is some function's local, never the module's seal.
+        (b'PREPARE_FAMILY = "sol"\nPREPARE_EFFORT = "medium"\n    PREPARE_MODEL = "local"\n',
+         "PREPARE_MODEL exactly once"),
+        (LANE + b'PREPARE_MODEL = "other"\n', "PREPARE_MODEL exactly once"),
+        # The catalog lists no terra model and gives luna no ranked effort.
+        (LANE.replace(b'"sol"', b'"terra"'), "lists no 'terra' model"),
+        (LANE.replace(b'"sol"', b'"luna"'), "no ranked lowest effort"),
+    ],
+)
+def test_a_seal_the_catalog_cannot_move_refuses_the_whole_bump(
+    workflow: Path, lane: Path, seal: bytes, message: str
+) -> None:
+    lane.write_bytes(seal)
+    before = workflow.read_bytes()
+    with pytest.raises(ValueError, match=message):
+        bump.bump(None, workflow, lane, GitHub([release("rust-v0.160.1")]), dry_run=False)
+    assert workflow.read_bytes() == before and lane.read_bytes() == seal
+
+
+def test_a_seal_the_catalog_already_chooses_is_not_rewritten(
+    workflow: Path, lane: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chosen = LANE.replace(b"gpt-6-sol", b"gpt-6.1-sol").replace(b'"medium"', b'"low"')
+    lane.write_bytes(chosen)
+    written: list[Path] = []
+    real = bump.commit
+    monkeypatch.setattr(bump, "commit", lambda writes: (written.extend(w[0] for w in writes),
+                                                        real(writes)))  # fmt: skip
+    report = bump.bump(None, workflow, lane, GitHub([release("rust-v0.160.1")]), dry_run=False)
+    assert written == [workflow] and lane.read_bytes() == chosen
+    assert report["sealed"]["from"] == report["sealed"]["to"]
+
+
+def test_a_second_copy_of_the_step_outside_any_step_refuses(workflow: Path, lane: Path) -> None:
     """vendor_pin ignores a copy not followed by a step; the rewrite must not touch it."""
     step = bump.artifacts.render_vendor_step(
         {**PIN_A, "catalog_sha256": hashlib.sha256(OLD_CATALOG).hexdigest()}
@@ -272,7 +364,7 @@ def test_a_second_copy_of_the_step_outside_any_step_refuses(workflow: Path) -> N
     workflow.write_bytes(workflow.read_bytes() + step.encode())
     before = workflow.read_bytes()
     with pytest.raises(ValueError, match="not the current pin's"):
-        bump.bump(None, workflow, GitHub([release("rust-v0.160.1")]), dry_run=False)
+        bump.bump(None, workflow, lane, GitHub([release("rust-v0.160.1")]), dry_run=False)
     assert workflow.read_bytes() == before
 
 

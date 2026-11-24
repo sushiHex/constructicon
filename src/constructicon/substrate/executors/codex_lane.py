@@ -117,9 +117,10 @@ PREPARE_FAMILY = "sol"
 PREPARE_MODEL = "gpt-6.1-sol"
 PREPARE_EFFORT = "low"
 """The sealed model and effort: the pinned catalog's newest ``sol`` at its lowest
-effort (M8-N5-state-review.md, decision 3; ``codex_catalog.catalog_choice``). CI
-checks these literals against the catalog it installed, so a bump that moves the
-choice must move them."""
+effort (M8-N5-state-review.md, decision 3; ``codex_catalog.catalog_choice``).
+``scripts/bump_codex_pin.py`` moves the model and effort with the pin, and CI
+checks all three against the catalog it installed. Every other reader takes the
+model from here, never from a literal of its own."""
 PREPARE_CONNECTIONS = 8
 """A fixed per-lane relay bound, matching the reviewed N4 bridge fixture."""
 LOGIN_DEADLINE_S = 960.0

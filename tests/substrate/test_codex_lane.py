@@ -818,8 +818,9 @@ def test_prepare_creates_four_parseable_reviewed_inputs_from_one_pin_each(
     assert out.joinpath("config.toml").read_text(encoding="utf-8") == (
         codex_lane.production_configuration()
     )
-    assert codex_lane.configured_model(out.joinpath("config.toml").read_text()) == "gpt-6.1-sol"
-    assert codex_lane.configured_effort(out.joinpath("config.toml").read_text()) == "low"
+    written = out.joinpath("config.toml").read_text()
+    assert codex_lane.configured_model(written) == codex_lane.PREPARE_MODEL
+    assert codex_lane.configured_effort(written) == codex_lane.PREPARE_EFFORT
     assert codex_lane.configured_provider(out.joinpath("config.toml").read_text()) == "openai"
     login = codex_lane._policy(out / "login-policy.json")
     startup = codex_lane._policy(out / "startup-policy.json")
@@ -1018,8 +1019,10 @@ def test_prepare_refuses_a_configuration_outside_the_reviewed_route(
     calls = prepare_world(monkeypatch)
     original = codex_lane.production_configuration()
     configuration = {
-        "model": original.replace('model = "gpt-6.1-sol"', 'model = "wrong"'),
-        "effort": original.replace('_effort = "low"', '_effort = "high"'),
+        "model": original.replace(f'model = "{codex_lane.PREPARE_MODEL}"', 'model = "wrong"'),
+        "effort": original.replace(
+            f'_effort = "{codex_lane.PREPARE_EFFORT}"', '_effort = "unsealed"'
+        ),
         "provider": 'model_provider = "other"\n' + original,
     }[fault]
     assert configuration != original

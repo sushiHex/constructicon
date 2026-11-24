@@ -310,7 +310,7 @@ CALLBACK_OUTPUT = "contained fixture output"
 
 async def inventory_turn(image, tmp_path, *, without=(), write=False, tool=None, arguments=None,
                          namespace=None, prompt=PLACEMENT_PROMPT, label=None):
-    """One production turn of the mode at ``gpt-6.1-sol``, its layers less ``without``.
+    """One production turn of the mode at the sealed model, its layers less ``without``.
 
     Initialize, the thread and the turn are the adapter's own requests. A
     callback is answered as the adapter answers it; any other server request

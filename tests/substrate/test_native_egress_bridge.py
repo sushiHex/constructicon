@@ -445,7 +445,8 @@ def test_the_production_configuration_is_the_reviewed_literal():
     expected = (
         # Decision 3: the pinned catalog's newest ``sol`` at its lowest effort; CI
         # checks both against the catalog it installed.
-        'model = "gpt-6.1-sol"\nmodel_reasoning_effort = "low"\n'
+        f'model = "{codex_lane.PREPARE_MODEL}"\n'
+        f'model_reasoning_effort = "{codex_lane.PREPARE_EFFORT}"\n'
         f'model_catalog_json = "{RUNTIME_CATALOG}"\n'
         'cli_auth_credentials_store = "file"\nforced_login_method = "chatgpt"\n'
         'check_for_update_on_startup = false\nweb_search = "disabled"\n'
