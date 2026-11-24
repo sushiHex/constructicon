@@ -51,7 +51,7 @@ Every vendor upgrade takes the same short path.
 1. **One pin record.** Version, asset URL and sha256, and catalog commit and sha256 live in one reviewed file that the workflow, the installer and the lane all read.
 2. **A bump tool.** It finds the newest stable release, checks the asset against the release's published `SHA256SUMS`, hashes the catalog at the release's commit, rewrites the pin record, and opens a PR.
 3. **The real-binary proofs are the gate.** A failing proof names what changed. A surface the proofs do not exercise is added to them before it is relied on.
-4. **Model and effort from the catalog,** per decision 3. The bump tool moves the sealed model and effort in `codex_lane.py` in the same run as the pin, and reports the seal before and after. Every other reader takes the model from that seal, so one run of the tool is the whole source change. CI still checks the seal against the catalog it installed.
+4. **Model and effort from the catalog,** per decision 3.
 5. **One host update session.** The store-keeping launch replacement (`M8-N4-launch-replacement.md`), a controller check, then startup requalification into the next generation. There is no re-login unless the vendor forces one.
 
 ## Facts at `rust-v0.160.0`
