@@ -102,6 +102,12 @@ LANE = (
     b'PREPARE_EFFORT = "medium"\nOTHER_MODEL = "gpt-6-sol"\n'
     b'def local():\n    PREPARE_MODEL = "not the module\'s seal"\n'
 )
+MOVED = (
+    b'PREPARE_MODEL = "gpt-6-sol"\nPREPARE_EFFORT = "medium"\n',
+    b'PREPARE_MODEL = "gpt-6.1-sol"\nPREPARE_EFFORT = "low"\n',
+)
+CHOSEN = LANE.replace(*MOVED)
+"""``LANE`` with its seal at ``CATALOG``'s choice for ``sol``."""
 
 
 @pytest.fixture
@@ -237,7 +243,8 @@ def test_a_downgrade_or_a_changed_pinned_version_refuses(
 def test_the_pinned_release_unchanged_is_a_no_op(
     tmp_path: Path, lane: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(bump, "commit", lambda *_: pytest.fail("an unchanged pin was rewritten"))
+    monkeypatch.setattr(bump.os, "replace", lambda *_: pytest.fail("an unchanged file replaced"))
+    lane.write_bytes(CHOSEN)
     pin = {
         "codex_url": f"{DOWNLOAD}/rust-v0.153.4/{bump.ASSET}", "codex_sha256": DIGEST,
         "catalog_url": CATALOG_URL, "catalog_sha256": hashlib.sha256(CATALOG).hexdigest(),
@@ -247,7 +254,37 @@ def test_the_pinned_release_unchanged_is_a_no_op(
     before = workflow.read_bytes()
     report = bump.bump(None, workflow, lane, GitHub([release("rust-v0.153.4")]), dry_run=False)
     assert not report["changed"] and report["re_observe"] == []
-    assert workflow.read_bytes() == before and lane.read_bytes() == LANE
+    assert workflow.read_bytes() == before and lane.read_bytes() == CHOSEN
+
+
+def test_a_seal_left_behind_the_pin_is_moved_by_the_next_run(
+    tmp_path: Path, lane: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bump whose second replace failed leaves the new pin with the old seal."""
+    github = GitHub([release("rust-v0.160.1")])
+    workflow = tmp_path / "m8-containment.yml"
+    workflow.write_bytes(workflow_with(bump.artifacts.render_vendor_step(
+        {**PIN_A, "catalog_sha256": hashlib.sha256(OLD_CATALOG).hexdigest()}
+    )))  # fmt: skip
+    replace = bump.os.replace
+
+    def failing(source: str, target: Path) -> None:
+        if target == lane:
+            raise OSError("the lane could not be replaced")
+        replace(source, target)
+
+    monkeypatch.setattr(bump.os, "replace", failing)
+    with pytest.raises(OSError, match="could not be replaced"):
+        bump.bump(None, workflow, lane, github, dry_run=False)
+    moved = workflow.read_bytes()
+    assert bump.artifacts.vendor_pin(moved)["version"] == "0.160.1"
+    assert lane.read_bytes() == LANE and sorted(lane.parent.iterdir()) == [lane]
+
+    monkeypatch.setattr(bump.os, "replace", replace)
+    report = bump.bump(None, workflow, lane, github, dry_run=False)
+    assert not report["changed"] and workflow.read_bytes() == moved
+    assert lane.read_bytes() == CHOSEN
+    assert report["sealed"]["to"]["PREPARE_MODEL"] == "gpt-6.1-sol"
 
 
 def test_a_current_pin_whose_catalog_moved_refuses(workflow: Path, lane: Path) -> None:
@@ -302,20 +339,24 @@ def test_an_edit_made_while_the_bump_fetches_is_never_overwritten(
     assert lane.read_bytes() == LANE and sorted(lane.parent.iterdir()) == [lane]
 
 
+@pytest.mark.parametrize("seal", ["stale", "already chosen"])
 def test_a_seal_edited_while_the_bump_fetches_leaves_both_files(
-    workflow: Path, lane: Path
+    workflow: Path, lane: Path, seal: str
 ) -> None:
+    """The seal is compared even when the bump would not rewrite it."""
     github = GitHub([release("rust-v0.160.1")])
     before = workflow.read_bytes()
+    start = LANE if seal == "stale" else CHOSEN
+    lane.write_bytes(start)
 
     def editing(url: str, limit: int) -> bytes:
         if url == PIN_A["catalog_url"]:
-            lane.write_bytes(LANE + b"# edited\n")
+            lane.write_bytes(start + b"# edited\n")
         return github(url, limit)
 
     with pytest.raises(ValueError, match=r"codex_lane\.py changed during the bump"):
         bump.bump(None, workflow, lane, editing, dry_run=False)
-    assert workflow.read_bytes() == before and lane.read_bytes() == LANE + b"# edited\n"
+    assert workflow.read_bytes() == before and lane.read_bytes() == start + b"# edited\n"
     assert sorted(workflow.parent.iterdir()) == [workflow]
     assert sorted(lane.parent.iterdir()) == [lane]
 
@@ -327,6 +368,11 @@ def test_a_seal_edited_while_the_bump_fetches_leaves_both_files(
         (b'PREPARE_FAMILY = "sol"\nPREPARE_EFFORT = "medium"\n    PREPARE_MODEL = "local"\n',
          "PREPARE_MODEL exactly once"),
         (LANE + b'PREPARE_MODEL = "other"\n', "PREPARE_MODEL exactly once"),
+        # A second assignment in another spelling would override the seal unseen.
+        (LANE + b'PREPARE_MODEL = "other"  # later\n', "PREPARE_MODEL exactly once"),
+        (LANE + b'PREPARE_EFFORT: str = "high"\n', "PREPARE_EFFORT exactly once"),
+        (LANE.replace(b'"gpt-6-sol"\nPREPARE', b'"gpt-6\\x2dsol"\nPREPARE'),
+         "PREPARE_MODEL exactly once"),
         # The catalog lists no terra model and gives luna no ranked effort.
         (LANE.replace(b'"sol"', b'"terra"'), "lists no 'terra' model"),
         (LANE.replace(b'"sol"', b'"luna"'), "no ranked lowest effort"),
@@ -345,15 +391,28 @@ def test_a_seal_the_catalog_cannot_move_refuses_the_whole_bump(
 def test_a_seal_the_catalog_already_chooses_is_not_rewritten(
     workflow: Path, lane: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    chosen = LANE.replace(b"gpt-6-sol", b"gpt-6.1-sol").replace(b'"medium"', b'"low"')
-    lane.write_bytes(chosen)
-    written: list[Path] = []
-    real = bump.commit
-    monkeypatch.setattr(bump, "commit", lambda writes: (written.extend(w[0] for w in writes),
-                                                        real(writes)))  # fmt: skip
+    lane.write_bytes(CHOSEN)
+    replaced: list[Path] = []
+    replace = bump.os.replace
+
+    def recording(source: str, target: Path) -> None:
+        replaced.append(target)
+        replace(source, target)
+
+    monkeypatch.setattr(bump.os, "replace", recording)
     report = bump.bump(None, workflow, lane, GitHub([release("rust-v0.160.1")]), dry_run=False)
-    assert written == [workflow] and lane.read_bytes() == chosen
+    assert replaced == [workflow] and lane.read_bytes() == CHOSEN
     assert report["sealed"]["from"] == report["sealed"]["to"]
+
+
+@pytest.mark.parametrize("slug", ['gpt-6\\a-sol', 'gpt-6"-sol', "gpt-6\n-sol"])
+def test_a_choice_that_is_not_a_plain_name_is_never_written(slug: str) -> None:
+    """Written verbatim into a string literal, it would not read back as itself."""
+    catalog = json.dumps({"models": [
+        {"slug": slug, "visibility": "list", "supported_reasoning_levels": [{"effort": "low"}]},
+    ]}).encode()  # fmt: skip
+    with pytest.raises(ValueError, match="is not a plain name"):
+        bump.reseal(LANE, catalog)
 
 
 def test_a_second_copy_of_the_step_outside_any_step_refuses(workflow: Path, lane: Path) -> None:

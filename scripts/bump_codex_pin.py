@@ -49,6 +49,8 @@ LIMITS = {
 FAMILIES = ("astra", "sol", "luna", "terra")
 LANE = "src/constructicon/substrate/executors/codex_lane.py"
 SEALED = ("PREPARE_FAMILY", "PREPARE_MODEL", "PREPARE_EFFORT")
+SEAL_LINE = rb'^(%s = ")([^"\\\r\n]*)("\r?)$'
+"""One sealed name's whole assignment line: its prefix, its value, its ending."""
 RECORDED = (
     "tests/native_startup.py MODELS (models the native fixtures name)",
     "tests/native_combined.py efforts and request shapes",
@@ -186,14 +188,19 @@ def newest(catalog: bytes) -> dict[str, object]:
 
 
 def sealed(lane: bytes) -> dict[str, str]:
-    """The lane's sealed family, model and effort, each assigned exactly once."""
+    """The lane's sealed family, model and effort, each assigned exactly once.
+
+    Each name starts exactly one line, and that line is the plain assignment
+    :data:`SEAL_LINE` matches. A second assignment in any other spelling could
+    override the seal unseen, so it refuses.
+    """
 
     found = {}
     for name in SEALED:
-        values = re.findall(rb'^%s = "([^"\r\n]*)"\r?$' % name.encode(), lane, re.MULTILINE)
-        if len(values) != 1:
+        values = re.findall(SEAL_LINE % name.encode(), lane, re.MULTILINE)
+        if len(values) != 1 or len(re.findall(rb"^%s\b" % name.encode(), lane, re.MULTILINE)) != 1:
             raise ValueError(f"the lane does not assign {name} exactly once")
-        found[name] = values[0].decode()
+        found[name] = values[0][1].decode()
     return found
 
 
@@ -202,14 +209,17 @@ def reseal(lane: bytes, catalog: bytes) -> bytes:
 
     Decision 3 is a standing rule, so the bump applies it rather than leaving
     CI to report the stale literals. A catalog with no choice for the sealed
-    family refuses the whole bump.
+    family refuses the whole bump, and so does a choice that is not a plain
+    name, which would not read back from a string literal as written.
     """
 
     model, effort = catalog_choice(catalog, sealed(lane)["PREPARE_FAMILY"])
     for name, value in (("PREPARE_MODEL", model), ("PREPARE_EFFORT", effort)):
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", value):
+            raise ValueError(f"the catalog's choice {value!r} is not a plain name")
         lane = re.sub(
-            rb'^(%s = ")[^"\r\n]*' % name.encode(),
-            lambda match, value=value: match[1] + value.encode(),
+            SEAL_LINE % name.encode(),
+            lambda match, value=value: match[1] + value.encode() + match[3],
             lane, flags=re.MULTILINE,
         )  # fmt: skip
     return lane
@@ -232,28 +242,31 @@ def rewrite(original: bytes, old: dict[str, str], new: dict[str, str]) -> bytes:
 
 
 def commit(writes: list[tuple[Path, bytes, bytes]]) -> None:
-    """Replace each file with its new bytes if every one is still its original.
+    """Replace each changed file if every file is still the one read at the start.
 
-    Every file is staged privately and compared before the first replace, and
-    each replace is atomic. Only a write in the instant between the last
-    comparison and a replace is not seen; the tool has no concurrent writer of
-    its own.
+    Every file is compared, changed or not, after the changed ones are staged
+    privately and before the first replace. Each replace is atomic. Only a
+    write in the instant between the last comparison and a replace is not
+    seen; the tool has no concurrent writer of its own. A replace that fails
+    after an earlier one leaves the files apart; the next run moves whichever
+    is behind, because each file is written whenever it differs from the pin.
     """
 
-    staged: list[str] = []
+    staged: list[tuple[str, Path]] = []
     try:
-        for path, _, data in writes:
-            descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-            staged.append(name)
-            with os.fdopen(descriptor, "wb") as handle:
-                handle.write(data)
+        for path, original, data in writes:
+            if data != original:
+                descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+                staged.append((name, path))
+                with os.fdopen(descriptor, "wb") as handle:
+                    handle.write(data)
         for path, original, _ in writes:
             if path.read_bytes() != original:
                 raise ValueError(f"{path.name} changed during the bump; nothing written")
-        for (path, _, _), name in zip(writes, staged, strict=True):
+        for name, path in staged:
             os.replace(name, path)
     finally:
-        for name in staged:
+        for name, _ in staged:
             if os.path.exists(name):
                 os.unlink(name)
 
@@ -290,11 +303,9 @@ def bump(
         "sealed": {"from": sealed(seal), "to": sealed(resealed)},
         "re_observe": list(RECORDED) if new != old else [],
     }  # fmt: skip
-    if new != old and not dry_run:
-        writes = [(workflow, original, rewrite(original, old, new))]
-        if resealed != seal:
-            writes.append((lane, seal, resealed))
-        commit(writes)
+    updated = rewrite(original, old, new) if new != old else original
+    if not dry_run:
+        commit([(workflow, original, updated), (lane, seal, resealed)])
     return report
 
 
