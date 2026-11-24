@@ -114,7 +114,7 @@ RUNTIME_BINARY = VENDOR_MOUNT + "/bin/codex"
 RUNTIME_CATALOG = CATALOG_MOUNT
 """In-zone paths of the bound vendor tree's client and the bound model catalog."""
 PREPARE_FAMILY = "sol"
-PREPARE_MODEL = "gpt-6.1-sol"
+PREPARE_MODEL = "gpt-6.2-sol"
 PREPARE_EFFORT = "low"
 """The sealed model and effort: the pinned catalog's newest ``sol`` at its lowest
 effort (M8-N5-state-review.md, decision 3; ``codex_catalog.catalog_choice``).
