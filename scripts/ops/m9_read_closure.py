@@ -169,13 +169,14 @@ def _exact(value: Any, names: set[str]) -> bool:
 
 def _observation(value: Any, pins: ClosurePins) -> Observation:
     from constructicon.api._m9 import proposer
+    from constructicon.substrate.executors.codex_host import READ_GRANTS
 
     _need(_exact(value, set(proposer.Observation.model_fields)))
     observed = proposer.checked_observation(value)
     _need(
         str(observed.source) == pins.source_digest and str(observed.task) == pins.task_digest
         and str(observed.provider_revision) == pins.provider_revision
-        and observed.requested_model == "gpt-6.1-sol"
+        and observed.requested_model == READ_GRANTS.model_selection.model
     )
     return observed
 

@@ -8,12 +8,14 @@ It selects a published stable release from every ``rust-vX.Y.Z`` tag, never a
 downgrade. The package must agree with the release's ``codex-package_SHA256SUMS``,
 GitHub's asset digest and the downloaded bytes. The tag is peeled to its commit
 and the catalog is hashed there. Then the workflow's one acquisition step is
-rewritten, only if the workflow is still the one read at the start.
+rewritten, and the lane's sealed model and effort are moved to the new
+catalog's choice (decision 3), only if both files are still the ones read at
+the start. Every other reader takes the model from that seal, so one run is the
+whole source change of an upgrade.
 
-The report names decision 3's choice per family, the rule CI then holds the
-sealed configuration to, and the recorded vendor behaviour to re-observe before
-relying on it. Stdlib and this package only, and no file is written until every
-check has passed.
+The report names decision 3's choice per family, the seal before and after, and
+the recorded vendor behaviour to re-observe before relying on it. Stdlib and
+this package only, and no file is written until every check has passed.
 """
 
 from __future__ import annotations
@@ -45,6 +47,10 @@ LIMITS = {
     "refs": 16 << 20, "api": 1 << 20, "sums": 1 << 20, "package": 512 << 20, "catalog": 8 << 20,
 }  # fmt: skip
 FAMILIES = ("astra", "sol", "luna", "terra")
+LANE = "src/constructicon/substrate/executors/codex_lane.py"
+SEALED = ("PREPARE_FAMILY", "PREPARE_MODEL", "PREPARE_EFFORT")
+SEAL_LINE = rb'^(%s = ")([^"\\\r\n]*)("\r?)$'
+"""One sealed name's whole assignment line: its prefix, its value, its ending."""
 RECORDED = (
     "tests/native_startup.py MODELS (models the native fixtures name)",
     "tests/native_combined.py efforts and request shapes",
@@ -181,13 +187,46 @@ def newest(catalog: bytes) -> dict[str, object]:
     return report
 
 
-def apply(workflow: Path, original: bytes, old: dict[str, str], new: dict[str, str]) -> None:
-    """Swap the one acquisition step if the workflow is still ``original``.
+def sealed(lane: bytes) -> dict[str, str]:
+    """The lane's sealed family, model and effort, each assigned exactly once.
 
-    The bytes go to a private staging file, then replace the workflow atomically.
-    Only a write in the instant between the last comparison and the replace is
-    not seen; the tool has no concurrent writer of its own.
+    Each name starts exactly one line, and that line is the plain assignment
+    :data:`SEAL_LINE` matches. A second assignment in any other spelling could
+    override the seal unseen, so it refuses.
     """
+
+    found = {}
+    for name in SEALED:
+        values = re.findall(SEAL_LINE % name.encode(), lane, re.MULTILINE)
+        if len(values) != 1 or len(re.findall(rb"^%s\b" % name.encode(), lane, re.MULTILINE)) != 1:
+            raise ValueError(f"the lane does not assign {name} exactly once")
+        found[name] = values[0][1].decode()
+    return found
+
+
+def reseal(lane: bytes, catalog: bytes) -> bytes:
+    """``lane`` with its sealed model and effort moved to the catalog's choice.
+
+    Decision 3 is a standing rule, so the bump applies it rather than leaving
+    CI to report the stale literals. A catalog with no choice for the sealed
+    family refuses the whole bump, and so does a choice that is not a plain
+    name, which would not read back from a string literal as written.
+    """
+
+    model, effort = catalog_choice(catalog, sealed(lane)["PREPARE_FAMILY"])
+    for name, value in (("PREPARE_MODEL", model), ("PREPARE_EFFORT", effort)):
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", value):
+            raise ValueError(f"the catalog's choice {value!r} is not a plain name")
+        lane = re.sub(
+            SEAL_LINE % name.encode(),
+            lambda match, value=value: match[1] + value.encode() + match[3],
+            lane, flags=re.MULTILINE,
+        )  # fmt: skip
+    return lane
+
+
+def rewrite(original: bytes, old: dict[str, str], new: dict[str, str]) -> bytes:
+    """``original`` with its one acquisition step swapped to the new pin."""
 
     crlf = b"\r\n" in original
     if crlf and original.count(b"\n") != original.count(b"\r\n"):
@@ -199,21 +238,44 @@ def apply(workflow: Path, original: bytes, old: dict[str, str], new: dict[str, s
     updated = text.replace(before, after)
     if {k: v for k, v in artifacts.vendor_pin(updated).items() if k in new} != new:
         raise ValueError("the rewritten workflow does not parse back to the new pin")
-    data = updated.replace(b"\n", b"\r\n") if crlf else updated
-    descriptor, staged = tempfile.mkstemp(prefix=f".{workflow.name}.", dir=workflow.parent)
+    return updated.replace(b"\n", b"\r\n") if crlf else updated
+
+
+def commit(writes: list[tuple[Path, bytes, bytes]]) -> None:
+    """Replace each changed file if every file is still the one read at the start.
+
+    Every file is compared, changed or not, after the changed ones are staged
+    privately and before the first replace. Each replace is atomic. Only a
+    write in the instant between the last comparison and a replace is not
+    seen; the tool has no concurrent writer of its own. A replace that fails
+    after an earlier one leaves the files apart; the next run moves whichever
+    is behind, because each file is written whenever it differs from the pin.
+    """
+
+    staged: list[tuple[str, Path]] = []
     try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(data)
-        if workflow.read_bytes() != original:
-            raise ValueError("the workflow changed during the bump; nothing written")
-        os.replace(staged, workflow)
+        for path, original, data in writes:
+            if data != original:
+                descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+                staged.append((name, path))
+                with os.fdopen(descriptor, "wb") as handle:
+                    handle.write(data)
+        for path, original, _ in writes:
+            if path.read_bytes() != original:
+                raise ValueError(f"{path.name} changed during the bump; nothing written")
+        for name, path in staged:
+            os.replace(name, path)
     finally:
-        if os.path.exists(staged):
-            os.unlink(staged)
+        for name, _ in staged:
+            if os.path.exists(name):
+                os.unlink(name)
 
 
-def bump(requested: str | None, workflow: Path, get: Fetch, *, dry_run: bool) -> dict:
+def bump(
+    requested: str | None, workflow: Path, lane: Path, get: Fetch, *, dry_run: bool
+) -> dict:
     original = workflow.read_bytes()
+    seal = lane.read_bytes()
     current = artifacts.vendor_pin(original.replace(b"\r\n", b"\n"))
     release, target = select(get, requested)
     version = release["tag_name"].removeprefix("rust-v")
@@ -221,8 +283,8 @@ def bump(requested: str | None, workflow: Path, get: Fetch, *, dry_run: bool) ->
     if now is None or then is None or now < then:
         raise ValueError(f"refusing to downgrade {current['version']} to {version}")
     url, digest = package_digest(release, get)
-    commit = peel(target, get)
-    catalog_url = f"https://raw.githubusercontent.com/openai/codex/{commit}/codex-rs/models-manager/models.json"
+    peeled = peel(target, get)
+    catalog_url = f"https://raw.githubusercontent.com/openai/codex/{peeled}/codex-rs/models-manager/models.json"
     catalog = get(catalog_url, LIMITS["catalog"])
     new = {
         "codex_url": url, "codex_sha256": digest,
@@ -234,13 +296,16 @@ def bump(requested: str | None, workflow: Path, get: Fetch, *, dry_run: bool) ->
     old_catalog = get(old["catalog_url"], LIMITS["catalog"])
     if hashlib.sha256(old_catalog).hexdigest() != old["catalog_sha256"]:
         raise ValueError("the current pin's catalog no longer matches its digest")
+    resealed = reseal(seal, catalog)
     report = {
-        "from": current["version"], "to": version, "commit": commit, "changed": new != old,
+        "from": current["version"], "to": version, "commit": peeled, "changed": new != old,
         "pin": new, "models": {"from": newest(old_catalog), "to": newest(catalog)},
+        "sealed": {"from": sealed(seal), "to": sealed(resealed)},
         "re_observe": list(RECORDED) if new != old else [],
     }  # fmt: skip
-    if new != old and not dry_run:
-        apply(workflow, original, old, new)
+    updated = rewrite(original, old, new) if new != old else original
+    if not dry_run:
+        commit([(workflow, original, updated), (lane, seal, resealed)])
     return report
 
 
@@ -249,8 +314,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", help="an exact stable version, e.g. 0.160.1")
     parser.add_argument("--dry-run", action="store_true", help="report without writing")
     args = parser.parse_args(argv)
-    workflow = REPOSITORY / artifacts.WORKFLOW
-    print(json.dumps(bump(args.version, workflow, fetch, dry_run=args.dry_run), indent=2))
+    workflow, lane = REPOSITORY / artifacts.WORKFLOW, REPOSITORY / LANE
+    print(json.dumps(bump(args.version, workflow, lane, fetch, dry_run=args.dry_run), indent=2))
     return 0
 
 
