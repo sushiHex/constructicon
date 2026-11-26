@@ -51,7 +51,7 @@ def request_for(scenario, ordinal):
                "client_metadata": {}, "prompt_cache_key": "test",
                "input": [{"id": f"item_{index}", **item} for index, item in enumerate(items)]}
     if scenario.model == MODELS[0]:
-        request.update(instructions=BASE_INSTRUCTIONS, tools=tools_for())
+        request.update(tools=tools_for())
     return request
 
 
@@ -91,7 +91,8 @@ def test_conversation_refuses_uncontrolled_context_and_outputs(scenario, damage)
         del inputs[-3]["id"]
     elif damage == "flattened":
         if scenario.model == MODELS[0]:
-            del request["instructions"]
+            # The pre-0.172.0 shape: base instructions as a root field.
+            request["instructions"] = BASE_INSTRUCTIONS
         else:
             request["tools"] = tools_for()
     elif damage == "changed-tool-schema":
@@ -111,10 +112,9 @@ def test_conversation_refuses_uncontrolled_context_and_outputs(scenario, damage)
     elif damage == "generation-setting":
         request["store"] = True
     elif damage == "changed-instructions":
-        if scenario.model == MODELS[0]:
-            request["instructions"] = "different"
-        else:
-            inputs[1]["content"][0]["text"] = "different"
+        base = 0 if scenario.model == MODELS[0] else 1
+        assert inputs[base]["content"][0]["text"] == BASE_INSTRUCTIONS
+        inputs[base]["content"][0]["text"] = "different"
     with pytest.raises(ValueError):
         scenario(request, 3 if damage == "third-request" else 2)
 
@@ -172,7 +172,7 @@ def test_mcp_positive_control_never_broadens_the_empty_recipe():
     request = request_for(scenario, 1)
     request["tools"] = tools_for(mcp=True)
     replace(scenario, mcp=True)(request, 1)
-    with pytest.raises(ValueError, match="instructions or tools"):
+    with pytest.raises(ValueError, match="changed native tools"):
         scenario(request, 1)
 
 

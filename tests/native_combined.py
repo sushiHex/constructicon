@@ -122,8 +122,10 @@ class CombinedScenario:
                 tools = json.loads(Path(__file__).with_name("fixtures").joinpath(
                     "native_combined_sol_tools.json",
                 ).read_text())
-            prefix = [{"type": "additional_tools", "role": "developer", "tools": tools},
-                      message("developer", BASE_INSTRUCTIONS)]
+            prefix = [{"type": "additional_tools", "role": "developer", "tools": tools}]
+        # Since 0.172.0 every model carries the base instructions as a developer
+        # message; the top-level `instructions` field is gone (observed, #476).
+        prefix.append(message("developer", BASE_INSTRUCTIONS))
         permissions = [PERMISSIONS, context["plugins"]] if self.plugins else [PERMISSIONS]
         multi_agent = context["sol_multi_agent"] if (
             self.model == MODELS[1] and not self.restricted
@@ -151,7 +153,7 @@ class CombinedScenario:
         fixed = fixed_request_fields(self.model)
         expected_keys = set(fixed) | {"input", "client_metadata", "prompt_cache_key"}
         if self.model == MODELS[0]:
-            expected_keys |= {"instructions", "tools"}
+            expected_keys |= {"tools"}
         if set(request) != expected_keys or any(
             canonical(request[key]) != canonical(value) for key, value in fixed.items()
         ):
@@ -173,11 +175,11 @@ class CombinedScenario:
         ):
             raise ValueError("malformed transport annotations")
         if self.model == MODELS[0]:
-            if request.get("instructions") != BASE_INSTRUCTIONS or canonical(
-                request.get("tools"),
-            ) != canonical(tools_for(images=self.images, restricted=self.restricted, mcp=self.mcp)):
-                raise ValueError("changed native instructions or tools")
-        elif "instructions" in request or "tools" in request:
+            if canonical(request.get("tools")) != canonical(
+                tools_for(images=self.images, restricted=self.restricted, mcp=self.mcp),
+            ):
+                raise ValueError("changed native tools")
+        elif "tools" in request:
             raise ValueError("flattened namespaced model request")
         actual = without_ids(request.get("input"))
         if ordinal == 2 and self.tool == "apply_patch" and not self.restricted and actual:
