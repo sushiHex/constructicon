@@ -123,6 +123,33 @@ Acceptance would require, in later separately reviewed changes:
   host's confinement profile;
 - a new host qualification before any live window.
 
+## Implementation sequence, if accepted
+
+Each step is its own reviewed change. None starts before acceptance, and a
+live window needs its own authorization after the last.
+
+1. **Publication primitive, credential-free.** One function that takes a
+   pinned stage descriptor and a store directory and performs the check,
+   the temporary file, both `fsync` calls and the rename. Tests refuse each
+   wrong staged object (absent, link, directory, mode, owner, size) and
+   prove the canonical bytes are unchanged on every refusal. Mutants cover
+   each check.
+2. **Stage and layout.** The zone's `CODEX_HOME` becomes the stage; the
+   canonical store leaves the zone's mounts. The N3a and N3c containment
+   proofs are rewritten to the new premise: the zone cannot see the store,
+   and can do anything to its own copy.
+3. **Lane verdict.** The after-run check judges the staged file and the
+   publication result instead of the bound descriptor's link count and
+   modification time. Publication is reported separately from run success.
+4. **The refresh and login proofs.** The existing N4 refresh proof must
+   pass on 0.172.0 with the tokens published, and the device-login proof
+   must show the pre-login logout and the lock files handled in the stage.
+5. **Operator instructions and host qualification.** Superseding login and
+   maintenance commands, then a fresh host qualification.
+
+The pin bump in #476 can merge only after step 4, because its foundation
+lane fails until then.
+
 ## Alternatives
 
 - **Stay on 0.160.1.** Keeps every guarantee and needs no decision. It
@@ -140,7 +167,12 @@ Acceptance would require, in later separately reviewed changes:
   the N4 state review, and still: the pre-login logout removes the link and
   the new login is lost.
 - **A vendor setting that restores in-place saves.** Would rank first. None
-  is known; its existence is unverified.
+  was found: every file-backed save in 0.172.0 goes through the same
+  rename.
+- **The client's memory-only credential store**
+  (`cli_auth_credentials_store = "ephemeral"`). The failed save disappears
+  because nothing is saved. Every run would then need a fresh login.
+  Rejected.
 
 ## Before acceptance
 
