@@ -343,9 +343,12 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
                     "spawn_agent", "wait_agent",
                 }
                 description = functions["exec"]["description"]
+                # Since 0.172.0 the bundled catalog's code-mode-only Sol lists the MCP
+                # resource tools with no MCP server configured (#476). The sealed
+                # production catalog writes tool_mode "direct", where they are absent.
                 assert set(re.findall(r"^### `([^`]+)`$", description, re.MULTILINE)) == (
                     expected_tools - {"request_user_input"}
-                )
+                ) | {"list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"}
         else:
             assert {tool["name"] for tool in requests[0]["tools"]} == expected_tools
             assert not any(item.get("type") == "additional_tools"

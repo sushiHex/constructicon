@@ -26,13 +26,13 @@ from tests.test_native_provider import request_bytes, transact
 
 @pytest.mark.parametrize("name,expected", [
     ("native_combined_tools.json",
-     "5c4eb4222231029c8481fb5d0275ce9e6439ee73ff0bdb4446ae7de381645aa5"),
+     "0e6cb3a7f9c188484dbe99964e551556cd998b18950f443c31239fc15142fe1b"),
     ("native_combined_sol_tools.json",
-     "06cf7dcf767a8f6b35a11191fa677690c796e03e35bbb637b64b708e0c496863"),
+     "e835ffc83317e190c00c23914e8ccbd68fd5f91487f762efeb5c925174001576"),
     ("native_combined_mcp_tools.json",
      "19d0ce92c181de4ef0a5256c3a256695c4207f2346f28a3bdba69002f2c800c5"),
     ("native_combined_context.json",
-     "be9e009b12e23ecf51472047ae79868fd98ff518cc8505a2fe94e7d52eb67299"),
+     "3e51fb96408a685b3418b2b7ab1a246c906cbe9d8323e32eec0f6830c12ab431"),
 ])
 def test_previously_observed_tool_goldens_are_pinned(name, expected):
     value = json.loads(Path(__file__).with_name("fixtures").joinpath(name).read_text())
