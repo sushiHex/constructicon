@@ -106,3 +106,11 @@ facts and an exact whole-module AST-change bit. Acceptance authorizes
 credential-free construction only. Historical V1 evidence, the installed
 controller and standing approval remain unchanged; live operation is separately
 selected. The decision artifact is retained byte-for-byte after adoption.
+
+Proposed [ADR 0028](0028-the-launcher-publishes-a-staged-codex-credential.md),
+for [#476](https://github.com/sushiHex/constructicon/pull/476), would let the
+Codex executor run the latest client, which saves its credential by rename.
+The launcher would stage the credential per run and publish it back after
+reap. It gives up ADR 0021's rule that Constructicon never copies a
+credential, and immediate persistence of a refresh. It is neither accepted
+nor rejected, and authorizes nothing.
