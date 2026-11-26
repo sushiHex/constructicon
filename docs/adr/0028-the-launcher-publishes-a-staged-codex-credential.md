@@ -32,15 +32,25 @@ commit `3d86e43b`:
   and `codex login` still logs out first (`cli/src/login.rs:135`).
 
 Under the single-file bind the rename meets the mount and fails. The client
-cannot persist a token refresh or a login. Draft PR #476 pins 0.172.0. Its
-containment run fails earlier, on a test-side cause (the scripted provider
-refuses the new request shape), so no run has yet exercised a credential
-save under 0.172.0.
+cannot persist a token refresh or a login. A failed save during refresh is
+returned as a transient error before the client reloads, so the refreshed
+tokens are dropped, not kept in memory (`login/src/auth/manager.rs:1760-1804,
+3797-3814`).
 
-**Unverified.** The vendor facts above are one reader's reading of the
-vendor source. The independent design review could not reach that source and
-marked all four as unverified. A proof run against the pinned client must
-establish them before this decision is accepted.
+**Observed.** Draft PR #476 pins 0.172.0. In its containment run at
+`f98cecc` (run 45745541466, foundation lane, "Prove the N4 proxy bridge in
+the native zone") the existing refresh proof
+`tests/substrate/test_native_egress_bridge.py::test_account_read_recovers_from_a_401_exactly_as_its_case_allows`
+fails where it passed on 0.160.1: after the client's refresh against the
+scripted issuer the bound file still holds the old tokens
+(`('old', 'old') == ('new', 'new')`), and the client posts to the token
+endpoint twice where one refresh was allowed. The client's own error text
+was not captured, so the cause is the source reading above matched to this
+symptom, not a printed `EBUSY`.
+
+**Limits of the evidence.** The vendor source was read by two readers on our
+side. The independent design review could not reach that source and marked
+those facts unverified.
 
 ## Proposed decision
 
@@ -134,8 +144,10 @@ Acceptance would require, in later separately reviewed changes:
 
 ## Before acceptance
 
-1. A proof run that shows, against the pinned 0.172.0 client, the save by
-   rename, the two locks and the logout removal.
-2. A run under the current layout in which the 0.172.0 client attempts a
-   credential save, showing the failure this decision exists to remove.
-3. The owner's explicit acceptance of the first two rows of the table.
+1. Met: a run under the current layout in which the 0.172.0 client attempts
+   a credential save and the store keeps the old tokens (see Observed).
+2. Open: the client's own error for that save, captured from the same test,
+   to tie the symptom to the rename.
+3. Open: the two locks and the logout removal shown against the pinned
+   client, since the stage must tolerate both.
+4. The owner's explicit acceptance of the first two rows of the table.
