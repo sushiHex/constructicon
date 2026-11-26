@@ -175,9 +175,9 @@ class CombinedScenario:
         ):
             raise ValueError("malformed transport annotations")
         if self.model == MODELS[0]:
-            if canonical(request.get("tools")) != canonical(
-                tools_for(images=self.images, restricted=self.restricted, mcp=self.mcp),
-            ):
+            if canonical(
+                request.get("tools"),
+            ) != canonical(tools_for(images=self.images, restricted=self.restricted, mcp=self.mcp)):
                 raise ValueError("changed native tools")
         elif "tools" in request:
             raise ValueError("flattened namespaced model request")
