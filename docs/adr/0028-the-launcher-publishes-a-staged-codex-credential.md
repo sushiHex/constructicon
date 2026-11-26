@@ -1,0 +1,185 @@
+# 0028 — The launcher publishes a staged Codex credential
+
+Decision status is recorded in the [ADR index](README.md), for
+[#476](https://github.com/sushiHex/constructicon/pull/476). This document is
+**proposed**. It authorizes nothing: no code, no pin change, no host update,
+no credential handling and no live window. Source references are to main at
+`8a7cef5` unless stated otherwise.
+
+## Context
+
+The Codex executor's credential custody rests on one mechanism. The zone's
+`CODEX_HOME` is a tmpfs, and the operator store's `auth.json` is bound into
+it as a single writable file (`src/constructicon/substrate/executors/linux.py:703-709`).
+The [N4 state review](../plans/handoffs/M8-N4-state-review.md) chose that
+bind because `rename` and `unlink` over a bind mount fail with `EBUSY`, so a
+zone can never replace, delete or symlink the credential, and because the
+pinned client saved in place. `tests/substrate/test_operator_store_containment.py:175-176`
+and `tests/substrate/test_operator_store_persistence.py:244` hold that
+premise. After a run the lane measures the bound descriptor's link count,
+mode and modification time (`src/constructicon/substrate/executors/codex_lane.py:263-314`).
+
+The owner's rule is the latest installed client. The latest client, 0.172.0,
+no longer saves in place. As read in the vendor's source at the release
+commit `3d86e43b`:
+
+- A save resolves the symlink chain, writes a `0600` temporary file beside
+  the resolved target and renames it over the target. There is no in-place
+  fallback (`login/src/auth/storage.rs:274-295`).
+- Every save and delete takes a lock file beside the target, and write paths
+  take `$CODEX_HOME/auth.lock` (`login/src/auth/storage_commit.rs:29-67`).
+- Logout removes `$CODEX_HOME/auth.json` itself (`login/src/auth/storage.rs:171-178`),
+  and `codex login` still logs out first (`cli/src/login.rs:135`).
+
+Under the single-file bind the rename meets the mount and fails. The client
+cannot persist a token refresh or a login. A failed save during refresh is
+returned as a transient error before the client reloads, so the refreshed
+tokens are dropped, not kept in memory (`login/src/auth/manager.rs:1760-1804,
+3797-3814`).
+
+**Observed.** Draft PR #476 pins 0.172.0. In its containment run at
+`f98cecc` (run 45745541466, foundation lane, "Prove the N4 proxy bridge in
+the native zone") the existing refresh proof
+`tests/substrate/test_native_egress_bridge.py::test_account_read_recovers_from_a_401_exactly_as_its_case_allows`
+fails where it passed on 0.160.1: after the client's refresh against the
+scripted issuer the bound file still holds the old tokens
+(`('old', 'old') == ('new', 'new')`), and the client posts to the token
+endpoint twice where one refresh was allowed. The client's own error text
+was not captured, so the cause is the source reading above matched to this
+symptom, not a printed `EBUSY`.
+
+**Limits of the evidence.** The vendor source was read by two readers on our
+side. The independent design review could not reach that source and marked
+those facts unverified.
+
+## Proposed decision
+
+For the Codex executor only, the credential reaches the client through a
+per-run staging directory, and the launcher publishes it back.
+
+1. **Stage.** Before spawn, under the retained store lock and after the
+   existing binding checks, the launcher creates a private `0700` directory
+   on the supervisor's tmpfs and pins it by descriptor. It copies the store's
+   `auth.json` into it as opaque bytes. The sealed configuration is laid over
+   it read-only, as today.
+2. **Run.** The zone's `CODEX_HOME` is that directory. The canonical store is
+   not mounted into the zone at all.
+3. **Publish.** After every native process is reaped, still under the lock,
+   the launcher re-checks custody and opens `auth.json` relative to the
+   pinned descriptor without following links. It publishes only a regular
+   file with one link, the expected owner, mode exactly `0600` and a nonzero
+   bounded size. Publication is a host-created temporary file in the store
+   directory, `fsync`, `rename` over the canonical file, then `fsync` of the
+   store directory.
+4. **Refuse.** Anything else in the staged credential's place (absent, a
+   link, a directory, another mode or owner, out of bound) publishes nothing.
+   The canonical file keeps its bytes and the run fails closed. Lock files
+   and orphaned temporary files in the stage are discarded, never promoted.
+5. **Dispose.** The stage is removed with the run. A stage found at startup
+   is discarded, never reconciled. There is no recovery owner and no journal
+   record, as ADR 0021 requires.
+
+Durable publication is reported separately from run success.
+
+## What changes hands
+
+| Guarantee today | Under this decision |
+| --- | --- |
+| Constructicon never copies a credential ([ADR 0021](0021-subscription-executors-bind-operator-stores.md), "never ... copies a desktop login, exports a store"; "close/reconcile neither ... copies ... the persistent store") | **Given up.** The launcher copies the credential in and out as opaque bytes. It still never parses it. |
+| A refresh is in the operator store the moment the client writes it | **Given up.** It reaches the store only at publication. A crash after the vendor rotates the token and before publication loses it; the operator signs in again under maintenance. |
+| The zone cannot replace, delete or symlink the credential (`EBUSY`) | **Replaced.** The zone can do all three to its staged copy. The launcher's publication check refuses the result instead. |
+| The zone holds a writable handle on the canonical credential inode | **Strengthened.** The zone never sees the canonical store, its siblings or its lock. |
+| Everything else in the client's home is tmpfs and dies with the run | Kept. The stage is tmpfs. |
+| Store identity is the binding, not the credential inode or content | Kept. |
+| The vendor client owns creation, refresh, provider TLS and logout | Kept. |
+| One retained lock serializes local custody through reap | Kept, and held through publication. |
+
+This is a traded guarantee, not a free upgrade. It is the owner's to accept.
+
+## Supersession
+
+If accepted, this supersedes, for the Codex executor only:
+
+- ADR 0021's two clauses quoted in the first table row, and its statement
+  that refresh writes to the store are the sole persistent native write;
+- the N4 state review's section "Why a single-file bind".
+
+Both documents keep their bytes. The Claude Code lane and every other clause
+of ADR 0021 are unchanged.
+
+## Consequences
+
+Acceptance would require, in later separately reviewed changes:
+
+- the layout, checked-object, in-place persistence, disposable-home,
+  device-login and lane verdict tests rewritten to the new premise
+  (`tests/substrate/test_native_store_launch.py`, `test_operator_store_containment.py`,
+  `test_operator_store_persistence.py`, `test_native_egress_bridge.py`, `test_codex_lane.py`);
+- the mutation anchors retargeted in `scripts/check_m8_n3a_mutations.py`,
+  `check_m8_n3c_mutations.py` and `check_m8_n4_bridge_mutations.py`;
+- the operator instructions for login and maintenance superseded;
+- physical proof on the target of the publication's atomicity and
+  durability, of both launch paths, and of the directory bind under the
+  host's confinement profile;
+- a new host qualification before any live window.
+
+## Implementation sequence, if accepted
+
+Each step is its own reviewed change. None starts before acceptance, and a
+live window needs its own authorization after the last.
+
+1. **Publication primitive, credential-free.** One function that takes a
+   pinned stage descriptor and a store directory and performs the check,
+   the temporary file, both `fsync` calls and the rename. Tests refuse each
+   wrong staged object (absent, link, directory, mode, owner, size) and
+   prove the canonical bytes are unchanged on every refusal. Mutants cover
+   each check.
+2. **Stage and layout.** The zone's `CODEX_HOME` becomes the stage; the
+   canonical store leaves the zone's mounts. The N3a and N3c containment
+   proofs are rewritten to the new premise: the zone cannot see the store,
+   and can do anything to its own copy.
+3. **Lane verdict.** The after-run check judges the staged file and the
+   publication result instead of the bound descriptor's link count and
+   modification time. Publication is reported separately from run success.
+4. **The refresh and login proofs.** The existing N4 refresh proof must
+   pass on 0.172.0 with the tokens published, and the device-login proof
+   must show the pre-login logout and the lock files handled in the stage.
+5. **Operator instructions and host qualification.** Superseding login and
+   maintenance commands, then a fresh host qualification.
+
+The pin bump in #476 can merge only after step 4, because its foundation
+lane fails until then.
+
+## Alternatives
+
+- **Stay on 0.160.1.** Keeps every guarantee and needs no decision. It
+  breaks the latest-client rule and ages. It is the fallback if this is
+  declined.
+- **A durable stage with recovery.** Would survive a crash between rotation
+  and publication. It puts the client's home on disk and adds a recovery
+  owner, which ADR 0021 forbids. Rejected as larger; reconsider only if lost
+  tokens prove frequent.
+- **A dedicated writable store directory bound into the zone.** Keeps direct
+  writes and byte opacity. The zone can then create persistent siblings and
+  replace the credential by pathname in the canonical location. Ranked
+  second.
+- **A symlink from the client's home into a directory mount.** Rejected by
+  the N4 state review, and still: the pre-login logout removes the link and
+  the new login is lost.
+- **A vendor setting that restores in-place saves.** Would rank first. None
+  was found: every file-backed save in 0.172.0 goes through the same
+  rename.
+- **The client's memory-only credential store**
+  (`cli_auth_credentials_store = "ephemeral"`). The failed save disappears
+  because nothing is saved. Every run would then need a fresh login.
+  Rejected.
+
+## Before acceptance
+
+1. Met: a run under the current layout in which the 0.172.0 client attempts
+   a credential save and the store keeps the old tokens (see Observed).
+2. Open: the client's own error for that save, captured from the same test,
+   to tie the symptom to the rename.
+3. Open: the two locks and the logout removal shown against the pinned
+   client, since the stage must tolerate both.
+4. The owner's explicit acceptance of the first two rows of the table.
