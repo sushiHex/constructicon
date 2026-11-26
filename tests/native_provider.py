@@ -7,6 +7,7 @@ All limits apply at this endpoint even if a caller bypasses the byte bridge.
 import asyncio
 import json
 import socket
+import sys
 from contextlib import asynccontextmanager, suppress
 
 from constructicon.core.identity import parse_json_value
@@ -162,6 +163,8 @@ class Peer:
                     raise ValueError("trailing request bytes")
         except Exception as exc:
             self.failures.append(repr(exc))
+            # The client sees only a closed socket; the failing test's report names why.
+            print(f"provider peer refused request {len(self.requests)}: {exc!r}", file=sys.stderr)
             self.stop()
         except asyncio.CancelledError:
             self.failures.append("incomplete handler at teardown")

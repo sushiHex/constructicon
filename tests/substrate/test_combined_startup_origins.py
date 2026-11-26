@@ -70,7 +70,10 @@ async def measure(image, guard_root, model, *, files=None, config=None, mcp=Fals
             wire, CWD, no_worker, model=model, base_instructions=BASE_INSTRUCTIONS,
             before_thread=inventory,
         )
-        record["mcp"] = await wire.rpc("mcpServerStatus/list", {})
+        # Since 0.172.0 a threadless inventory omits project-scoped servers (#476).
+        record["mcp"] = await wire.rpc("mcpServerStatus/list", {
+            "threadId": record["protocol"]["thread"],
+        })
         if packaged_shell:
             record["features"] = await wire.rpc("experimentalFeature/list", {
                 "threadId": record["protocol"]["thread"], "limit": 1000,
@@ -161,7 +164,8 @@ def assert_hook_attempt(record, enabled, *, completed=False):
 async def test_fresh_recipe_has_no_external_startup_state(placement_image, tmp_path, model):
     record = await measure(placement_image, tmp_path, model)
     assert record["config"]["config"]["model"] == model
-    assert record["requirements"] == {"requirements": None}
+    # ``supportsIndependentSpeedModes`` is a constant capability flag new at 0.172.0 (#476).
+    assert record["requirements"] == {"requirements": None, "supportsIndependentSpeedModes": True}
     # ``workspaceRouting`` is new at rust-v0.160 (re-observed on the bump), and a
     # fresh recipe has none.
     assert record["account"] == {
@@ -194,7 +198,8 @@ async def test_app_server_refuses_named_profile_before_rpc(placement_image, tmp_
             arguments=("--profile", "fixture"),
         )
     assert_outcome(result, status=1)
-    assert b"Error: --profile only applies to runtime commands and `codex mcp`:" in result.stderr
+    assert (b"Error: --profile only applies to runtime commands, `codex mcp`, and "
+            b"`codex migrate-nfs-db`:") in result.stderr
     assert not peer.requests
     # The bridge already established its one startup connection, but no HTTP
     # request followed. Preserve that failure instead of calling it a clean turn.

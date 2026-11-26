@@ -13,8 +13,10 @@ MUTANTS = (
     ("root history carriers admitted", MODULE + "CombinedScenario.__call__",
      "set(request) != expected_keys", "False",
      NEGATIVE + "[gpt-5.5-previous-response]"),
+    # Since 0.172.0 the base instructions are a developer message, so the
+    # conversation comparison is the guard that the changed-instructions case kills.
     ("base instructions unchecked", MODULE + "CombinedScenario.__call__",
-     'request.get("instructions") != BASE_INSTRUCTIONS', "False",
+     'raise ValueError("unexpected native context or conversation")', "pass",
      NEGATIVE + "[gpt-5.5-changed-instructions]"),
     ("tool declarations unchecked", MODULE + "CombinedScenario.__call__",
      "canonical(tools_for(images=self.images, restricted=self.restricted, mcp=self.mcp))",

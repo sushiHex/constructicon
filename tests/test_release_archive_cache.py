@@ -23,7 +23,7 @@ ASSETS = {
                    "actionlint_1.7.12_linux_amd64.tar.gz", "1.7.12"),
     "pi": (CONTAINMENT, "Acquire pinned Pi archive", "pi-linux-x64.tar.gz", "1.3.0"),
     "codex": (CONTAINMENT, "Acquire the pinned native investigation artifact (no account)",
-              "codex.tar.gz", "0.160.1"),
+              "codex.tar.gz", artifacts.vendor_pin(CONTAINMENT.encode())["version"]),
     "cosign": (CONTAINMENT, "Acquire pinned cosign binary", "cosign", "2.6.5"),
 }
 KINDS = {"cosign": "binary"}
@@ -112,7 +112,9 @@ def test_codex_template_still_captures_the_installed_pin_and_refuses_a_bypass() 
     raw = CONTAINMENT.encode()
     pin = artifacts.vendor_pin(raw)
     assert artifacts.render_vendor_step(pin).encode() in raw
+    # The version follows the pin; the download URL is its independent witness.
     assert pin["version"] == ASSETS["codex"][3]
+    assert f"/releases/download/rust-v{pin['version']}/" in step(CONTAINMENT, ASSETS["codex"][1])
     emitter = subprocess.run(
         [sys.executable, str(ROOT / "scripts/ci/vendor_pin_env.py")],
         stdin=subprocess.DEVNULL, capture_output=True, text=True, check=True, timeout=30,
