@@ -9,6 +9,7 @@ bytes/shape, never process authorship; a descendant can reproduce them.
 
 import json
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -154,6 +155,15 @@ class CombinedScenario:
         if set(request) != expected_keys or any(
             canonical(request[key]) != canonical(value) for key, value in fixed.items()
         ):
+            # TEMPORARY (#476): the refused shape, so new expectations come from observed bytes.
+            print("combined peer refused root:", json.dumps({
+                "model": self.model, "ordinal": ordinal,
+                "extra_keys": sorted(set(request) - expected_keys),
+                "missing_keys": sorted(expected_keys - set(request)),
+                "changed_fixed": {key: request.get(key) for key, value in fixed.items()
+                                  if canonical(request.get(key)) != canonical(value)},
+                "input": without_ids(request.get("input")),
+            }, sort_keys=True), file=sys.stderr)
             raise ValueError("unexpected root field or generation setting")
         # The fake peer never uses these annotations as instructions, routing,
         # or script selection. Keep their bytes in evidence; do not call them
@@ -183,4 +193,9 @@ class CombinedScenario:
         suffix = self.suffix() if ordinal == 2 else []
         if not any(canonical(actual) == canonical(self.prefix(date) + suffix)
                    for date in self.dates):
+            # TEMPORARY (#476): the refused conversation, for the same reason.
+            print("combined peer refused context:", json.dumps({
+                "model": self.model, "ordinal": ordinal, "restricted": self.restricted,
+                "input": actual,
+            }, sort_keys=True), file=sys.stderr)
             raise ValueError("unexpected native context or conversation")
